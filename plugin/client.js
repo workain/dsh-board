@@ -25,9 +25,10 @@ window.__ModuleLoader__.load({
       unsaved: 'Your changes have not been saved.', statusMissing: 'Unknown status', saving: 'Saving…',
       badSnapshot: 'The server returned an invalid board snapshot.', noTransport: 'Board service is unavailable.', tooLarge: 'The request is too large (maximum 64 KiB in UTF-8). Shorten the description.',
       noSearchSession: 'There are no matching sessions.', selectSession: 'Available sessions',
-      archived: 'Archived', inProgress: 'Loading workspaces…', untitled: 'Untitled session', sessionAction: 'Link tasks', sessionContext: 'Current session', chooseSessionWorkspace: 'Choose the workspace for this session explicitly.', outsideWorkspace: 'This session is not registered in the selected workspace; linking is unavailable.', saveRejected: 'The server rejected the change. Review the values and try again.',
+      archived: 'Archived', inProgress: 'Loading workspaces…', untitled: 'Untitled session', sessionAction: 'Add session to a task', sessionContext: 'Current session', chooseSessionWorkspace: 'Choose the workspace for this session explicitly.', outsideWorkspace: 'This session is not registered in the selected workspace; linking is unavailable.', saveRejected: 'The server rejected the change. Review the values and try again.',
       discardDraft: 'Discard the unsaved draft?', reviewUnknown: 'The previous operation may still commit. Your next change can race it; only one can use the current revision. Carefully inspect the board, then confirm you accept this uncertainty.', readbackFirst: 'Refresh and inspect the board before acknowledging the unknown result. The original operation may still commit later.', acknowledgeUnknown: 'I checked the board; allow another attempt', draftWarning: 'Drafts are kept only while this page is open. Reloading or closing it will discard them.',
       eyebrow: 'YOUR WORKSPACE', pageDescription: 'A clear view of your work and the conversations behind it.', boardDescription: 'Your tasks, organized in one place.', chooseHint: 'Select a workspace and board to get started.', workspaceHint: 'Start by choosing a workspace.', boardHint: 'Choose a board to see your tasks.', taskCount: 'Tasks', statusCount: 'Statuses', filterLabel: 'Filter', refreshShort: 'Refresh board', emptyColumn: 'No tasks in this status', taskBoard: 'Task board',
+      boards: 'Boards', allBoards: 'All boards', noBoardsAnywhere: 'No boards yet', noBoardsHelp: 'Choose a workspace to create your first board.', linkCurrent: 'Link this session', unlinkCurrent: 'Unlink this session', sessionHelp: 'Choose a board and link this session to a task.', linkUnavailable: 'This session is not available in this workspace.', returnToBoards: 'All boards', sessionCount: 'Sessions',
     };
     const ru = {
       panel: 'Доска', workspace: 'Рабочее пространство', chooseWorkspace: 'Выберите рабочее пространство', board: 'Доска',
@@ -48,9 +49,10 @@ window.__ModuleLoader__.load({
       unsaved: 'Изменения не сохранены.', statusMissing: 'Неизвестный статус', saving: 'Сохранение…',
       badSnapshot: 'Сервер вернул некорректные данные доски.', noTransport: 'Сервис доски недоступен.', tooLarge: 'Запрос слишком большой (максимум 64 КиБ в UTF-8). Сократите описание.',
       noSearchSession: 'Нет подходящих сессий.', selectSession: 'Доступные сессии',
-      archived: 'В архиве', inProgress: 'Загрузка рабочих пространств…', untitled: 'Сессия без названия', sessionAction: 'Связать задачи', sessionContext: 'Текущая сессия', chooseSessionWorkspace: 'Выберите рабочее пространство для этой сессии явно.', outsideWorkspace: 'Сессия не зарегистрирована в выбранном рабочем пространстве; привязка недоступна.', saveRejected: 'Сервер отклонил изменение. Проверьте значения и повторите попытку.',
+      archived: 'В архиве', inProgress: 'Загрузка рабочих пространств…', untitled: 'Сессия без названия', sessionAction: 'Добавить сессию к задаче', sessionContext: 'Текущая сессия', chooseSessionWorkspace: 'Выберите рабочее пространство для этой сессии явно.', outsideWorkspace: 'Сессия не зарегистрирована в выбранном рабочем пространстве; привязка недоступна.', saveRejected: 'Сервер отклонил изменение. Проверьте значения и повторите попытку.',
       discardDraft: 'Отменить несохранённый черновик?', reviewUnknown: 'Предыдущий запрос ещё может сохраниться. Следующее изменение может с ним соревноваться; текущую ревизию сможет использовать только одно. Проверьте доску и подтвердите, что принимаете эту неопределённость.', readbackFirst: 'Обновите и проверьте доску перед подтверждением. Исходный запрос всё ещё может сохраниться позже.', acknowledgeUnknown: 'Я проверил доску; разрешить повторную попытку', draftWarning: 'Черновики хранятся только пока открыта эта страница. При обновлении или закрытии они пропадут.',
       eyebrow: 'ВАШЕ ПРОСТРАНСТВО', pageDescription: 'Все задачи и связанные с ними сессии — в одном месте.', boardDescription: 'Задачи и работа команды в одном месте.', chooseHint: 'Выберите рабочее пространство и доску, чтобы начать.', workspaceHint: 'Сначала выберите рабочее пространство.', boardHint: 'Выберите доску, чтобы увидеть задачи.', taskCount: 'Задачи', statusCount: 'Статусы', filterLabel: 'Фильтр', refreshShort: 'Обновить доску', emptyColumn: 'В этом статусе пока нет задач', taskBoard: 'Доска задач',
+      boards: 'Доски', allBoards: 'Все доски', noBoardsAnywhere: 'Досок пока нет', noBoardsHelp: 'Выберите рабочее пространство и создайте первую доску.', linkCurrent: 'Привязать сессию', unlinkCurrent: 'Отвязать сессию', sessionHelp: 'Выберите доску и привяжите текущую сессию к задаче.', linkUnavailable: 'Эта сессия недоступна в выбранном пространстве.', returnToBoards: 'Все доски', sessionCount: 'Сессии',
     };
 
     // Keep the transport in one seam. The server remains authoritative for access and writes.
@@ -105,7 +107,7 @@ window.__ModuleLoader__.load({
     const memory = {
       snapshot: null, workspaceId: '', boardId: '', showContext: false, contextSessionId: '',
       mode: 'board', query: '', statusFilter: '', form: null, dirty: false,
-      pending: false, loading: false, uncertain: false, uncertainRevision: null, readback: false, error: '', generation: 0,
+      pending: false, loading: false, uncertain: false, uncertainRevision: null, readback: false, error: '', generation: 0, overview: true,
       contextHandled: null, listeners: new Set(),
     };
     function updateMemory(patch) {
@@ -137,11 +139,11 @@ window.__ModuleLoader__.load({
         h('path', { d: 'M9 4v16M15 4v16M5.5 8h1M11.5 8h1M17.5 8h1' }));
     }
     const css = `
-      .dsh-board{--ink:var(--dsw-alias-label-primary,#20242b);--muted:var(--dsw-alias-label-secondary,#67717d);--line:var(--dsw-alias-border-l2,#dfe3e8);--base:var(--dsw-alias-bg-base,#fff);--layer:var(--dsw-alias-bg-layer-1,#f6f7f9);--accent:var(--dsw-alias-brand-primary,#5264db);height:100%;overflow:auto;color:var(--ink);background:var(--base);font-family:var(--dsw-font-family,inherit)}
+      .dsh-board{--ink:var(--dsw-alias-label-primary,#20242b);--muted:var(--dsw-alias-label-secondary,#67717d);--line:var(--dsw-alias-border-l2,#dfe3e8);--base:var(--dsw-alias-bg-base,#fff);--layer:var(--dsw-alias-bg-layer-1,#f6f7f9);--accent:var(--dsw-alias-state-business-primary,#4176e6);--accent-soft:var(--dsw-alias-state-business-tertiary,#e4edfd);height:100%;overflow:auto;color:var(--ink);background:var(--base);font-family:var(--dsw-font-family,inherit)}
       .dsh-board *{box-sizing:border-box}.dsh-board h1,.dsh-board h2,.dsh-board h3,.dsh-board p{margin:0}.dsh-board button,.dsh-board input,.dsh-board textarea,.dsh-board select{font:inherit;color:inherit}.dsh-board button{cursor:pointer}.dsh-board button:disabled{opacity:.45;cursor:not-allowed}
       .dsh-board button:focus-visible,.dsh-board input:focus-visible,.dsh-board select:focus-visible,.dsh-board textarea:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.dsh-board-shell{max-width:1700px;min-height:100%;margin:0 auto;padding:36px 40px 48px}
       .dsh-board-header{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;margin-bottom:28px}.dsh-board-header-title{min-width:0}.dsh-board-eyebrow{display:flex;align-items:center;gap:8px;color:var(--accent);font-size:10px;font-weight:750;letter-spacing:.13em}.dsh-board-eyebrow:before{content:'';width:7px;height:7px;border-radius:50%;background:var(--accent)}.dsh-board-header h1{margin-top:10px;font-size:30px;font-weight:680;line-height:1.15;letter-spacing:-.035em}.dsh-board-subtitle{margin-top:8px!important;color:var(--muted);font-size:13px;line-height:1.5}.dsh-board-header-actions,.dsh-board-row{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
-      .dsh-board button{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:36px;padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--base);font-size:12px;font-weight:600;line-height:1.2;transition:border-color .15s,background .15s}.dsh-board button:not(:disabled):hover{background:var(--dsw-alias-interactive-bg-hover,var(--layer))}.dsh-board button.dsh-board-primary,.dsh-board-form button[type=submit]{border-color:var(--accent);background:var(--accent);color:var(--dsw-alias-label-primary-inverted,#fff)}.dsh-board button.dsh-board-primary:not(:disabled):hover,.dsh-board-form button[type=submit]:not(:disabled):hover{filter:brightness(.94)}.dsh-board-icon{display:block;flex:none;width:15px;height:15px}
+      .dsh-board button{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:36px;padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--base);font-size:12px;font-weight:600;line-height:1.2;transition:border-color .15s,background .15s}.dsh-board button:not(:disabled):hover{background:var(--dsw-alias-interactive-bg-hover,var(--layer))}.dsh-board button.dsh-board-primary,.dsh-board-form button[type=submit]{border-color:var(--dsw-static-deepseek-500,#4176e6);background:var(--dsw-static-deepseek-500,#4176e6);color:#fff}.dsh-board button.dsh-board-primary:not(:disabled):hover,.dsh-board-form button[type=submit]:not(:disabled):hover{filter:brightness(.94)}.dsh-board-icon{display:block;flex:none;width:15px;height:15px}
       .dsh-board-context{display:flex;align-items:end;gap:12px;flex-wrap:wrap;padding:16px 18px;border:1px solid var(--line);border-radius:12px;background:var(--base)}.dsh-board-field{display:grid;gap:7px;min-width:0}.dsh-board-field>span,.dsh-board-form label{color:var(--muted);font-size:11px;font-weight:650}.dsh-board-context .dsh-board-field{flex:0 1 260px}.dsh-board-context .dsh-board-field:first-child{flex-basis:310px}.dsh-board-context-action{margin-left:auto}
       .dsh-board input:not([type=checkbox]),.dsh-board textarea,.dsh-board select{width:100%;min-width:0;min-height:38px;padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:var(--base);font-size:12px;color:var(--ink)}.dsh-board select{cursor:pointer}.dsh-board textarea{min-height:110px;resize:vertical}.dsh-board input::placeholder,.dsh-board textarea::placeholder{color:var(--muted)}
       .dsh-board-content{margin-top:30px}.dsh-board-section-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;flex-wrap:wrap}.dsh-board-section-head>div:first-child{min-width:0;max-width:100%}.dsh-board-section-title{display:flex;align-items:center;gap:11px;min-width:0}.dsh-board-section-title h2{font-size:19px;font-weight:670;letter-spacing:-.025em;overflow-wrap:anywhere}.dsh-board-summary{display:flex;align-items:center;gap:8px;margin-top:7px;color:var(--muted);font-size:12px}.dsh-board-summary-dot{width:3px;height:3px;border-radius:50%;background:currentColor}.dsh-board-actions{display:flex;gap:8px;flex-wrap:wrap}
@@ -150,6 +152,7 @@ window.__ModuleLoader__.load({
       .dsh-board-card{display:grid;gap:11px;margin:0 0 9px;padding:14px;border:1px solid var(--line);border-radius:10px;background:var(--base);box-shadow:0 2px 6px #172b4d0a}.dsh-board-card h3{font-size:13px;font-weight:660;line-height:1.45;overflow-wrap:anywhere}.dsh-board-card-description{margin-top:6px!important;color:var(--muted);font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}.dsh-board-card-header,.dsh-board-card-actions{display:flex;align-items:center;justify-content:space-between;gap:8px}.dsh-board-card-id{color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.04em}.dsh-board-card-status{min-width:0;overflow-wrap:anywhere;border-radius:5px;padding:4px 7px;background:var(--layer);color:var(--muted);font-size:10px;font-weight:700}.dsh-board-card-actions{justify-content:flex-start;padding-top:9px;border-top:1px solid var(--line)}.dsh-board-card-actions button{min-height:28px;padding:5px 7px;border:0;background:transparent;color:var(--muted);font-size:11px}.dsh-board-card-sessions-label{color:var(--muted);font-size:10px;font-weight:650}.dsh-board-card-sessions-list{display:grid;gap:5px;margin:6px 0 0;padding:0;list-style:none}.dsh-board-card-session{min-width:0;overflow-wrap:anywhere}.dsh-board-card-session button{display:block;max-width:100%;min-height:0;padding:0;overflow-wrap:anywhere;border:0;background:transparent;text-align:left;color:var(--accent);font-size:11px;font-weight:550}.dsh-board-card-session-unavailable{color:var(--muted);font-size:11px}.dsh-board-card-session-link{white-space:nowrap;text-overflow:ellipsis;overflow:hidden}
       .dsh-board-muted{color:var(--muted);font-size:12px;line-height:1.5}.dsh-board-list{display:grid;gap:10px;max-width:860px}.dsh-board-list .dsh-board-card{margin:0}.dsh-board-form{display:grid;gap:15px;max-width:700px;margin:18px 0;padding:22px;border:1px solid var(--line);border-radius:12px;background:var(--base);box-shadow:0 8px 28px #172b4d0c}.dsh-board-form h2{min-width:0;overflow-wrap:anywhere;font-size:16px;letter-spacing:-.02em}.dsh-board-form label{display:grid;gap:7px}.dsh-board-form fieldset{display:grid;gap:5px;max-height:240px;margin:0;padding:10px;border:1px solid var(--line);border-radius:8px;overflow:auto}.dsh-board-form legend{color:var(--muted);font-size:11px}.dsh-board-form fieldset label{display:flex;align-items:center;gap:9px;padding:7px;color:var(--ink);font-size:12px;overflow-wrap:anywhere}.dsh-board-form input[type=checkbox]{accent-color:var(--accent)}
       .dsh-board-alert{padding:12px 14px;margin:12px 0;border:1px solid var(--dsw-alias-state-warn-primary,var(--line));border-radius:9px;font-size:12px;line-height:1.5}.dsh-board-empty{padding:22px 0;color:var(--muted);font-size:12px}.dsh-board-welcome{display:grid;justify-items:center;gap:9px;margin:30px 0;padding:64px 20px;border:1px dashed var(--line);border-radius:12px;text-align:center}.dsh-board-welcome-icon{display:grid;place-items:center;width:44px;height:44px;margin-bottom:6px;border-radius:12px;background:var(--layer);color:var(--accent)}.dsh-board-welcome h2{font-size:15px}.dsh-board-welcome p{max-width:380px;color:var(--muted);font-size:12px;line-height:1.6}
+      .dsh-board-overview{margin-top:30px}.dsh-board-overview-count{display:grid;place-items:center;width:25px;height:25px;border-radius:8px;background:var(--accent-soft);color:var(--ink);font-size:11px;font-weight:700}.dsh-board-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,230px),1fr));gap:12px;margin-top:16px}.dsh-board button.dsh-board-tile{position:relative;display:flex;align-items:flex-start;justify-content:flex-start;gap:12px;min-height:98px;padding:16px;text-align:left;border-color:var(--line);background:var(--base)}.dsh-board button.dsh-board-tile:not(:disabled):hover{border-color:var(--accent);background:var(--accent-soft)}.dsh-board-tile-icon{display:grid;place-items:center;flex:none;width:34px;height:34px;border-radius:10px;background:var(--accent-soft);color:var(--accent)}.dsh-board-tile-content{display:grid;gap:5px;min-width:0}.dsh-board-tile-content strong{color:var(--ink);font-size:13px;overflow-wrap:anywhere}.dsh-board-tile-content>span,.dsh-board-tile-content small{color:var(--muted);font-size:11px;font-weight:500;overflow-wrap:anywhere}.dsh-board-tile-arrow{margin-left:auto;color:var(--accent);font-size:15px}.dsh-board-session-banner{display:flex;align-items:center;justify-content:space-between;gap:14px;margin:16px 0;padding:12px 14px;border:1px solid var(--accent);border-radius:10px;background:var(--accent-soft);font-size:12px}.dsh-board-session-banner strong,.dsh-board-session-banner span{display:block;overflow-wrap:anywhere}.dsh-board-session-banner strong{margin-bottom:4px}.dsh-board-session-banner p{margin-top:5px;color:var(--muted)}.dsh-board button.dsh-board-back{justify-content:flex-start;min-height:0;margin:0 0 10px;padding:0;border:0;background:transparent;color:var(--accent);font-size:12px}.dsh-board .dsh-board-card{gap:6px;padding:8px 10px;border-radius:8px}.dsh-board .dsh-board-card-header{align-items:flex-start}.dsh-board button.dsh-board-card-title{display:block;min-height:28px;padding:4px 2px;border:0;background:transparent;color:var(--ink);font-size:12px;font-weight:600}.dsh-board button.dsh-board-card-action-links{display:inline-flex;gap:4px;min-width:30px;min-height:28px;padding:4px 6px;border:0;background:var(--accent-soft);color:var(--ink)}.dsh-board-card-action-links .dsh-board-icon{width:13px;height:13px}.dsh-board button.dsh-board-card-current{justify-self:start;min-height:28px;padding:5px 8px;border-color:var(--accent-soft);background:var(--accent-soft);color:var(--ink);font-size:11px}.dsh-board button.dsh-board-card-current.is-linked{border-color:var(--dsw-alias-state-success-primary,#22c55e);background:var(--dsw-alias-state-success-tertiary,#e6faed)}.dsh-board-session-row{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}.dsh-board-session-row label{min-width:0}.dsh-board-session-row button{flex:none}
       @media(max-width:900px){.dsh-board-shell{padding:28px 24px}.dsh-board-context-action{margin-left:0}.dsh-board-header h1{font-size:26px}}@media(max-width:600px){.dsh-board-shell{padding:22px 16px}.dsh-board-header{gap:14px;margin-bottom:22px}.dsh-board-header h1{font-size:24px}.dsh-board-context{padding:14px;align-items:stretch}.dsh-board-context .dsh-board-field,.dsh-board-context .dsh-board-field:first-child{flex:1 1 100%}.dsh-board-context-action{width:100%}.dsh-board-context-action button{width:100%}.dsh-board-section-head{gap:12px}.dsh-board-toolbar-spacer{display:none}.dsh-board-search{flex:1 1 160px}.dsh-board-filter{flex:1 1 130px}.dsh-board-column{flex-basis:min(290px,85vw)}}@media(prefers-reduced-motion:reduce){.dsh-board button{transition:none}}
     `;
 
@@ -159,6 +162,7 @@ window.__ModuleLoader__.load({
         refresh: h('path', { d: 'M20 7v5h-5M4 17v-5h5M5.6 9a7 7 0 0 1 11.6-2L20 12M4 12l2.8 5A7 7 0 0 0 18.4 15' }),
         search: h(React.Fragment, null, h('circle', { cx: 10.5, cy: 10.5, r: 6.5 }), h('path', { d: 'm16 16 4 4' })),
         filter: h('path', { d: 'M4 6h16M7 12h10M10 18h4' }),
+        sessions: h(React.Fragment, null, h('path', { d: 'M8.5 12h7M10 9l-2.5 3L10 15M14 9l2.5 3L14 15' }), h('circle', { cx: 12, cy: 12, r: 8.5 })),
         columns: h(React.Fragment, null, h('rect', { x: 3, y: 4, width: 18, height: 16, rx: 2 }), h('path', { d: 'M9 4v16M15 4v16' })),
       };
       return h('svg', { className: 'dsh-board-icon', width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }, paths[name]);
@@ -178,7 +182,7 @@ window.__ModuleLoader__.load({
         listener();
         return () => memory.listeners.delete(listener);
       }, []);
-      const { snapshot, workspaceId, boardId, showContext, contextSessionId, mode, query, statusFilter, form, error, loading, uncertain } = memory;
+      const { snapshot, workspaceId, boardId, showContext, contextSessionId, mode, query, statusFilter, form, error, loading, uncertain, overview } = memory;
       const busy = memory.pending;
       const setMode = (value) => updateMemory({ mode: value });
       const setQuery = (value) => updateMemory({ query: value });
@@ -187,7 +191,9 @@ window.__ModuleLoader__.load({
       const formHeading = useRef(null);
       const boards = useMemo(() => (snapshot ? snapshot.boards.filter((item) => item.workspaceId === workspaceId) : []), [snapshot, workspaceId]);
       const workspaceReady = workspaces.phase === 'ready' && workspaces.state !== 'error' && (!workspaceId || workspaces.items.some((item) => item.workspaceId === workspaceId));
-      const selected = workspaceReady ? boards.find((item) => item.id === boardId) : undefined;
+      const selected = !overview && workspaceReady ? boards.find((item) => item.id === boardId) : undefined;
+      const visibleBoards = snapshot && workspaces.phase === 'ready' && workspaces.state !== 'error'
+        ? snapshot.boards.filter((board) => (!workspaceId || board.workspaceId === workspaceId) && workspaces.items.some((item) => item.workspaceId === board.workspaceId) && (!showContext || !contextSessionId || workspaces.items.some((item) => item.workspaceId === board.workspaceId && item.sessionIds.includes(contextSessionId)))) : [];
       const workspace = workspaces.items.find((item) => item.workspaceId === workspaceId);
       const statuses = selected ? [...selected.statuses].sort((a, b) => (a.position || 0) - (b.position || 0)) : [];
       const tasks = selected ? selected.tasks.filter((task) => (!statusFilter || task.statusId === statusFilter) && (task.title + '\n' + (task.description || '')).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())) : [];
@@ -217,13 +223,13 @@ window.__ModuleLoader__.load({
       useEffect(() => { if (!memory.pending) load(); }, []);
       useEffect(() => {
         if (!context.sessionId || workspaces.phase !== 'ready' || workspaces.state === 'error' || memory.contextHandled === context.token) return;
-        // Consume each intent once, even when preserving an existing draft.
+        // Never switch the target behind an existing draft or in-flight write.
+        if (memory.pending || memory.uncertain) return;
+        if (memory.form && memory.dirty && !window.confirm(t('discardDraft'))) { memory.contextHandled = context.token; return; }
         memory.contextHandled = context.token;
         const candidates = workspaces.items.filter((item) => item.sessionIds.includes(context.sessionId));
-        const patch = { showContext: true, contextSessionId: context.sessionId };
-        if (!memory.form && !memory.pending && !memory.uncertain) Object.assign(patch, { workspaceId: candidates.length === 1 ? candidates[0].workspaceId : '', boardId: '', statusFilter: '', query: '' });
-        updateMemory(patch);
-      }, [context, workspaces]);
+        updateMemory({ showContext: true, contextSessionId: context.sessionId, form: null, dirty: false, workspaceId: candidates.length === 1 ? candidates[0].workspaceId : '', boardId: '', statusFilter: '', query: '', overview: true });
+      }, [context, workspaces, busy, uncertain]);
       useEffect(() => { if (form && formHeading.current) formHeading.current.focus(); }, [form && form.kind]);
       async function submit(command) {
         if (!memory.snapshot || memory.pending || memory.loading || memory.uncertain || !workspaceReady || !workspaces.items.some((item) => item.workspaceId === memory.workspaceId)) return;
@@ -266,38 +272,38 @@ window.__ModuleLoader__.load({
       function changeWorkspace(event) {
         const value = event.target.value;
         if (!setForm(null)) { event.target.value = memory.workspaceId; return; }
-        updateMemory({ workspaceId: value, boardId: '', statusFilter: '', query: '' });
+        updateMemory({ workspaceId: value, boardId: '', statusFilter: '', query: '', overview: true });
       }
       function changeBoard(event) {
         const value = event.target.value;
         if (!setForm(null)) { event.target.value = memory.boardId; return; }
-        updateMemory({ boardId: value, statusFilter: '', query: '' });
+        updateMemory({ boardId: value, statusFilter: '', query: '', overview: !value });
+      }
+      function openBoard(board) {
+        if (memory.pending || memory.uncertain || !setForm(null)) return;
+        updateMemory({ workspaceId: board.workspaceId, boardId: board.id, statusFilter: '', query: '', overview: false });
+      }
+      function showBoards() {
+        if (!setForm(null)) return;
+        updateMemory({ workspaceId: '', boardId: '', statusFilter: '', query: '', overview: true });
       }
       function editTask(task) { setForm({ kind: 'task', id: task.id, title: task.title, description: task.description || '', statusId: task.statusId }); }
       function open(id) { if (sessionState(id, sessions, workspaces) === 'available') openSession(id); }
-      function link(id, linked, taskId) { submit({ op: 'link.set', workspaceId, boardId, taskId, sessionId: id, linked }); }
+      function link(id, linked, taskId) {
+        if (memory.form && memory.form.kind !== 'links' && memory.dirty && !window.confirm(t('discardDraft'))) return;
+        submit({ op: 'link.set', workspaceId, boardId, taskId, sessionId: id, linked });
+      }
       function card(task) {
         const taskLinks = linksFor(task.id);
-        const status = statuses.find((item) => item.id === task.statusId);
-        const shortId = task.id.length > 8 ? task.id.slice(0, 8) + '…' : task.id;
+        const membership = workspace && workspace.sessionIds.includes(contextSessionId);
+        const isLinked = taskLinks.some((item) => item.sessionId === contextSessionId);
+        const unavailable = sessionState(contextSessionId, sessions, workspaces) !== 'available';
         return h('article', { className: 'dsh-board-card', key: task.id },
           h('div', { className: 'dsh-board-card-header' },
-            task.id && h('span', { className: 'dsh-board-card-id', title: task.id, 'aria-label': task.id }, shortId),
-            mode === 'list' && h('div', { className: 'dsh-board-card-status dsh-board-muted' }, t('status'), ': ', status ? status.name : t('statusMissing'))),
-          h('div', { className: 'dsh-board-card-content' },
-            h('h3', { className: 'dsh-board-card-title' }, task.title),
-            task.description && h('p', { className: 'dsh-board-card-description dsh-board-description' }, task.description)),
-          taskLinks.length > 0 && h('div', { className: 'dsh-board-card-sessions' },
-            h('span', { className: 'dsh-board-card-sessions-label dsh-board-muted' }, t('sessions')),
-            h('ul', { className: 'dsh-board-card-sessions-list dsh-board-sessions' }, taskLinks.map((linkItem) => {
-              const state = sessionState(linkItem.sessionId, sessions, workspaces);
-              return h('li', { className: 'dsh-board-card-session', key: linkItem.sessionId }, state === 'available'
-                ? h('button', { className: 'dsh-board-card-session-link', type: 'button', onClick: () => open(linkItem.sessionId), title: label(linkItem.sessionId), 'aria-label': t('openSession') + ': ' + label(linkItem.sessionId) }, sessions.byId[linkItem.sessionId]?.displayTitle || sessions.byId[linkItem.sessionId]?.title || linkItem.sessionId)
-                : h('span', { className: 'dsh-board-card-session-unavailable' }, label(linkItem.sessionId), ' — ', t(state)));
-            }))),
-          h('div', { className: 'dsh-board-card-actions dsh-board-row' },
-            h('button', { className: 'dsh-board-card-action dsh-board-card-action-edit', type: 'button', disabled: busy || uncertain, onClick: () => editTask(task), 'aria-label': t('editTask') + ': ' + task.title }, t('edit')),
-            h('button', { className: 'dsh-board-card-action dsh-board-card-action-links', type: 'button', disabled: busy || uncertain, onClick: () => setForm({ kind: 'links', id: task.id, title: task.title }), 'aria-label': t('sessions') + ': ' + task.title }, t('sessions'), ' (', taskLinks.length, ')')));
+            h('button', { className: 'dsh-board-card-title', type: 'button', disabled: busy || uncertain, onClick: () => editTask(task), 'aria-label': t('editTask') + ': ' + task.title, style: { flex: 1, minWidth: 0, justifyContent: 'flex-start', overflowWrap: 'anywhere', textAlign: 'left' } }, task.title),
+            mode === 'list' && h('span', { className: 'dsh-board-card-status' }, statuses.find((s) => s.id === task.statusId)?.name || t('statusMissing')),
+            h('button', { className: 'dsh-board-card-action dsh-board-card-action-links dsh-board-count', type: 'button', disabled: busy || uncertain, onClick: () => setForm({ kind: 'links', id: task.id, title: task.title }), 'aria-label': t('sessions') + ': ' + task.title, title: t('sessions'), style: { flex: 'none' } }, h(Icon, { name: 'sessions' }), String(taskLinks.length))),
+          showContext && contextSessionId && (membership || isLinked) && h('button', { className: 'dsh-board-card-current' + (isLinked ? ' is-linked' : ''), type: 'button', disabled: busy || loading || uncertain || !snapshot || !selected || (!isLinked && unavailable), 'aria-label': t(isLinked ? 'unlinkCurrent' : 'linkCurrent') + ': ' + task.title, onClick: () => link(contextSessionId, !isLinked, task.id) }, t(isLinked ? 'unlinkCurrent' : 'linkCurrent')));
       }
       function formView() {
         if (!form) return null;
@@ -312,8 +318,9 @@ window.__ModuleLoader__.load({
               const checked = current.includes(id);
               const inWorkspace = workspace && workspace.sessionIds.includes(id);
               const reason = state !== 'available' ? state : !inWorkspace ? 'outsideWorkspace' : '';
-              return h('label', { key: id }, h('input', { type: 'checkbox', checked, disabled: !checked && Boolean(reason), onChange: (event) => link(id, event.target.checked, form.id) }),
-                h('span', null, label(id), reason ? ' — ' + t(reason) : ''));
+              return h('div', { className: 'dsh-board-session-row', key: id },
+                h('label', null, h('input', { type: 'checkbox', checked, disabled: !checked && Boolean(reason), onChange: (event) => link(id, event.target.checked, form.id) }), h('span', null, label(id), reason ? ' — ' + t(reason) : '')),
+                checked && state === 'available' && h('button', { type: 'button', onClick: () => open(id), 'aria-label': t('openSession') + ': ' + label(id) }, t('openSession')));
             })) : h('p', null, t('noSessions')),
             h('div', null, h('button', { type: 'button', disabled: busy || uncertain, onClick: () => setForm(null) }, t('close'))));
         }
@@ -328,7 +335,7 @@ window.__ModuleLoader__.load({
           h('div', { className: 'dsh-board-row' }, h('button', { type: 'submit', disabled: busy || loading || uncertain || !snapshot || (form.kind !== 'board' && !selected) || ((form.kind === 'board' || form.kind === 'status') && !form.name.trim()) || (form.kind === 'task' && (!form.title.trim() || !form.statusId)) }, busy ? t('saving') : t('save')),
             h('button', { type: 'button', disabled: busy || uncertain, onClick: () => setForm(null) }, t('cancel'))));
       }
-      const colors = ['var(--dsw-alias-brand-primary, #5969d8)', 'var(--dsw-alias-state-warn-primary, #d89548)', 'var(--dsw-alias-state-success-primary, #45a784)', 'var(--dsw-alias-state-error-primary, #d16f72)'];
+      const colors = ['var(--dsw-alias-state-business-primary, #4176e6)', 'var(--dsw-alias-state-warn-primary, #d89548)', 'var(--dsw-alias-state-success-primary, #45a784)', 'var(--dsw-alias-state-error-primary, #d16f72)'];
       return h('main', { className: 'dsh-board' }, h('style', null, css), h('div', { className: 'dsh-board-shell' },
         h('header', { className: 'dsh-board-header' },
           h('div', { className: 'dsh-board-header-title' }, h('div', { className: 'dsh-board-eyebrow' }, t('eyebrow')), h('h1', null, t('panel')), h('p', { className: 'dsh-board-subtitle' }, t('pageDescription'))),
@@ -340,19 +347,27 @@ window.__ModuleLoader__.load({
         workspaces.state === 'error' && h('p', { className: 'dsh-board-alert', role: 'alert' }, t('workspaceError')),
         workspaces.phase !== 'ready' && h('p', { className: 'dsh-board-muted', role: 'status' }, t('inProgress')),
         workspaces.phase === 'ready' && workspaces.state !== 'error' && !workspaces.items.length && h('p', { className: 'dsh-board-muted' }, t('noWorkspaces')),
-        showContext && contextSessionId && h('div', { className: 'dsh-board-row dsh-board-alert' }, h('span', null, t('sessionContext'), ': ', label(contextSessionId), !workspaceId ? ' — ' + t('chooseSessionWorkspace') : ''), h('button', { type: 'button', onClick: () => setShowContext(false) }, t('close'))),
+        showContext && contextSessionId && h('div', { className: 'dsh-board-session-banner' }, h('div', null, h('strong', null, t('sessionContext')), h('span', null, label(contextSessionId)), h('p', null, t('sessionHelp'))), h('button', { type: 'button', onClick: () => setShowContext(false) }, t('close'))),
         h('div', { className: 'dsh-board-context' },
           h('label', { className: 'dsh-board-field' }, h('span', null, t('workspace')), h('select', { value: workspaceId, onChange: changeWorkspace, disabled: busy || uncertain || workspaces.phase !== 'ready' || workspaces.state === 'error' }, h('option', { value: '' }, t('chooseWorkspace')), workspaces.items.map((item) => h('option', { key: item.workspaceId, value: item.workspaceId }, item.title)))),
           workspaceId && workspaceReady && snapshot && h('label', { className: 'dsh-board-field' }, h('span', null, t('board')), h('select', { value: boardId, onChange: changeBoard, disabled: busy || uncertain }, h('option', { value: '' }, t('chooseBoard')), boards.map((item) => h('option', { key: item.id, value: item.id }, item.name)))),
           workspaceId && workspaceReady && snapshot && h('div', { className: 'dsh-board-context-action' }, h('button', { type: 'button', disabled: busy || uncertain, onClick: () => setForm({ kind: 'board', name: '' }) }, h(Icon, { name: 'plus' }), t('newBoard')))),
-        !selected && !form && h('div', { className: 'dsh-board-welcome' }, h('div', { className: 'dsh-board-welcome-icon' }, h(Icon, { name: 'columns', size: 22 })), h('h2', null, !workspaceId ? t('workspaceHint') : workspaceReady && snapshot && !boards.length ? t('noBoards') : t('boardHint')), h('p', null, t('chooseHint'))),
+        overview && !form && snapshot && workspaces.phase === 'ready' && workspaces.state !== 'error' && h('section', { className: 'dsh-board-overview', 'aria-label': t('boards') },
+          h('div', { className: 'dsh-board-section-head' }, h('div', { className: 'dsh-board-section-title' }, h('h2', null, t('boards'))), h('span', { className: 'dsh-board-overview-count' }, visibleBoards.length)),
+          visibleBoards.length > 0 ? h('div', { className: 'dsh-board-tiles' }, visibleBoards.map((board) => {
+            const owner = workspaces.items.find((item) => item.workspaceId === board.workspaceId);
+            return h('button', { className: 'dsh-board-tile', key: JSON.stringify([board.workspaceId, board.id]), type: 'button', disabled: busy || uncertain, onClick: () => openBoard(board), 'aria-label': board.name + ' — ' + (owner?.title || board.workspaceId) },
+              h('span', { className: 'dsh-board-tile-icon' }, h(Icon, { name: 'columns' })),
+              h('span', { className: 'dsh-board-tile-content' }, h('strong', null, board.name), h('span', null, owner?.title || board.workspaceId), h('small', null, t('taskCount'), ': ', board.tasks.length)), h('span', { className: 'dsh-board-tile-arrow', 'aria-hidden': true }, '↗'));
+          })) : h('div', { className: 'dsh-board-welcome' }, h('div', { className: 'dsh-board-welcome-icon' }, h(Icon, { name: 'columns', size: 22 })), h('h2', null, t('noBoardsAnywhere')), h('p', null, showContext ? t('sessionHelp') : t('noBoardsHelp')))),
         h('div', { className: 'dsh-board-content' },
           selected && h(React.Fragment, null,
             h('div', { className: 'dsh-board-section-head' },
-              h('div', null, h('div', { className: 'dsh-board-section-title' }, h('h2', null, selected.name)), h('div', { className: 'dsh-board-summary' }, h('span', null, t('taskCount'), ': ', selected.tasks.length), h('span', { className: 'dsh-board-summary-dot', 'aria-hidden': true }), h('span', null, t('statusCount'), ': ', statuses.length))),
+              h('div', null, h('button', { className: 'dsh-board-back', type: 'button', disabled: busy || uncertain, onClick: showBoards }, '← ', t('returnToBoards')), h('div', { className: 'dsh-board-section-title' }, h('h2', null, selected.name)), h('div', { className: 'dsh-board-summary' }, h('span', null, t('taskCount'), ': ', selected.tasks.length), h('span', { className: 'dsh-board-summary-dot', 'aria-hidden': true }), h('span', null, t('statusCount'), ': ', statuses.length))),
               h('div', { className: 'dsh-board-actions' },
                 h('button', { type: 'button', disabled: busy || uncertain, onClick: () => setForm({ kind: 'status', name: '' }) }, h(Icon, { name: 'plus' }), t('addStatus')),
                 h('button', { className: 'dsh-board-primary', type: 'button', disabled: busy || uncertain || !statuses.length, onClick: () => setForm({ kind: 'task', title: '', description: '', statusId: statuses[0].id }) }, h(Icon, { name: 'plus' }), t('addTask')))),
+            showContext && contextSessionId && (!workspace || !workspace.sessionIds.includes(contextSessionId)) && h('p', { className: 'dsh-board-alert', role: 'status' }, t('linkUnavailable')),
             h('div', { className: 'dsh-board-toolbar' },
               h('div', { className: 'dsh-board-switch', role: 'group', 'aria-label': t('view') },
                 h('button', { type: 'button', 'aria-pressed': mode === 'board', onClick: () => setMode('board') }, t('boardView')),

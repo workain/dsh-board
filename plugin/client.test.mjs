@@ -15,7 +15,8 @@ const settle = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(
 
 function harness(sessionFixture) {
   const requests = [], events = new Map(), confirms = [];
-  let registration, slot, active = false, tree, effects = [], hooks = [], cursor = 0, needsRender = false;
+  let registration, slot, headerSlot, active = false, tree, effects = [], hooks = [], cursor = 0, needsRender = false;
+  const panels = [], openedSessions = [];
   const React = {
     Fragment: Symbol('Fragment'),
     createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity) }),
@@ -38,12 +39,12 @@ function harness(sessionFixture) {
   const fetch = (path, options) => { const d = deferred(); requests.push({ path, options, ...d }); return d.promise; };
   vm.runInNewContext(client, { window, fetch, TextEncoder }, { filename: 'client.js' });
   const plugin = registration.factory(name => { assert.equal(name, 'react'); return React; });
-  const ws = source({ phase: 'ready', state: 'ready', items: [{ workspaceId: 'w', title: 'Workspace', sessionIds: sessionFixture?.ids || [] }], archivedSessionIds: [] });
+  const ws = source({ phase: 'ready', state: 'ready', items: sessionFixture?.workspaces || [{ workspaceId: 'w', title: 'Workspace', sessionIds: sessionFixture?.ids || [] }], archivedSessionIds: sessionFixture?.archived || [] });
   const sessions = source({ phase: 'ready', ids: sessionFixture?.ids || [], byId: sessionFixture?.byId || {} });
   const ctx = {
     effect(fn) { fn(); }, locale: { register() {}, bind: () => key => key },
-    slots: { inject(_name, fn) { fn(); }, register(spec, component) { if (spec.name === 'main') slot = { spec, component }; } },
-    workspaces: { list: ws }, sessions: { list: sessions }, uiWorkspace: { openSession() {} }, layout: { selectPanel() {} },
+    slots: { inject(_name, fn) { fn(); }, register(spec, component) { if (spec.name === 'main') slot = { spec, component }; if (spec.name === 'conversation.session.header.actions') headerSlot = { spec, component }; } },
+    workspaces: { list: ws }, sessions: { list: sessions }, uiWorkspace: { openSession(id) { openedSessions.push(id); } }, layout: { selectPanel(id) { panels.push(id); } },
   };
   plugin.apply(ctx);
   const props = { t: key => key, ...slot.spec.inject() };
@@ -69,12 +70,106 @@ function harness(sessionFixture) {
     click('addTask'); change(nodes('input').find(n => n.props.required), title); change(nodes('textarea')[0], description);
   }
   function submit() { const form = nodes('form')[0]; assert.ok(form); form.props.onSubmit({ preventDefault() {} }); }
-  return { requests, events, confirms, window, nodes, button, click, change, mount, unmount, resolve, choose, editDraft, submit };
+  function openContext(sessionId) {
+    assert.ok(headerSlot, 'session header action must be registered');
+    const action = headerSlot.component({ sessionId, t: key => key, ...headerSlot.spec.inject() });
+    assert.equal(action.props['aria-label'], 'sessionAction'); action.props.onClick();
+  }
+  function tile(label) {
+    const found = nodes('button').filter(n => n.props.className === 'dsh-board-tile' && n.props['aria-label'] === label);
+    assert.equal(found.length, 1, `board tile ${label}`); return found[0];
+  }
+  return { requests, events, confirms, panels, openedSessions, window, nodes, button, click, change, mount, unmount, resolve, choose, editDraft, submit, openContext, tile };
 }
 
 async function ready() {
   const h = harness(); h.mount(); assert.equal(h.requests[0].options.method, 'GET'); await h.resolve(0, base()); await h.choose(); return h;
 }
+
+test('overview lists accessible boards and one click opens the correct workspace and kanban', async () => {
+  const h = harness({ workspaces: [{ workspaceId: 'w', title: 'One', sessionIds: [] }, { workspaceId: 'w2', title: 'Two', sessionIds: [] }] });
+  const a = base().boards[0], b = { ...a, workspaceId: 'w2', name: 'Second', tasks: [{ id: 'other', title: 'Second task', statusId: 's' }] };
+  h.mount(); await h.resolve(0, { revision: 4, boards: [a, b, { ...a, id: 'hidden', workspaceId: 'missing', name: 'Hidden' }], links: [] });
+  assert.deepEqual(h.nodes('button').filter(n => n.props.className === 'dsh-board-tile').map(n => n.props['aria-label']), ['Board — One', 'Second — Two']);
+  assert.equal(h.nodes('div').filter(n => n.props.className === 'dsh-board-kanban').length, 0);
+  h.tile('Second — Two').props.onClick();
+  assert.equal(h.nodes('select')[0].props.value, 'w2'); assert.equal(h.nodes('select')[1].props.value, 'b');
+  assert.equal(h.nodes('section').filter(n => n.props.className === 'dsh-board-column' && n.props['aria-label'] === 'Open').length, 1);
+  assert.ok(h.nodes('button').some(n => n.props['aria-label'] === 'editTask: Second task'));
+  assert.ok(!h.nodes('button').some(n => n.props['aria-label'] === 'editTask: Existing'));
+  h.click('← returnToBoards'); h.tile('Board — One').props.onClick();
+  assert.equal(h.nodes('select')[0].props.value, 'w'); assert.equal(h.nodes('select')[1].props.value, 'b');
+  assert.ok(h.nodes('button').some(n => n.props['aria-label'] === 'editTask: Existing')); h.unmount();
+});
+
+test('session header action filters board tiles and toggles only current session in one click', async () => {
+  const h = harness({ ids: ['current', 'other'], workspaces: [{ workspaceId: 'w', title: 'One', sessionIds: ['current', 'other'] }, { workspaceId: 'w2', title: 'Two', sessionIds: ['other'] }] });
+  const a = base().boards[0], b = { ...a, workspaceId: 'w2', name: 'Second' };
+  h.mount(); await h.resolve(0, { revision: 4, boards: [a, b], links: [{ boardId: 'b', taskId: 't', sessionId: 'other' }] });
+  h.openContext('current'); assert.deepEqual(h.panels, ['dsh-board']);
+  assert.deepEqual(h.nodes('button').filter(n => n.props.className === 'dsh-board-tile').map(n => n.props['aria-label']), ['Board — One']);
+  h.tile('Board — One').props.onClick(); assert.equal(h.nodes('select')[0].props.value, 'w');
+  h.click('linkCurrent'); assert.equal(h.requests.length, 2);
+  assert.equal(h.requests[1].path, 'api/dsh-board.mutate');
+  assert.deepEqual(JSON.parse(h.requests[1].options.body), { expectedRevision: 4, op: 'link.set', workspaceId: 'w', boardId: 'b', taskId: 't', sessionId: 'current', linked: true });
+  assert.equal(h.button('linkCurrent').props.disabled, true);
+  await h.resolve(1, { revision: 5, boards: [a, b], links: [{ boardId: 'b', taskId: 't', sessionId: 'other' }, { boardId: 'b', taskId: 't', sessionId: 'current' }] });
+  h.click('unlinkCurrent'); assert.equal(h.requests.length, 3);
+  assert.deepEqual(JSON.parse(h.requests[2].options.body), { expectedRevision: 5, op: 'link.set', workspaceId: 'w', boardId: 'b', taskId: 't', sessionId: 'current', linked: false });
+  await h.resolve(2, { revision: 6, boards: [a, b], links: [{ boardId: 'b', taskId: 't', sessionId: 'other' }] });
+  assert.equal(h.button('linkCurrent').props['aria-label'], 'linkCurrent: Existing'); h.unmount();
+});
+
+test('current session link is unavailable for archived or nonmember sessions', async () => {
+  for (const kind of ['archived', 'nonmember']) {
+    const h = harness({ ids: ['current'], archived: kind === 'archived' ? ['current'] : [], workspaces: [{ workspaceId: 'w', title: 'One', sessionIds: kind === 'archived' ? ['current'] : [] }] });
+    h.mount(); await h.resolve(0, base()); h.openContext('current');
+    // Select explicitly as a user can via the workspace/board selectors.
+    h.change(h.nodes('select')[0], 'w'); h.change(h.nodes('select')[1], 'b');
+    const current = h.nodes('button').filter(n => n.props.className === 'dsh-board-card-current');
+    if (kind === 'archived') { assert.equal(current.length, 1); assert.equal(current[0].props.disabled, true); }
+    else assert.equal(current.length, 0);
+    assert.equal(h.requests.length, 1); h.unmount();
+  }
+});
+
+test('session intent respects rejected dirty draft and defers while a write is pending', async () => {
+  const h = harness({ ids: ['current'] }); h.mount(); await h.resolve(0, base()); await h.choose(); h.editDraft();
+  h.window.confirmResult = false; h.openContext('current');
+  assert.equal(h.nodes('textarea')[0].props.value, '  first\n\nsecond\t '); assert.equal(h.confirms.length, 1);
+  assert.equal(h.nodes('div').filter(n => n.props.className === 'dsh-board-session-banner').length, 0);
+  h.submit(); h.openContext('current');
+  assert.equal(h.nodes('textarea')[0].props.readOnly, true); assert.equal(h.requests.length, 2);
+  await h.resolve(1, { ok: true, value: { revision: 5 } });
+  assert.equal(h.nodes('textarea')[0].props.value, '  first\n\nsecond\t ');
+  assert.equal(h.nodes('div').filter(n => n.props.className === 'dsh-board-session-banner').length, 0);
+  assert.equal(h.button('save').props.disabled, true); h.unmount();
+});
+
+test('direct current-session link respects a rejected dirty draft', async () => {
+  const h = harness({ ids: ['current'] }); h.mount(); await h.resolve(0, base());
+  h.openContext('current'); h.tile('Board — Workspace').props.onClick(); h.editDraft();
+  h.window.confirmResult = false; h.click('linkCurrent');
+  assert.deepEqual(h.confirms, ['discardDraft']); assert.equal(h.requests.length, 1);
+  assert.equal(h.nodes('textarea')[0].props.value, '  first\n\nsecond\t ');
+  h.window.confirmResult = true; h.click('linkCurrent');
+  assert.equal(h.requests.length, 2); assert.equal(JSON.parse(h.requests[1].options.body).sessionId, 'current');
+  assert.equal(h.nodes('textarea')[0].props.value, '  first\n\nsecond\t ', 'draft remains until the link is acknowledged');
+  await h.resolve(1, { error: { code: 'invalid' } }, 400);
+  assert.equal(h.nodes('textarea')[0].props.value, '  first\n\nsecond\t ', 'rejected link must preserve draft');
+  h.click('linkCurrent');
+  await h.resolve(2, { revision: 5, boards: base().boards, links: [{ boardId: 'b', taskId: 't', sessionId: 'current' }] });
+  assert.equal(h.nodes('form').length, 0); h.unmount();
+});
+
+test('linked session opens from links form without mutation', async () => {
+  const h = harness({ ids: ['current'], byId: { current: { title: 'Conversation' } } });
+  const snapshot = base(); snapshot.links.push({ boardId: 'b', taskId: 't', sessionId: 'current' });
+  h.mount(); await h.resolve(0, snapshot); await h.choose();
+  h.nodes('button').find(n => n.props['aria-label'] === 'sessions: Existing').props.onClick();
+  const open = h.nodes('button').find(n => n.props['aria-label'] === 'openSession: Conversation (current)');
+  assert.ok(open); open.props.onClick(); assert.deepEqual(h.openedSessions, ['current']); assert.equal(h.requests.length, 1); h.unmount();
+});
 
 test('same-title sessions remain distinguishable by full ID', async () => {
   const h = harness({ ids: ['session-a', 'session-b'], byId: { 'session-a': { title: 'Same title' }, 'session-b': { title: 'Same title' } } });

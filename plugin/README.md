@@ -5,8 +5,8 @@ A local task board for [DeepSeek Harness](https://www.npmjs.com/package/@deepsee
 ## First-stage scope
 
 - Create local boards, columns and tasks; change task title, description and column.
-- Select a DSH workspace and one of its boards; use a board or list view and search or filter by column.
-- Link a task to an existing session in the selected workspace, open it, and start linking from the session header.
+- See available boards on opening the panel and open one in a click; optionally filter by workspace, use a board or list view and search or filter by column.
+- Link a task to an existing session in the selected workspace, open it, and start linking from the session header: choose a board, then **Link this session** on an existing task. The header action is currently not shown by DSH for a blank conversation; it does not create a new task. The session must belong to the board's workspace.
 - `board_link_session` lets an agent request an explicit one-time user approval to link or unlink **its own** session.
 - Local data remains on the host; no GitHub or Yandex Tracker integration or network service is required.
 
