@@ -21,8 +21,17 @@
     "service.test.mjs",
     "sqlite-store.mjs",
     "sqlite-store.test.mjs",
+    "tracker-api.mjs",
+    "tracker-api.test.mjs",
+    "tracker-fetch.mjs",
+    "tracker-fetch.test.mjs",
+    "tracker-service.mjs",
+    "tracker-service.test.mjs",
+    "tracker-settings.mjs",
+    "tracker-settings.test.mjs",
     "client.js",
     "client.test.mjs",
+    "slash-guard.test.mjs",
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
@@ -31,7 +40,7 @@
   "scripts": {
     "build": "node ./scripts/build.mjs",
     "check": "node ./scripts/build.mjs --check",
-    "test": "node --test core.test.mjs service.test.mjs sqlite-store.test.mjs client.test.mjs"
+    "test": "node --test core.test.mjs service.test.mjs sqlite-store.test.mjs client.test.mjs slash-guard.test.mjs tracker-api.test.mjs tracker-fetch.test.mjs tracker-service.test.mjs tracker-settings.test.mjs"
   },
   "dsh": {
     "bundle": {
@@ -41,6 +50,9 @@
       "platform": "web",
       "immediately": true,
       "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-input-trigger",
+        "@deepseek-ai/dsh-client-ui-commands",
         "@deepseek-ai/dsh-client-ui-layout",
         "@deepseek-ai/dsh-client-ui-sidebar",
         "@deepseek-ai/dsh-client-ui-workspace",

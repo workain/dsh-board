@@ -4,7 +4,8 @@ import { chmodSync, existsSync, lstatSync, mkdtempSync, mkdirSync, rmSync, symli
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
-import { apply, boardDatabasePath, inject } from './index.js';
+import { apply, boardDatabasePath, inject, trackerPlugin } from './index.js';
+import { openTrackerSettings } from './tracker-settings.mjs';
 import { createBoardService, MAX_BODY_BYTES, MAX_PENDING, MAX_SNAPSHOT_BYTES } from './service.mjs';
 import { openBoardStore, StoreError } from './sqlite-store.mjs';
 import * as core from './core.mjs';
@@ -42,13 +43,26 @@ async function setup(service) {
   return { b, c, t: result.boards[0].tasks[0].id };
 }
 function context(workspaceRegistry = registry()) {
-  const routes = [], cleanup = []; let tool, approvalRequest, approvalOutcome = 'allowed-once';
-  const ctx = { workspaceRegistry, effect(fn) { cleanup.push(fn()); },
+  const routes = [], cleanup = [], children = []; let tool, approvalRequest, approvalOutcome = 'allowed-once';
+  const ctx = { workspaceRegistry, effect(fn) { const dispose = fn(); cleanup.push(dispose); return dispose; },
+    plugin(value) { children.push(value); },
     approval: { async request(req) { approvalRequest = req; return approvalOutcome; } },
     tools: { register(value) { tool = value; } },
     connection: { fetch: { register(value) { routes.push(value); return () => {}; } } } };
-  return { ctx, routes, cleanup, get tool() { return tool; }, get approvalRequest() { return approvalRequest; }, reject() { approvalOutcome = 'rejected'; } };
+  return { ctx, routes, cleanup, children, get tool() { return tool; }, get approvalRequest() { return approvalRequest; }, reject() { approvalOutcome = 'rejected'; } };
 }
+function trackerContext(dir, options = {}) {
+  const f = context(options.workspaceRegistry ?? registry());
+  f.ctx.profileContext = { name: options.name ?? 'web', home: options.home ?? dir };
+  f.ctx.credentials = options.credentials ?? { async resolve() { return undefined; } };
+  trackerPlugin.apply(f.ctx);
+  return f;
+}
+const trackerGet = f => f.routes[0].fetch(new Request('http://localhost/api/dsh-board.tracker'));
+const trackerPost = (f, command) => f.routes[1].fetch(new Request('http://localhost/api/dsh-board.tracker.mutate', {
+  method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(command),
+}));
+const trackerDirectory = dir => path.join(dir, 'storages', 'dsh-board');
 async function inHome(dir, action) {
   const old = process.env.DSH_HOME;
   process.env.DSH_HOME = dir;
@@ -78,6 +92,8 @@ test('real SQLite: exact routes, direct approval and tool/API race across instan
   await inHome(dir, async () => {
     const a = context(), b = context(); await apply(a.ctx); await apply(b.ctx);
     assert.deepEqual(inject, ['connection', 'workspaceRegistry', 'tools', 'approval']);
+    assert.deepEqual(a.children, [trackerPlugin]);
+    assert.deepEqual(trackerPlugin.inject, ['connection', 'workspaceRegistry', 'profileContext', 'credentials']);
     assert.deepEqual(a.routes.map(r => [r.path, r.methods, r.requestBody]), [
       ['/api/dsh-board', ['GET'], 'buffered'], ['/api/dsh-board.mutate', ['POST'], 'streaming'],
     ]);
@@ -104,6 +120,137 @@ test('real SQLite: exact routes, direct approval and tool/API race across instan
     const reopened = context(); await apply(reopened.ctx);
     assert.equal((await (await reopened.routes[0].fetch(new Request('http://localhost/api/dsh-board'))).json()).revision, 4); await dispose(reopened);
   });
+});
+
+test('Tracker routes bootstrap lazily per launcher profile and fail soft', async t => {
+  const { dir } = fixture(t), storage = trackerDirectory(dir);
+  mkdirSync(storage, { recursive: true, mode: 0o700 });
+  let calls = 0;
+  const web = trackerContext(dir, { credentials: { resolve() { calls++; throw Error('must not resolve yet'); } } });
+  assert.deepEqual(web.routes.map(r => [r.path, r.methods, r.requestBody]), [
+    ['/api/dsh-board.tracker', ['GET'], 'buffered'], ['/api/dsh-board.tracker.mutate', ['POST'], 'streaming'],
+  ]);
+  const db = path.join(storage, 'tracker-web.sqlite');
+  assert.equal(existsSync(db), false);
+  const [one, two] = await Promise.all([trackerGet(web), trackerGet(web)]);
+  assert.deepEqual(await one.json(), { revision: 0, configured: false, orgType: null, workspaces: {}, needsReselect: [] });
+  assert.equal(two.status, 200); assert.equal(calls, 0); assert.equal(existsSync(db), true);
+  const configured = await trackerPost(web, { op: 'configuration.configure', expectedRevision: 0, orgType: 'cloud' });
+  assert.equal(configured.status, 200); assert.equal(calls, 0);
+  const other = trackerContext(dir, { name: 'other' });
+  assert.equal((await (await trackerGet(other)).json()).configured, false);
+  assert.equal(existsSync(path.join(storage, 'tracker-other.sqlite')), true);
+  await dispose(web); await dispose(other);
+  assert.equal((await trackerGet(web)).status, 503);
+  const reopened = trackerContext(dir);
+  assert.equal((await (await trackerGet(reopened)).json()).orgType, 'cloud'); await dispose(reopened);
+
+  const invalid = trackerContext(dir, { name: '../outside' });
+  assert.equal((await trackerGet(invalid)).status, 503); await dispose(invalid);
+  const missing = trackerContext(dir, { home: path.join(dir, 'missing') });
+  assert.equal((await trackerGet(missing)).status, 503);
+  assert.equal(existsSync(path.join(dir, 'missing')), false); await dispose(missing);
+});
+
+test('Tracker resolves only fixed refs, fails closed on revision change and sanitizes errors', async t => {
+  const { dir } = fixture(t), storage = trackerDirectory(dir); mkdirSync(storage, { recursive: true, mode: 0o700 });
+  const refs = []; let release; let started;
+  const called = new Promise(resolve => { started = resolve; });
+  const credentials = { resolve(ref) {
+    refs.push(ref); if (refs.length === 2) started();
+    return new Promise(resolve => { release ??= []; release.push(() => resolve({ value: ref.endsWith('TOKEN') ? 'synthetic-secret' : 'synthetic-org', source: 'fake' })); });
+  } };
+  const f = trackerContext(dir, { credentials });
+  assert.equal((await trackerPost(f, { op: 'configuration.configure', expectedRevision: 0, orgType: 'org' })).status, 200);
+  const pending = trackerPost(f, { op: 'boards.list' }); await called;
+  assert.deepEqual(refs, ['YANDEX_TRACKER_TOKEN', 'YANDEX_TRACKER_ORG_ID']);
+  assert.equal((await trackerPost(f, { op: 'configuration.configure', expectedRevision: 1, orgType: 'cloud' })).status, 200);
+  for (const done of release) done();
+  const result = await pending, text = await result.text();
+  assert.equal(result.status, 503); assert.match(text, /credentials_unavailable/);
+  assert.doesNotMatch(text, /synthetic|OAuth|YANDEX_TRACKER/);
+  await dispose(f);
+});
+
+test('Tracker coalesces stalled credential resolutions across aborts and rejects stale revisions', async t => {
+  const { dir } = fixture(t), storage = trackerDirectory(dir); mkdirSync(storage, { recursive: true, mode: 0o700 });
+  const calls = [], finish = []; let started;
+  const called = new Promise(resolve => { started = resolve; });
+  const credentials = { resolve(ref) {
+    calls.push(ref);
+    if (calls.length === 2) started();
+    return new Promise((resolve, reject) => finish.push({ resolve, reject }));
+  } };
+  const f = trackerContext(dir, { credentials });
+  const send = signal => f.routes[1].fetch(new Request('http://localhost/api/dsh-board.tracker.mutate', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ op: 'boards.list' }), signal,
+  }));
+  await trackerPost(f, { op: 'configuration.configure', expectedRevision: 0, orgType: 'org' });
+  const firstController = new AbortController(), first = send(firstController.signal); await called;
+  firstController.abort(); assert.equal((await first).status, 499);
+  for (let i = 0; i < 5; i++) {
+    const controller = new AbortController(), next = send(controller.signal);
+    await new Promise(resolve => setImmediate(resolve)); controller.abort();
+    assert.equal((await next).status, 499);
+  }
+  assert.deepEqual(calls, ['YANDEX_TRACKER_TOKEN', 'YANDEX_TRACKER_ORG_ID']);
+  // One failing provider does not free the slot while the other remains pending.
+  finish[0].reject(Error('synthetic secret')); await new Promise(resolve => setImmediate(resolve));
+  const controller = new AbortController(), waiting = send(controller.signal);
+  await new Promise(resolve => setImmediate(resolve)); controller.abort();
+  assert.equal((await waiting).status, 499); assert.equal(calls.length, 2);
+  assert.equal((await trackerPost(f, { op: 'configuration.configure', expectedRevision: 1, orgType: 'cloud' })).status, 200);
+  const stale = await send(); assert.equal(stale.status, 503);
+  assert.doesNotMatch(await stale.text(), /synthetic secret/); assert.equal(calls.length, 2);
+  finish[1].resolve({ value: 'synthetic', source: 'fake' });
+  await new Promise(resolve => setImmediate(resolve));
+  const retryController = new AbortController(), retry = send(retryController.signal);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls.length, 4); retryController.abort(); assert.equal((await retry).status, 499);
+  await dispose(f);
+  finish[2].resolve({ value: 'synthetic', source: 'fake' });
+  finish[3].resolve({ value: 'synthetic', source: 'fake' });
+  await new Promise(resolve => setImmediate(resolve));
+});
+
+test('Tracker unload aborts stalled credentials and streams before closing settings', async t => {
+  const { dir } = fixture(t), storage = trackerDirectory(dir); mkdirSync(storage, { recursive: true, mode: 0o700 });
+  let started, release; const called = new Promise(resolve => { started = resolve; });
+  const credentials = { resolve() { started(); return new Promise(resolve => { release ??= []; release.push(resolve); }); } };
+  const f = trackerContext(dir, { credentials });
+  await trackerPost(f, { op: 'configuration.configure', expectedRevision: 0, orgType: 'org' });
+  const pending = trackerPost(f, { op: 'boards.list' }); await called;
+  let canceled = false;
+  const stream = new ReadableStream({ pull() {}, cancel() { canceled = true; } });
+  const streaming = f.routes[1].fetch(new Request('http://localhost/api/dsh-board.tracker.mutate', {
+    method: 'POST', duplex: 'half', headers: { 'content-type': 'application/json' }, body: stream,
+  }));
+  await new Promise(resolve => setImmediate(resolve));
+  await dispose(f);
+  assert.equal((await pending).status, 503); assert.equal((await streaming).status, 503); assert.equal(canceled, true);
+  for (const done of release) done({ value: 'synthetic', source: 'fake' });
+  await new Promise(resolve => setImmediate(resolve));
+  const store = openTrackerSettings({ directory: storage, profileId: 'web' });
+  assert.equal(store.read().revision, 1); store.close();
+});
+
+test('Tracker startup failures do not break local board or leak registered routes', async t => {
+  const { dir } = fixture(t);
+  await inHome(dir, async () => {
+    const f = context(); f.ctx.plugin = () => { throw Error('tracker incompatible'); };
+    await apply(f.ctx);
+    assert.equal((await f.routes[0].fetch(new Request('http://localhost/api/dsh-board'))).status, 200);
+    await dispose(f);
+  });
+  const f = context(); let unregisters = 0;
+  f.ctx.profileContext = { name: 'web', home: dir }; f.ctx.credentials = { resolve() {} };
+  f.ctx.connection.fetch.register = route => {
+    if (route.methods[0] === 'POST') throw Error('route conflict');
+    return () => { unregisters++; };
+  };
+  assert.throws(() => trackerPlugin.apply(f.ctx), /route conflict/);
+  assert.equal(unregisters, 1);
+  await f.cleanup[0]();
 });
 
 test('independent processes race through API and tool on a shared SQLite database', async t => {

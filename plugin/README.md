@@ -6,9 +6,9 @@ A local task board for [DeepSeek Harness](https://www.npmjs.com/package/@deepsee
 
 - Create local boards, columns and tasks; change task title, description and column.
 - See available boards on opening the panel and open one in a click; optionally filter by workspace, use a board or list view and search or filter by column.
-- Link a task to an existing session in the selected workspace, open it, and start linking from the session header: choose a board, then **Link this session** on an existing task. The header action is currently not shown by DSH for a blank conversation; it does not create a new task. The session must belong to the board's workspace.
+- Link a task to an existing session in the selected workspace and open it. To start from a session, type **`/board`** with no arguments, choose a local board, then **Link this session** on an existing task. This is a client action, not a model request; the session must belong to the board's workspace. It does not create a task. Do not append arguments: this DSH version may send an unrecognized argument-bearing slash line to the model as a prompt.
 - `board_link_session` lets an agent request an explicit one-time user approval to link or unlink **its own** session.
-- Local data remains on the host; no GitHub or Yandex Tracker integration or network service is required.
+- Local boards work without network access. An optional read-only Yandex Tracker connection uses the Host's credential provider; GitHub integration is not implemented.
 
 The domain model also contains iterations, labels and comments, but this preview does **not** yet expose them in the UI or agent tools. Shared-board assignment, default board, deletion and cross-workspace/session-without-workspace linking are not exposed yet. Agents cannot create or edit tasks through tools in this preview. The full project design and future integrations are broader than this first stage.
 
@@ -46,7 +46,15 @@ Correctly routed POST bodies are limited to 64 KiB, the stored aggregate to 4 Mi
 
 Drafts and uncertain-operation protection live only in browser memory. Closing or refreshing the page can discard a draft; a save with unknown outcome must be checked before retrying. After a successful refresh, the application asks for explicit acknowledgment before another write; the old request may still win the revision race. There is no durable operation idempotency or guaranteed exactly-once behavior.
 
-The plugin stores local data in plaintext SQLite. Same-UID agents can access it; no secret, private Tracker/GitHub task or conversation transcript is required to operate it. Status values and test fixtures are synthetic. Security questions or vulnerability reports should not include credentials or private task content.
+The plugin stores local data in plaintext SQLite. Same-UID agents can access it. The optional Tracker reader can fetch private task titles visible to the configured Tracker account; they remain untrusted data and are not rendered as HTML. Security questions or vulnerability reports must not include credentials or private task content.
+
+## Yandex Tracker (preview)
+
+Tracker is an optional profile-level **read-only** connection. The Host resolves `YANDEX_TRACKER_TOKEN` and `YANDEX_TRACKER_ORG_ID` through the DSH credential provider, not from the browser or board database. The token must already grant Tracker access; an OAuth App ID alone is not a token. Choose the organization type (Yandex 360 or Yandex Cloud / Identity Hub), then choose one or more available Tracker boards separately for each DSH workspace in the Board settings. After a Host restart or credential change, explicitly reload and reselect boards; cached selections are not sufficient to authorize a read. Other profiles have separate settings. DSH's local credential store does not isolate same-UID processes.
+
+The initial adapter reads board metadata, columns and a bounded approximate task search. It does not create, edit, transition, or comment on Tracker issues; Tracker tasks cannot yet be linked to DSH sessions. `filter.boards` is verified against each returned issue's `boards` field but its recall and equivalence to the Tracker UI are not guaranteed. Results are **always partial**, including empty results; permissions, concurrent changes, arbitrary columns, sprints, paging and a 500-issue cap can further limit the view. External Tracker data is not copied into local board state. This preview supports OAuth token type and IPv4-only network transport, with standard TLS validation. No separate OAuth app authorization flow is implemented yet.
+
+Tracker settings use a separate SQLite database under the plugin's private directory, scoped by launcher profile. As with local boards, a crash during initial creation can leave an empty file and must be investigated without automatically deleting potentially valuable data. API errors are sanitized and no credentials are accepted from browser requests.
 
 ## License
 
