@@ -1,0 +1,55 @@
+{
+  "name": "dsh-board",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local board for DeepSeek Harness workspaces and sessions",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "core.mjs",
+    "core.test.mjs",
+    "service.mjs",
+    "service.test.mjs",
+    "sqlite-store.mjs",
+    "sqlite-store.test.mjs",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "scripts/build.mjs"
+  ],
+  "scripts": {
+    "build": "node ./scripts/build.mjs",
+    "check": "node ./scripts/build.mjs --check",
+    "test": "node --test core.test.mjs service.test.mjs sqlite-store.test.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-workspace",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-session",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-api-workspace-controller"
+      ]
+    }
+  },
+  "dependencies": {}
+}
