@@ -22,6 +22,7 @@
     "sqlite-store.mjs",
     "sqlite-store.test.mjs",
     "client.js",
+    "client.test.mjs",
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
@@ -30,7 +31,7 @@
   "scripts": {
     "build": "node ./scripts/build.mjs",
     "check": "node ./scripts/build.mjs --check",
-    "test": "node --test core.test.mjs service.test.mjs sqlite-store.test.mjs"
+    "test": "node --test core.test.mjs service.test.mjs sqlite-store.test.mjs client.test.mjs"
   },
   "dsh": {
     "bundle": {
