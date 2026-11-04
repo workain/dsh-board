@@ -183,7 +183,12 @@ window.__ModuleLoader__.load({
       const linksFor = (taskId) => snapshot.links.filter((link) => link.boardId === boardId && link.taskId === taskId);
       const availableSessions = workspace && sessions.phase === 'ready' && workspaces.phase === 'ready' && workspaces.state !== 'error'
         ? workspace.sessionIds.filter((id) => sessions.ids.includes(id)) : [];
-      function label(id) { return sessions.byId[id]?.displayTitle || sessions.byId[id]?.title || id; }
+      function label(id) {
+        const title = sessions.byId[id]?.displayTitle || sessions.byId[id]?.title;
+        // Titles are not unique. Keep the complete stable ID visible for an
+        // unambiguous session choice and independently verifiable links.
+        return title && title !== id ? `${title} (${id})` : id;
+      }
       async function load() {
         if (memory.pending) return;
         const generation = ++memory.generation;

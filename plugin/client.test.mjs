@@ -13,7 +13,7 @@ const response = (value, status = 200) => ({ ok: status >= 200 && status < 300, 
 const source = (snapshot) => ({ getSnapshot: () => snapshot, subscribe: () => () => {} });
 const settle = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
 
-function harness() {
+function harness(sessionFixture) {
   const requests = [], events = new Map(), confirms = [];
   let registration, slot, active = false, tree, effects = [], hooks = [], cursor = 0, needsRender = false;
   const React = {
@@ -38,8 +38,8 @@ function harness() {
   const fetch = (path, options) => { const d = deferred(); requests.push({ path, options, ...d }); return d.promise; };
   vm.runInNewContext(client, { window, fetch, TextEncoder }, { filename: 'client.js' });
   const plugin = registration.factory(name => { assert.equal(name, 'react'); return React; });
-  const ws = source({ phase: 'ready', state: 'ready', items: [{ workspaceId: 'w', title: 'Workspace', sessionIds: [] }], archivedSessionIds: [] });
-  const sessions = source({ phase: 'ready', ids: [], byId: {} });
+  const ws = source({ phase: 'ready', state: 'ready', items: [{ workspaceId: 'w', title: 'Workspace', sessionIds: sessionFixture?.ids || [] }], archivedSessionIds: [] });
+  const sessions = source({ phase: 'ready', ids: sessionFixture?.ids || [], byId: sessionFixture?.byId || {} });
   const ctx = {
     effect(fn) { fn(); }, locale: { register() {}, bind: () => key => key },
     slots: { inject(_name, fn) { fn(); }, register(spec, component) { if (spec.name === 'main') slot = { spec, component }; } },
@@ -75,6 +75,16 @@ function harness() {
 async function ready() {
   const h = harness(); h.mount(); assert.equal(h.requests[0].options.method, 'GET'); await h.resolve(0, base()); await h.choose(); return h;
 }
+
+test('same-title sessions remain distinguishable by full ID', async () => {
+  const h = harness({ ids: ['session-a', 'session-b'], byId: { 'session-a': { title: 'Same title' }, 'session-b': { title: 'Same title' } } });
+  h.mount(); await h.resolve(0, base()); await h.choose();
+  const linksButton = h.nodes('button').find(n => n.props['aria-label'] === 'sessions: Existing');
+  assert.ok(linksButton); linksButton.props.onClick();
+  const labels = h.nodes('span').flatMap(n => n.children.filter(c => typeof c === 'string'));
+  assert.ok(labels.includes('Same title (session-a)')); assert.ok(labels.includes('Same title (session-b)'));
+  h.unmount();
+});
 
 test('snapshot validation rejects invalid structural references and duplicates', async () => {
   const variants = [
