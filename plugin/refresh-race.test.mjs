@@ -12,7 +12,7 @@ assert.ok(start >= 0 && end > start, 'client harness declarations not found');
 const declarations = tests.slice(start, end).replace("new URL('./client.js', import.meta.url)", "new URL('./client.js', baseUrl)");
 const client = await readFile(new URL('./client.js', import.meta.url), 'utf8');
 const prelude = declarations.replace(/^const client = .*?;\n/m, '');
-const { harness, settle } = vm.runInNewContext(`(function () { ${prelude}\n return { harness, settle }; })()`, { client, vm, TextEncoder, assert, baseUrl: import.meta.url });
+const { harness, settle } = vm.runInNewContext(`(function () { ${prelude}\n return { harness, settle }; })()`, { client, vm, TextEncoder, URL, AbortController, assert, baseUrl: import.meta.url });
 const base = { revision: 1, boards: [], links: [] };
 const settings = { revision: 1, configured: true, orgType: 'cloud', workspaces: { w: ['1'] }, needsReselect: [] };
 const board = { board: { id: '1', name: 'Private board' }, columns: [{ id: 'c', name: 'Open', statuses: [{ key: 'open' }] }], issues: [{ key: 'X-1', summary: 'Private issue', status: { key: 'open', display: 'Open' } }], issuesComplete: false };

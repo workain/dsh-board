@@ -16,7 +16,9 @@ const settle = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(
 function harness(sessionFixture, initialCommands = []) {
   const requests = [], events = new Map(), confirms = [], commands = new Map(initialCommands.map(command => [command.name, command])), pluginEffects = [], slotNames = [];
   let registration, slot, active = false, tree, effects = [], hooks = [], cursor = 0, needsRender = false;
-  const panels = [], openedSessions = [];
+  const panels = [], openedSessions = [], openedTabs = [];
+  let currentUrl = new URL(sessionFixture?.url || 'http://localhost/app/');
+  let navigation = new AbortController();
   const React = {
     Fragment: Symbol('Fragment'),
     createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity) }),
@@ -30,7 +32,7 @@ function harness(sessionFixture, initialCommands = []) {
     },
   };
   const timers = new Set(), timeouts = new Set(), documentEvents = new Map();
-  const document = { visibilityState: 'visible', addEventListener(type, fn) { documentEvents.set(type, fn); }, removeEventListener(type, fn) { if (documentEvents.get(type) === fn) documentEvents.delete(type); } };
+  const document = { baseURI: sessionFixture?.baseURI || currentUrl.href, visibilityState: 'visible', addEventListener(type, fn) { documentEvents.set(type, fn); }, removeEventListener(type, fn) { if (documentEvents.get(type) === fn) documentEvents.delete(type); } };
   const window = {
     setInterval(fn) { timers.add(fn); return fn; }, clearInterval(fn) { timers.delete(fn); },
     setTimeout(fn) { timeouts.add(fn); return fn; }, clearTimeout(fn) { timeouts.delete(fn); },
@@ -39,17 +41,20 @@ function harness(sessionFixture, initialCommands = []) {
     removeEventListener(type, fn) { if (events.get(type) === fn) events.delete(type); },
     confirm(message) { confirms.push(message); return window.confirmResult; },
     confirmResult: true,
+    get location() { return currentUrl; },
+    history: { state: null, replaceState(_state, _title, value) { currentUrl = new URL(value, currentUrl); } },
+    open(...args) { openedTabs.push(args); },
   };
   const fetch = (path, options) => {
     if (path === 'api/dsh-board.tracker' && options.method === 'GET' && !sessionFixture?.manualTracker) return Promise.resolve(response({ revision: 0, configured: false, orgType: null, workspaces: {}, needsReselect: [] }));
     const d = deferred(); requests.push({ path, options, ...d }); return d.promise;
   };
-  vm.runInNewContext(client, { window, document, fetch, TextEncoder }, { filename: 'client.js' });
+  vm.runInNewContext(client, { window, document, fetch, TextEncoder, URL }, { filename: 'client.js' });
   const plugin = registration.factory(name => { assert.equal(name, 'react'); return React; });
-  const ws = source({ phase: 'ready', state: 'ready', items: (sessionFixture?.workspaces || [{ workspaceId: 'w', title: 'Workspace', sessionIds: sessionFixture?.ids || [] }]).map(item => ({ createdAt: '2026-01-01T00:00:00Z', ...item })), archivedSessionIds: sessionFixture?.archived || [] });
-  const sessions = source({ phase: 'ready', ids: sessionFixture?.ids || [], byId: sessionFixture?.byId || {} });
-  const generation = source({ id: 1, host: { home: '/' } });
-  const panelInfo = source({ activePanelId: 'dsh-board' });
+  const ws = source({ phase: sessionFixture?.wsPhase || 'ready', state: sessionFixture?.wsState || 'ready', items: (sessionFixture?.workspaces || [{ workspaceId: 'w', title: 'Workspace', sessionIds: sessionFixture?.ids || [] }]).map(item => ({ createdAt: '2026-01-01T00:00:00Z', ...item })), archivedSessionIds: sessionFixture?.archived || [] });
+  const sessions = source({ phase: sessionFixture?.sessionsPhase || 'ready', ids: sessionFixture?.ids || [], byId: sessionFixture?.byId || {} });
+  const generation = source(sessionFixture?.noConnection ? undefined : { id: 1, host: { home: '/' } });
+  const panelInfo = source({ activePanelId: Object.hasOwn(sessionFixture || {}, 'activePanelId') ? sessionFixture.activePanelId : 'dsh-board' });
   const ctx = {
     effect(fn) { const dispose = fn(); if (typeof dispose === 'function') pluginEffects.push(dispose); }, locale: { register() {}, bind: () => key => key },
     slots: { inject(_name, fn) { fn(); }, register(spec, component) { slotNames.push(spec.name); if (spec.name === 'main') slot = { spec, component }; } },
@@ -59,7 +64,7 @@ function harness(sessionFixture, initialCommands = []) {
       return () => { if (commands.get(command.name) === command) commands.delete(command.name); };
     } },
     inputTriggers: { registerSource() { return () => {}; } },
-    connection: { generation }, workspaces: { list: ws }, sessions: { list: sessions }, uiWorkspace: { openSession(id) { openedSessions.push(id); } }, layout: { panelInfo, selectPanel(id) { panels.push(id); panelInfo.set({ activePanelId: id }); } },
+    connection: { generation }, workspaces: { list: ws }, sessions: { list: sessions }, uiWorkspace: { openSession(id) { openedSessions.push(id); } }, layout: { panelInfo, beginNavigation() { navigation.abort(); navigation = new AbortController(); return navigation.signal; }, selectPanel(id) { navigation.abort(); panels.push(id); panelInfo.set({ activePanelId: id }); } },
   };
   plugin.apply(ctx);
   const props = { t: key => key, ...slot.spec.inject() };
@@ -96,7 +101,7 @@ function harness(sessionFixture, initialCommands = []) {
     const found = nodes('button').filter(n => n.props.className === 'dsh-board-tile' && n.props['aria-label'] === label);
     assert.equal(found.length, 1, `board tile ${label}`); return found[0];
   }
-  return { requests, events, documentEvents, document, timers, timeouts, confirms, panels, openedSessions, commands, slotNames, plugin, ctx, generation, panelInfo, ws, disposePlugin, window, nodes, text, button, click, change, mount, unmount, resolve, choose, editDraft, submit, openContext, tile };
+  return { requests, events, documentEvents, document, timers, timeouts, confirms, panels, openedSessions, openedTabs, commands, slotNames, plugin, ctx, generation, panelInfo, ws, sessions, disposePlugin, window, nodes, text, button, click, change, mount, unmount, resolve, choose, editDraft, submit, openContext, tile };
 }
 
 async function ready() {
@@ -528,7 +533,24 @@ test('Tracker whales join only matching immutable issue IDs', async () => {
   assert.ok(h.nodes('button').some(n => n.props['aria-label'] === 'columnSessions: Open — 0'));
   h.click('trackerRefreshBoard'); await h.resolve(5, trackerSettings(1, true, { w: ['1'] })); await h.resolve(6, trackerBoard); h.nodes('main'); [...h.timeouts][0](); await settle();
   await h.resolve(7, issueLinks); const whale = h.nodes('button').find(n => n.props['aria-label'] === 'openSession: <script>unsafe</script>'); assert.ok(whale); whale.props.onClick(); assert.deepEqual(h.openedSessions, ['session-1']);
-  h.panelInfo.set({ activePanelId: null }); whale.props.onClick(); assert.deepEqual(h.openedSessions, ['session-1']); h.unmount();
+  whale.props.onClick({ ctrlKey: true }); whale.props.onClick({ metaKey: true }); whale.props.onAuxClick(middle);
+  assert.equal(h.openedTabs.length, 3); assert.ok(h.openedTabs.every(([url]) => url === 'http://localhost/app/#dsh-board-session-v1:w:session-1'));
+  h.panelInfo.set({ activePanelId: null }); whale.props.onClick(); whale.props.onClick({ ctrlKey: true }); assert.deepEqual(h.openedSessions, ['session-1']); assert.equal(h.openedTabs.length, 3); h.unmount();
+});
+
+test('Tracker multiple-session menu honors modified activation and stale membership', async () => {
+  const h = harness({ manualTracker: true, ids: ['one', 'two', 'archived'], archived: ['archived'] }); h.mount(); await h.resolve(0, base()); await h.resolve(1, trackerSettings(1, true, { w: ['1'] }));
+  h.tile('tracker #1 — Workspace — tracker').props.onClick(); await h.resolve(2, trackerSettings(1, true, { w: ['1'] })); await h.resolve(3, trackerBoard);
+  h.nodes('main'); [...h.timeouts][0](); await settle();
+  await h.resolve(4, { revision: 1, incomplete: true, links: ['one', 'two', 'archived'].map(sessionId => ({ issueKey: 'A-1', issueId: 'issue-1', sessionId })) });
+  const trigger = () => h.nodes('button').find(n => n.props['aria-label'] === 'sessionMenu: <script>unsafe</script>');
+  trigger().props.onClick(); let items = h.nodes('button').filter(n => n.props.role === 'menuitem');
+  items[2].props.onClick({ ctrlKey: true }); assert.equal(h.openedTabs.length, 0);
+  items[1].props.onClick({ metaKey: true }); assert.equal(h.openedTabs[0][0], 'http://localhost/app/#dsh-board-session-v1:w:two');
+  trigger().props.onClick(); items = h.nodes('button').filter(n => n.props.role === 'menuitem'); items[0].props.onAuxClick(middle); assert.equal(h.openedTabs.length, 2);
+  trigger().props.onClick(); items = h.nodes('button').filter(n => n.props.role === 'menuitem');
+  h.ws.set({ ...h.ws.getSnapshot(), items: [{ workspaceId: 'w', sessionIds: [] }] }); items[0].props.onClick({ ctrlKey: true }); assert.equal(h.openedTabs.length, 2);
+  assert.deepEqual(h.openedSessions, []); h.unmount();
 });
 
 test('Tracker unknown result remains blocked after drawer close and reopen', async () => {
@@ -798,6 +820,94 @@ test('multiple member sessions expose keyboard menu with full IDs and unavailabl
   assert.equal(h.text(items[3]), 'missing — sessionUnavailable'); assert.equal(items[3].props['aria-disabled'], true);
   items[2].props.onClick(); items[3].props.onClick(); assert.deepEqual(h.openedSessions, []);
   items[1].props.onClick(); assert.deepEqual(h.openedSessions, ['two']); assert.equal(h.nodes('div').filter(n => n.props.role === 'menu').length, 0); h.unmount();
+});
+
+const fragmentUrl = (workspace = 'w', session = 'one') => `http://localhost/app/?launch=secret#dsh-board-session-v1:${encodeURIComponent(workspace)}:${encodeURIComponent(session)}`;
+const middle = { button: 1, preventDefault() {} };
+
+test('local whale and menu synchronously open sanitized tabs without changing current selection', async () => {
+  const h = harness({ ids: ['one', 'two', 'archived'], archived: ['archived'], url: 'http://localhost/app/?launch=secret#old', baseURI: 'http://localhost/app/?launch=secret#old' });
+  const snapshot = base(); snapshot.links = [{ boardId: 'b', taskId: 't', sessionId: 'one' }];
+  h.mount(); await h.resolve(0, snapshot); await h.choose();
+  const whale = h.nodes('button').find(n => n.props['aria-label'] === 'openSession: Existing');
+  whale.props.onClick({ ctrlKey: true }); whale.props.onClick({ metaKey: true }); whale.props.onAuxClick(middle);
+  assert.equal(h.openedTabs.length, 3); assert.deepEqual(h.openedSessions, []);
+  for (const [url, target, features] of h.openedTabs) {
+    assert.equal(url, 'http://localhost/app/#dsh-board-session-v1:w:one'); assert.equal(target, '_blank'); assert.equal(features, 'noopener,noreferrer');
+  }
+  whale.props.onClick({}); assert.deepEqual(h.openedSessions, ['one']);
+  h.ws.set({ ...h.ws.getSnapshot(), archivedSessionIds: ['one'] }); whale.props.onClick({ ctrlKey: true }); assert.equal(h.openedTabs.length, 3);
+  h.unmount();
+
+  const multi = harness({ ids: ['one', 'two', 'archived'], archived: ['archived'] });
+  const two = base(); two.links = ['one', 'two', 'archived'].map(sessionId => ({ boardId: 'b', taskId: 't', sessionId }));
+  multi.mount(); await multi.resolve(0, two); await multi.choose();
+  multi.nodes('button').find(n => n.props['aria-label'] === 'sessionMenu: Existing').props.onClick({ ctrlKey: true });
+  let items = multi.nodes('button').filter(n => n.props.role === 'menuitem');
+  items[2].props.onClick({ ctrlKey: true }); assert.equal(multi.openedTabs.length, 0);
+  items[1].props.onClick({ metaKey: true }); assert.equal(multi.openedTabs[0][0], 'http://localhost/app/#dsh-board-session-v1:w:two');
+  multi.nodes('button').find(n => n.props['aria-label'] === 'sessionMenu: Existing').props.onClick();
+  items = multi.nodes('button').filter(n => n.props.role === 'menuitem'); items[0].props.onAuxClick(middle);
+  assert.equal(multi.openedTabs[1][0], 'http://localhost/app/#dsh-board-session-v1:w:one'); assert.deepEqual(multi.openedSessions, []); multi.unmount();
+});
+
+test('handoff rejects hostile bases, invalid ids, and stale relations at activation', async () => {
+  for (const baseURI of ['https://evil.example/?token=secret', 'javascript:alert(1)', 'http://user:pass@localhost/app/']) {
+    const h = harness({ ids: ['one'], baseURI }); const snapshot = base(); snapshot.links = [{ boardId: 'b', taskId: 't', sessionId: 'one' }];
+    h.mount(); await h.resolve(0, snapshot); await h.choose(); h.nodes('button').find(n => n.props['aria-label'] === 'openSession: Existing').props.onClick({ ctrlKey: true });
+    assert.deepEqual(h.openedTabs, []); assert.deepEqual(h.openedSessions, []); h.unmount();
+  }
+  const id = 'bad\u202eid'; const h = harness({ ids: [id] }); const snapshot = base(); snapshot.links = [{ boardId: 'b', taskId: 't', sessionId: id }];
+  h.mount(); await h.resolve(0, snapshot); await h.choose(); const whale = h.nodes('button').find(n => n.props['aria-label'] === 'openSession: Existing');
+  whale.props.onClick({ ctrlKey: true }); assert.deepEqual(h.openedTabs, []); h.unmount();
+});
+
+test('destination consumes fragment once, awaits catalogs and opens exact member', async () => {
+  const h = harness({ url: fragmentUrl(), ids: ['one'], wsPhase: 'pending', sessionsPhase: 'pending' });
+  assert.equal(h.window.location.href, 'http://localhost/app/'); assert.deepEqual(h.openedSessions, []);
+  h.ws.set({ ...h.ws.getSnapshot(), phase: 'ready' }); await settle(); assert.deepEqual(h.openedSessions, []);
+  h.sessions.set({ ...h.sessions.getSnapshot(), phase: 'ready' }); await settle(); assert.deepEqual(h.openedSessions, ['one']);
+  h.sessions.set(h.sessions.getSnapshot()); await settle(); assert.deepEqual(h.openedSessions, ['one']);
+  assert.equal(h.timeouts.size, 0); h.disposePlugin();
+});
+
+test('destination opens a session when the initial panel is unset', async () => {
+  const h = harness({ url: fragmentUrl(), ids: ['one'], activePanelId: null });
+  await settle();
+  assert.deepEqual(h.openedSessions, ['one']);
+  h.disposePlugin();
+});
+
+test('destination fails closed for forged, invalid, archived and stale handoffs', async () => {
+  for (const fixture of [
+    { url: fragmentUrl('other', 'one'), ids: ['one'] },
+    { url: fragmentUrl(), ids: ['one'], archived: ['one'] },
+    { url: fragmentUrl(), ids: ['one'], workspaces: [{ workspaceId: 'w', sessionIds: [] }] },
+    { url: fragmentUrl(), ids: [] },
+    { url: fragmentUrl(), ids: ['one'], wsState: 'error' },
+    { url: 'http://localhost/app/?launch=secret#dsh-board-session-v1:w:%ZZ', ids: ['one'] },
+    { url: 'http://localhost/app/?launch=secret#dsh-board-session-v1:w:one:extra', ids: ['one'] },
+    { url: fragmentUrl('w', 'bad\u202eid'), ids: ['bad\u202eid'] },
+  ]) {
+    const h = harness(fixture); await settle(); assert.equal(h.window.location.href, 'http://localhost/app/'); assert.deepEqual(h.openedSessions, []); h.disposePlugin();
+  }
+  const h = harness({ url: 'http://localhost/app/#other', ids: ['one'] }); await settle(); assert.equal(h.window.location.hash, '#other'); assert.deepEqual(h.openedSessions, []);
+});
+
+test('destination cancels on navigation, interaction, generation, timeout, and disposal', async () => {
+  for (const cancel of ['pointerdown', 'keydown', 'panel', 'generation', 'timeout', 'dispose', 'url']) {
+    const h = harness({ url: fragmentUrl(), ids: ['one'], wsPhase: 'pending' });
+    if (cancel === 'pointerdown' || cancel === 'keydown') h.events.get(cancel)({ isTrusted: true });
+    if (cancel === 'panel') h.panelInfo.set({ activePanelId: 'another' });
+    if (cancel === 'generation') h.generation.set({ id: 2 });
+    if (cancel === 'timeout') [...h.timeouts][0]();
+    if (cancel === 'dispose') h.disposePlugin();
+    if (cancel === 'url') h.window.history.replaceState(null, '', '/elsewhere');
+    h.ws.set({ ...h.ws.getSnapshot(), phase: 'ready' }); await settle(); assert.deepEqual(h.openedSessions, [], cancel); assert.equal(h.timeouts.size, 0, cancel);
+    h.disposePlugin();
+  }
+  const h = harness({ url: fragmentUrl(), ids: ['one'] }); h.disposePlugin(); await settle(); assert.deepEqual(h.openedSessions, []);
+  const later = harness({ url: fragmentUrl(), ids: ['one'] }); later.ctx.layout.beginNavigation(); await settle(); assert.deepEqual(later.openedSessions, []);
 });
 
 test('column whale counts distinct member sessions before session filter and intersects other filters', async () => {

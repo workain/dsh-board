@@ -12,7 +12,7 @@ assert.ok(start >= 0 && end > start, 'client harness declarations not found');
 const declarations = tests.slice(start, end).replace("new URL('./client.js', import.meta.url)", "new URL('./client.js', baseUrl)");
 const client = await readFile(new URL('./client.js', import.meta.url), 'utf8');
 const prelude = declarations.replace(/^const client = .*?;\n/m, '');
-const { harness, base, settle } = vm.runInNewContext(`(function () { ${prelude}\n return { harness, base, settle }; })()`, { client, vm, TextEncoder, assert, baseUrl: import.meta.url });
+const { harness, base, settle } = vm.runInNewContext(`(function () { ${prelude}\n return { harness, base, settle }; })()`, { client, vm, TextEncoder, URL, AbortController, assert, baseUrl: import.meta.url });
 
 const all = JSON.stringify(['all']);
 const unassigned = JSON.stringify(['unassigned']);

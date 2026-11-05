@@ -205,6 +205,76 @@ window.__ModuleLoader__.load({
       if (!sessions.ids.includes(id)) return 'sessionUnavailable';
       return 'available';
     }
+    // This fragment is a one-shot, same-origin handoff, not an application route.
+    const sessionFragment = '#dsh-board-session-v1:';
+    const validHandoffId = (id) => typeof id === 'string' && id.length > 0 && id.length <= 256 && !/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(id);
+    function newTabSession(workspaceId, sessionId) {
+      if (!validHandoffId(workspaceId) || !validHandoffId(sessionId)) return;
+      try {
+        const url = new URL(document.baseURI);
+        if (!['http:', 'https:'].includes(url.protocol) || url.origin !== window.location.origin || url.username || url.password) return;
+        url.search = ''; url.hash = sessionFragment + encodeURIComponent(workspaceId) + ':' + encodeURIComponent(sessionId);
+        window.open(url.href, '_blank', 'noopener,noreferrer');
+      } catch { /* Invalid base URLs and blocked windows fail closed. */ }
+    }
+    function modifiedSessionClick(event) { return Boolean(event && (event.button === 1 || event.ctrlKey || event.metaKey)); }
+    function consumeSessionFragment(ctx) {
+      const hash = window.location?.hash;
+      if (typeof hash !== 'string' || !hash.startsWith(sessionFragment)) return;
+      // Remove even malformed handoffs before parsing or waiting. Never preserve a launch query.
+      try { window.history.replaceState(window.history.state, '', window.location.pathname); } catch { return; }
+      let workspaceId, sessionId;
+      try {
+        const parts = hash.slice(sessionFragment.length).split(':');
+        if (parts.length !== 2) return;
+        [workspaceId, sessionId] = parts.map(decodeURIComponent);
+        if (!validHandoffId(workspaceId) || !validHandoffId(sessionId) || hash !== sessionFragment + encodeURIComponent(workspaceId) + ':' + encodeURIComponent(sessionId)) return;
+      } catch { return; }
+      let stopped = false, scheduled = false, generationId, navigation;
+      const cleanup = [];
+      const stop = () => { if (stopped) return; stopped = true; cleanup.splice(0).forEach(fn => fn()); };
+      const listen = (target, name, handler, options) => { target.addEventListener(name, handler, options); cleanup.push(() => target.removeEventListener(name, handler, options)); };
+      const originalUrl = window.location.href;
+      const initialPanel = ctx.layout.panelInfo.getSnapshot().activePanelId;
+      // Capture genuine interaction before readiness, including same-panel and same-session selections.
+      const interaction = event => { if (event.isTrusted) stop(); };
+      for (const name of ['pointerdown', 'keydown']) listen(window, name, interaction, true);
+      for (const name of ['hashchange', 'popstate', 'pagehide']) listen(window, name, stop);
+      const timer = window.setTimeout(stop, 30000); cleanup.push(() => window.clearTimeout(timer));
+      const check = () => {
+        if (stopped) return;
+        if (window.location.href !== originalUrl || ctx.layout.panelInfo.getSnapshot().activePanelId !== initialPanel) return stop();
+        const generation = ctx.connection.generation.getSnapshot();
+        if (generationId !== undefined && generation?.id !== generationId) return stop();
+        if (!generation || generation.id === undefined) return;
+        generationId = generation.id;
+        const ws = ctx.workspaces.list.getSnapshot(), sessions = ctx.sessions.list.getSnapshot();
+        if (ws.state === 'error') return stop();
+        if (ws.phase !== 'ready' || sessions.phase !== 'ready') return;
+        const owner = ws.items?.find(item => item.workspaceId === workspaceId);
+        if (!Array.isArray(owner?.sessionIds) || !owner.sessionIds.includes(sessionId) || !Array.isArray(ws.archivedSessionIds) || ws.archivedSessionIds.includes(sessionId) || !Array.isArray(sessions.ids) || !sessions.ids.includes(sessionId)) return stop();
+        if (scheduled) return;
+        // Reserve only once catalogs are ready; startup restoration has already had
+        // its readiness callback. Later navigation, even to the same panel, cancels.
+        navigation = ctx.layout.beginNavigation();
+        if (navigation.aborted) return stop();
+        listen(navigation, 'abort', stop);
+        scheduled = true;
+        // Recheck after other readiness subscribers finish before committing.
+        Promise.resolve().then(() => {
+          if (stopped) return;
+          scheduled = false;
+          const liveWs = ctx.workspaces.list.getSnapshot(), liveSessions = ctx.sessions.list.getSnapshot();
+          const owner = liveWs.items?.find(item => item.workspaceId === workspaceId);
+          if (window.location.href !== originalUrl || ctx.layout.panelInfo.getSnapshot().activePanelId !== initialPanel || ctx.connection.generation.getSnapshot()?.id !== generationId || liveWs.state === 'error' || liveWs.phase !== 'ready' || liveSessions.phase !== 'ready' || !owner?.sessionIds?.includes(sessionId) || !liveWs.archivedSessionIds?.includes || liveWs.archivedSessionIds.includes(sessionId) || !liveSessions.ids?.includes(sessionId)) return stop();
+          stop();
+          if (!navigation.aborted) ctx.uiWorkspace.openSession(sessionId);
+        });
+      };
+      for (const source of [ctx.connection.generation, ctx.workspaces.list, ctx.sessions.list, ctx.layout.panelInfo]) cleanup.push(source.subscribe(check));
+      check();
+      return stop;
+    }
     function BoardIcon({ size = 20 }) {
       return h('svg', { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.7, 'aria-hidden': true },
         h('rect', { x: 3, y: 4, width: 18, height: 16, rx: 2 }),
@@ -608,7 +678,7 @@ window.__ModuleLoader__.load({
         updateMemory({ workspaceId: '', boardId: '', provider: 'local', statusFilter: '', query: '', assigneeFilter: '["all"]', sessionFilter: 'all', overview: true });
       }
       function editTask(task) { setForm({ kind: 'task', id: task.id, title: task.title, description: task.description || '', statusId: task.statusId, assignee: task.assignee ?? '', assigneeEdited: false }); }
-      function open(id, taskId) {
+      function open(id, taskId, event) {
         // Recheck the live sources and current relation at activation, not a stale render.
         const liveWorkspaces = workspacesSource.getSnapshot(), liveSessions = sessionsSource.getSnapshot();
         const liveWorkspace = liveWorkspaces.items.find((item) => item.workspaceId === workspaceId);
@@ -618,7 +688,8 @@ window.__ModuleLoader__.load({
             !memory.snapshot.links.some((link) => link.boardId === boardId && link.taskId === taskId && link.sessionId === id) ||
             sessionState(id, liveSessions, liveWorkspaces) !== 'available') return;
         setSessionMenu(null);
-        openSession(id);
+        if (modifiedSessionClick(event)) newTabSession(workspaceId, id);
+        else openSession(id);
       }
       function link(id, linked, taskId) {
         if (memory.form && memory.form.kind !== 'links' && memory.dirty && !window.confirm(t('discardDraft'))) return;
@@ -636,9 +707,9 @@ window.__ModuleLoader__.load({
           h('div', { className: 'dsh-board-card-header' },
             h('button', { className: 'dsh-board-card-title', type: 'button', disabled: busy || uncertain, onClick: () => editTask(task), 'aria-label': t('editTask') + ': ' + task.title, style: { flex: 1, minWidth: 0, justifyContent: 'flex-start', overflowWrap: 'anywhere', textAlign: 'left' } }, task.title),
             mode === 'list' && h('span', { className: 'dsh-board-card-status' }, statuses.find((s) => s.id === task.statusId)?.name || t('statusMissing')),
-            memberLinks.length > 0 && h('button', { className: 'dsh-board-whale-button', type: 'button', 'aria-label': (memberLinks.length === 1 ? t('openSession') : t('sessionMenu')) + ': ' + task.title, title: t('sessions'), ...(memberLinks.length > 1 ? { 'aria-haspopup': 'menu', 'aria-expanded': menuOpen, 'aria-controls': menuId } : { 'aria-disabled': sessionState(memberLinks[0].sessionId, sessions, workspaces) !== 'available' }), onClick: () => memberLinks.length === 1 ? open(memberLinks[0].sessionId, task.id) : setSessionMenu(menuOpen ? null : { workspaceId, boardId, taskId: task.id, menuId }) }, h('img', { className: 'dsh-board-whale', src: './favicon.svg', alt: '' })),
+            memberLinks.length > 0 && h('button', { className: 'dsh-board-whale-button', type: 'button', 'aria-label': (memberLinks.length === 1 ? t('openSession') : t('sessionMenu')) + ': ' + task.title, title: t('sessions'), ...(memberLinks.length > 1 ? { 'aria-haspopup': 'menu', 'aria-expanded': menuOpen, 'aria-controls': menuId } : { 'aria-disabled': sessionState(memberLinks[0].sessionId, sessions, workspaces) !== 'available' }), onClick: event => memberLinks.length === 1 ? open(memberLinks[0].sessionId, task.id, event) : setSessionMenu(menuOpen ? null : { workspaceId, boardId, taskId: task.id, menuId }), onAuxClick: event => { if (event.button === 1 && memberLinks.length === 1) { event.preventDefault(); open(memberLinks[0].sessionId, task.id, event); } } }, h('img', { className: 'dsh-board-whale', src: './favicon.svg', alt: '' })),
             h('button', { className: 'dsh-board-card-action dsh-board-card-action-links dsh-board-count', type: 'button', disabled: busy || uncertain, onClick: () => setForm({ kind: 'links', id: task.id, title: task.title }), 'aria-label': t('sessions') + ': ' + task.title, title: t('sessions'), style: { flex: 'none' } }, h(Icon, { name: 'sessions' }), String(taskLinks.length))),
-          menuOpen && memberLinks.length > 1 && h('div', { className: 'dsh-board-session-menu', id: menuId, role: 'menu', 'aria-label': t('sessionMenu') + ': ' + task.title, onKeyDown: (event) => { if (event.key === 'Escape') { event.preventDefault(); setSessionMenu(null); event.currentTarget.parentElement?.querySelector('[aria-haspopup="menu"]')?.focus(); } else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) { event.preventDefault(); const items = [...event.currentTarget.querySelectorAll('[role="menuitem"]')]; const current = items.indexOf(document.activeElement); const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (current + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length; items[next]?.focus(); } } }, memberLinks.map(({ sessionId }) => { const state = sessionState(sessionId, sessions, workspaces); return h('button', { key: sessionId, type: 'button', role: 'menuitem', 'aria-disabled': state !== 'available', onClick: () => open(sessionId, task.id) }, label(sessionId), state === 'available' ? '' : ' — ' + t(state)); })),
+          menuOpen && memberLinks.length > 1 && h('div', { className: 'dsh-board-session-menu', id: menuId, role: 'menu', 'aria-label': t('sessionMenu') + ': ' + task.title, onKeyDown: (event) => { if (event.key === 'Escape') { event.preventDefault(); setSessionMenu(null); event.currentTarget.parentElement?.querySelector('[aria-haspopup="menu"]')?.focus(); } else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) { event.preventDefault(); const items = [...event.currentTarget.querySelectorAll('[role="menuitem"]')]; const current = items.indexOf(document.activeElement); const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (current + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length; items[next]?.focus(); } } }, memberLinks.map(({ sessionId }) => { const state = sessionState(sessionId, sessions, workspaces); return h('button', { key: sessionId, type: 'button', role: 'menuitem', 'aria-disabled': state !== 'available', onClick: event => open(sessionId, task.id, event), onAuxClick: event => { if (event.button === 1) { event.preventDefault(); open(sessionId, task.id, event); } } }, label(sessionId), state === 'available' ? '' : ' — ' + t(state)); })),
           task.assignee && h('span', { className: 'dsh-board-muted' }, t('assignee'), ': ', task.assignee),
           showContext && contextSessionId && (membership || isLinked) && h('button', { className: 'dsh-board-card-current' + (isLinked ? ' is-linked' : ''), type: 'button', disabled: busy || loading || uncertain || !snapshot || !selected || (!isLinked && unavailable), 'aria-label': t(isLinked ? 'unlinkCurrent' : 'linkCurrent') + ': ' + task.title, onClick: () => link(contextSessionId, !isLinked, task.id) }, t(isLinked ? 'unlinkCurrent' : 'linkCurrent')));
       }
@@ -902,18 +973,20 @@ window.__ModuleLoader__.load({
         const issue = memory.issue;
         if (issue && !issue.available && !issue.loading && !issue.pending && issueScope(issue) && tracker.board && !tracker.busy && (!issue.error || issue.unknown)) void loadIssue();
       }, [tracker.board, tracker.busy, tracker.settings, connection, memory.issue?.pending]);
-      function openTrackerSession(issue, sessionId) {
+      function openTrackerSession(issue, sessionId, event) {
         const tr = memory.tracker, ws = workspacesSource.getSnapshot(), sess = sessionsSource.getSnapshot();
         const board = tr.board, owner = ws.items.find(item => item.workspaceId === memory.workspaceId);
         if (!trackerActive() || !connectionSource.getSnapshot() || memory.provider !== 'tracker' || memory.overview || memory.showContext || !currentWorkspace(memory.workspaceId) || !tr.settings?.workspaces[memory.workspaceId]?.includes(memory.boardId) || tr.settings.needsReselect.includes(memory.workspaceId) || !board?.issues.some(item => item.key === issue.key && item.id && item.id === issue.id) || !tr.boardLinks?.links.some(link => link.issueKey === issue.key && link.issueId === issue.id && link.sessionId === sessionId) || !owner?.sessionIds?.includes(sessionId) || sessionState(sessionId, sess, ws) !== 'available') return;
-        setSessionMenu(null); openSession(sessionId);
+        setSessionMenu(null);
+        if (modifiedSessionClick(event)) newTabSession(memory.workspaceId, sessionId);
+        else openSession(sessionId);
       }
       function trackerSessionShortcut(issue, links) {
         const menuId = 'dsh-board-tracker-sessions-' + encodeURIComponent(workspaceId) + '-' + encodeURIComponent(boardId) + '-' + encodeURIComponent(issue.key);
         const menuOpen = sessionMenu?.menuId === menuId;
         return h(React.Fragment, null,
-          h('button', { type: 'button', className: 'dsh-board-whale-button', 'aria-label': (links.length === 1 ? t('openSession') : t('sessionMenu')) + ': ' + issue.summary, title: t('issueSessionPartial'), ...(links.length > 1 ? { 'aria-haspopup': 'menu', 'aria-expanded': menuOpen, 'aria-controls': menuId } : { 'aria-disabled': sessionState(links[0].sessionId, sessions, workspaces) !== 'available' }), onClick: () => links.length === 1 ? openTrackerSession(issue, links[0].sessionId) : setSessionMenu(menuOpen ? null : { menuId }) }, h('img', { className: 'dsh-board-whale', src: './favicon.svg', alt: '' }), String(links.length)),
-          menuOpen && links.length > 1 && h('div', { className: 'dsh-board-session-menu', id: menuId, role: 'menu', 'aria-label': t('sessionMenu') + ': ' + issue.summary, onKeyDown: event => { if (event.key === 'Escape') { event.preventDefault(); setSessionMenu(null); event.currentTarget.parentElement?.querySelector('[aria-haspopup="menu"]')?.focus(); } else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) { event.preventDefault(); const items = [...event.currentTarget.querySelectorAll('[role="menuitem"]')], current = items.indexOf(document.activeElement), next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (current + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length; items[next]?.focus(); } } }, links.map(({ sessionId }) => { const state = sessionState(sessionId, sessions, workspaces); return h('button', { key: sessionId, type: 'button', role: 'menuitem', 'aria-disabled': state !== 'available', onClick: () => openTrackerSession(issue, sessionId) }, label(sessionId), state === 'available' ? '' : ' — ' + t(state)); })));
+          h('button', { type: 'button', className: 'dsh-board-whale-button', 'aria-label': (links.length === 1 ? t('openSession') : t('sessionMenu')) + ': ' + issue.summary, title: t('issueSessionPartial'), ...(links.length > 1 ? { 'aria-haspopup': 'menu', 'aria-expanded': menuOpen, 'aria-controls': menuId } : { 'aria-disabled': sessionState(links[0].sessionId, sessions, workspaces) !== 'available' }), onClick: event => links.length === 1 ? openTrackerSession(issue, links[0].sessionId, event) : setSessionMenu(menuOpen ? null : { menuId }), onAuxClick: event => { if (event.button === 1 && links.length === 1) { event.preventDefault(); openTrackerSession(issue, links[0].sessionId, event); } } }, h('img', { className: 'dsh-board-whale', src: './favicon.svg', alt: '' }), String(links.length)),
+          menuOpen && links.length > 1 && h('div', { className: 'dsh-board-session-menu', id: menuId, role: 'menu', 'aria-label': t('sessionMenu') + ': ' + issue.summary, onKeyDown: event => { if (event.key === 'Escape') { event.preventDefault(); setSessionMenu(null); event.currentTarget.parentElement?.querySelector('[aria-haspopup="menu"]')?.focus(); } else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) { event.preventDefault(); const items = [...event.currentTarget.querySelectorAll('[role="menuitem"]')], current = items.indexOf(document.activeElement), next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (current + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length; items[next]?.focus(); } } }, links.map(({ sessionId }) => { const state = sessionState(sessionId, sessions, workspaces); return h('button', { key: sessionId, type: 'button', role: 'menuitem', 'aria-disabled': state !== 'available', onClick: event => openTrackerSession(issue, sessionId, event), onAuxClick: event => { if (event.button === 1) { event.preventDefault(); openTrackerSession(issue, sessionId, event); } } }, label(sessionId), state === 'available' ? '' : ' — ' + t(state)); })));
       }
       function trackerView() {
         if (memory.provider !== 'tracker' || overview || showContext) return null;
@@ -1038,6 +1111,7 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots', 'locale', 'workspaces', 'sessions', 'uiWorkspace', 'layout', 'commandUi', 'connection', 'inputTriggers'],
       apply(ctx) {
+        ctx.effect(() => consumeSessionFragment(ctx), 'dsh-board: session handoff');
         ctx.effect(() => ctx.locale.register(NS, { en, ru, zh: en }), 'dsh-board: locale');
         const t = ctx.locale.bind(NS);
         ctx.effect(() => ctx.inputTriggers.registerSource({
