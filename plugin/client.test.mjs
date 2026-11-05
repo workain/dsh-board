@@ -314,6 +314,7 @@ test('Tracker drawer opens lazily without writes, validates and saves only chang
   assert.equal(h.nodes('aside').filter(n => n.props['aria-label'] === 'issueDetails').length, 1);
   assert.ok(!h.nodes('script').length); assert.ok(h.nodes('p').some(n => h.text(n) === '<img>comment'));
   assert.equal(h.nodes('input').find(n => n.props.value === 'user-1').props.value, 'user-1');
+  assert.ok(h.nodes('p').some(n => h.text(n) === 'assignee: User'), 'drawer shows Tracker assignee display name');
   h.click('issueSaveFields'); assert.equal(h.requests.length, 9, 'opening and unchanged save never write');
   h.change(h.nodes('input').find(n => n.props.value === issueFixture.summary), '  '); h.click('issueSaveFields');
   assert.ok(h.nodes('p').some(n => h.text(n) === 'issueInvalid')); assert.equal(h.requests.length, 9);
