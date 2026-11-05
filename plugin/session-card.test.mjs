@@ -13,8 +13,8 @@ const comment = id => ({ id, text: 'Comment ' + id, createdBy: { display: 'Alice
 const links = { '1': [{ sessionId: 's', issueKey: 'ABC-1', issueId: 'id-1' }, { sessionId: 'other', issueKey: 'SECRET-2', issueId: 'id-2' }], '2': [] };
 function harness(options = {}) {
   const ws = source(wsValue), sessions = source({ phase: 'ready', ids: ['s', 'other'] }), connection = source({ id: 1 }), mounted = source('s');
-  const opened = [], full = [], sessionOpened = [], sessionNewTabs = [], calls = [];
-  let tree, cursor = 0, hooks = [], effects = [], pending = false, active = false, tab = { visible: true, signal: new AbortController().signal }, sessionId = 's';
+  const opened = [], full = [], sessionOpened = [], sessionNewTabs = [], calls = [], editorRenders = [], flows = [];
+  let tree, cursor = 0, hooks = [], effects = [], pending = false, active = false, tab = { visible: true, signal: new AbortController().signal }, sessionId = 's', editor = null;
   const React = {
     Fragment: Symbol('Fragment'),
     createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity) }),
@@ -39,27 +39,50 @@ function harness(options = {}) {
     mutate() { throw Error('Unexpected mutation'); },
   };
   const sidebarRight = { mounted, openTab: id => opened.push(id) };
-  const card = createSessionCard(React, { transport, ws, sessions, connection, sidebarRight, t: key => key, renderTrackerText: value => value, openBoardForSession: id => full.push(id), openSession: id => sessionOpened.push(id), ...(options.noNewTab ? {} : { openSessionInNewTab: id => sessionNewTabs.push(id) }) });
+  // This fake models an embedded editor's authorization boundary, not the real
+  // editor's page traversal or rendering. Every flow explicitly checks before
+  // and after the mocked request and publishes only if both checks succeed.
+  function renderIssueEditor(props) {
+    editor = props; editorRenders.push(props);
+    return React.createElement('fake-editor', { target: props.target });
+  }
+  const card = createSessionCard(React, { transport, ws, sessions, connection, sidebarRight, t: key => key, renderTrackerText: value => value, renderIssueEditor, openBoardForSession: id => full.push(id), openSession: id => sessionOpened.push(id), ...(options.noNewTab ? {} : { openSessionInNewTab: id => sessionNewTabs.push(id) }) });
   function render(component = card.Body) {
     active = true; let loops = 0;
-    do { pending = false; cursor = 0; effects = []; tree = component({ sessionId, useTabInfo: () => ({ tab }) }); const next = effects; effects = []; next.forEach(fn => fn()); assert.ok(++loops < 100); } while (pending);
+    do { pending = false; cursor = 0; effects = []; if (component === card.Body) editor = null; tree = component({ sessionId, useTabInfo: () => ({ tab }) }); const next = effects; effects = []; next.forEach(fn => fn()); assert.ok(++loops < 100); } while (pending);
     return tree;
   }
   function nodes(type) { render(); const out = []; function walk(n) { if (!n || typeof n !== 'object') return; if (n.type === type) out.push(n); n.children?.forEach(walk); } walk(tree); return out; }
   function text(n) { if (arguments.length === 0) n = tree; if (!n || typeof n !== 'object') return String(n ?? ''); return n.children.map(child => text(child)).join(''); }
-  function unmount() { if (active) hooks.forEach(item => item?.cleanup?.()); active = false; hooks = []; }
-  return { card, render, nodes, text, unmount, ws, sessions, connection, mounted, opened, full, sessionOpened, sessionNewTabs, calls, setSession: id => { sessionId = id; }, setTab: value => { tab = { ...tab, ...value }; }, select: value => { const select = nodes('select')[0]; select.props.onChange({ target: { value } }); render(); } };
+  function unmount() { if (active) hooks.forEach(item => item?.cleanup?.()); active = false; hooks = []; editor = null; }
+  async function flow(captured, op = 'issue.read', extra = {}) {
+    assert.ok(captured, 'editor must be mounted');
+    const { target, authorization } = captured, events = [];
+    const accepts = () => authorization.valid();
+    const authorize = async stage => { events.push('authorize:' + stage); try { return await authorization.authorize(target, accepts, target.linkRevision); } catch { return false; } };
+    const result = { events, value: null }; flows.push(result);
+    if (!await authorize('before')) return result;
+    events.push(op);
+    let value;
+    try { value = await transport.trackerCommand({ op, workspaceId: target.workspaceId, boardId: target.boardId, issueKey: target.key, issueId: target.issueId, ...extra }); } catch { return result; }
+    if (!await authorize('after')) return result;
+    result.value = value;
+    return result;
+  }
+  return { card, render, nodes, text, unmount, ws, sessions, connection, mounted, opened, full, sessionOpened, sessionNewTabs, calls, editorRenders, flows, flow, get editor() { return editor; }, setSession: id => { sessionId = id; }, setTab: value => { tab = { ...tab, ...value }; }, select: value => { const select = nodes('select')[0]; select.props.onChange({ target: { value } }); render(); } };
 }
 async function ready(h) { h.render(); await settle(); h.render(); await settle(); h.render(); }
+const choose = (h, key) => { const option = h.nodes('select')[0].children.find(n => n?.type === 'option' && h.text(n).includes(key)); assert.ok(option); h.select(option.props.value); };
 
 test('header is session-scoped and rechecks mounted session when clicked', () => {
   const h = harness(); const button = h.render(h.card.Header); assert.equal(button.type, 'button'); button.props.onClick(); assert.deepEqual(h.opened, ['dsh-board-issue']); h.mounted.set('other'); button.props.onClick(); assert.deepEqual(h.opened, ['dsh-board-issue']); assert.equal(h.render(h.card.Header), null);
 });
-test('joins local tasks in workspace and displays validated linked issue without writes', async () => {
-  const h = harness(); await ready(h); assert.match(h.text(), /Local task/); assert.doesNotMatch(h.text(), /Foreign local|SECRET/); assert.match(h.text(), /Private ABC-1/); assert.match(h.text(), /Comment a/); assert.doesNotMatch(h.text(), /partial result/); assert.match(h.text(), /read-only/i);
+test('joins local tasks and delegates the exact linked target to the editor', async () => {
+  const h = harness(); await ready(h); assert.match(h.text(), /Local task/); assert.match(h.text(), /historical/); assert.doesNotMatch(h.text(), /Foreign local|SECRET/); assert.doesNotMatch(h.text(), /partial result/);
   assert.deepEqual(h.calls.find(c => c.op === 'links.session.read'), { op: 'links.session.read', workspaceId: 'w', sessionId: 's' });
-  assert.deepEqual(h.calls.find(c => c.op === 'links.issue.read'), { op: 'links.issue.read', workspaceId: 'w', boardId: '1', issueKey: 'ABC-1', issueId: 'id-1' });
-  const read = h.calls.find(c => c.op === 'issue.read'); assert.equal(read.issueId, 'id-1'); assert.ok(h.calls.every(c => ['local.read', 'settings.read', 'links.session.read', 'links.issue.read', 'issue.read', 'issue.comments'].includes(c.op)));
+  assert.deepEqual(h.editor.target, { sessionId: 's', workspaceId: 'w', incarnation: 'incarnation', connectionId: 1, settings, boardId: '1', key: 'ABC-1', issueId: 'id-1', linkRevision: 1 });
+  const flow = await h.flow(h.editor); assert.deepEqual(flow.events, ['authorize:before', 'issue.read', 'authorize:after']); assert.equal(flow.value.summary, 'Private ABC-1');
+  assert.deepEqual(h.calls.filter(c => c.op === 'links.issue.read'), Array(2).fill({ op: 'links.issue.read', workspaceId: 'w', boardId: '1', issueKey: 'ABC-1', issueId: 'id-1' }));
   h.nodes('button').find(n => h.text(n).includes('Open full board')).props.onClick(); assert.deepEqual(h.full, ['s']);
 });
 test('visible session button opens current session and rejects stale scope and unsupported modifiers', async () => {
@@ -68,131 +91,119 @@ test('visible session button opens current session and rejects stale scope and u
   button.props.onClick({ button: 0 }); button.props.onClick({ button: 0, ctrlKey: true }); button.props.onClick({ button: 0, metaKey: true }); button.props.onAuxClick({ button: 1 });
   assert.deepEqual(h.sessionOpened, ['s']); assert.deepEqual(h.sessionNewTabs, ['s', 's', 's']);
   h.mounted.set('other'); button.props.onClick({ button: 0 }); button.props.onAuxClick({ button: 1 }); assert.deepEqual(h.sessionOpened, ['s']); assert.equal(h.sessionNewTabs.length, 3);
-  const other = harness({ noNewTab: true }); await ready(other); const fallback = other.nodes('button').find(node => other.text(node) === 'Open current session · s'); fallback.props.onClick({ ctrlKey: true }); fallback.props.onAuxClick({ button: 1 }); assert.deepEqual(other.sessionOpened, []);
+  const other = harness({ noNewTab: true }); await ready(other); const fallback = other.nodes('button').find(node => other.text(node) === 'Open current session · Untitled session'); assert.ok(fallback); assert.notEqual(other.text(fallback), 'Open current session · s'); fallback.props.onClick({ ctrlKey: true }); fallback.props.onAuxClick({ button: 1 }); assert.deepEqual(other.sessionOpened, []);
+  other.sessions.set({ phase: 'ready', ids: ['s', 'other'], byId: { s: { displayTitle: 's' } } }); other.render(); const idTitle = other.nodes('button').find(node => other.text(node).startsWith('Open current session')); assert.equal(other.text(idTitle), 'Open current session · Untitled session');
 });
-test('rejects malformed session discovery and exact issue results', async () => {
-  for (const mode of ['wrong-session', 'unselected-board', 'bad-incomplete', 'wrong-target']) {
-    const h = harness({ command(c) {
-      if (c.op === 'links.session.read' && mode !== 'wrong-target') return { revision: 1, incomplete: mode === 'bad-incomplete' ? 'no' : false, links: [{ sessionId: mode === 'wrong-session' ? 'other' : 's', boardId: mode === 'unselected-board' ? '99' : '1', issueKey: 'ABC-1', issueId: 'id-1' }] };
-      if (c.op === 'links.issue.read' && mode === 'wrong-target') return { revision: 1, incomplete: false, links: [{ sessionId: 's', issueKey: 'ABC-1', issueId: 'other-id' }] };
-    } });
-    await ready(h); assert.doesNotMatch(h.text(), /Private ABC-1|Comment a/, mode); assert.match(h.text(), mode === 'wrong-target' ? /hidden/ : /unavailable/, mode);
+test('rejects malformed session discovery', async () => {
+  for (const mode of ['wrong-session', 'unselected-board', 'bad-incomplete', 'bad-key', 'bad-id', 'bad-revision']) {
+    const h = harness({ command(c) { if (c.op === 'links.session.read') return { revision: mode === 'bad-revision' ? -1 : 1, incomplete: mode === 'bad-incomplete' ? 'no' : false, links: [{ sessionId: mode === 'wrong-session' ? 'other' : 's', boardId: mode === 'unselected-board' ? '99' : '1', issueKey: mode === 'bad-key' ? 'bad' : 'ABC-1', issueId: mode === 'bad-id' ? '' : 'id-1' }] }; } });
+    await ready(h); assert.equal(h.editor, null, mode); assert.match(h.text(), /unavailable/, mode); assert.equal(h.calls.filter(c => c.op === 'issue.read').length, 0, mode);
   }
 });
-test('multiple linked issues require an explicit choice; results remain partial', async () => {
-  const h = harness({ incomplete: true, links: { '1': links['1'], '2': [{ sessionId: 's', issueKey: 'XYZ-3', issueId: 'id-3' }] } }); await ready(h);
-  assert.equal(h.nodes('select').length, 1); assert.doesNotMatch(h.text(), /Private ABC-1|Private XYZ-3/); assert.match(h.text(), /partial result/);
-  const select = h.nodes('select')[0]; const option = select.children.find(n => n?.type === 'option' && h.text(n).includes('XYZ-3')); h.select(option.props.value); await settle(); h.render(); assert.match(h.text(), /Private XYZ-3/); assert.equal(h.calls.find(c => c.op === 'issue.read').boardId, '2');
+test('rejects malformed exact-link replies and mismatched editor targets', async () => {
+  for (const mode of ['wrong-target', 'wrong-key', 'missing-session', 'duplicate', 'incomplete', 'bad-revision']) {
+    const h = harness({ command(c) { if (c.op !== 'links.issue.read') return; const link = { sessionId: mode === 'missing-session' ? 'other' : 's', issueKey: mode === 'wrong-key' ? 'ZZ-9' : 'ABC-1', issueId: mode === 'wrong-target' ? 'other-id' : 'id-1' }; return { revision: mode === 'bad-revision' ? 2 : 1, incomplete: mode === 'incomplete', links: mode === 'duplicate' ? [link, link] : [link] }; } });
+    await ready(h); const flow = await h.flow(h.editor); assert.deepEqual(flow.events, ['authorize:before'], mode); assert.equal(flow.value, null, mode); assert.equal(h.calls.filter(c => c.op === 'issue.read').length, 0, mode);
+  }
+  const h = harness(); await ready(h); const { authorization, target } = h.editor;
+  for (const patch of [{ workspaceId: 'other' }, { boardId: '2' }, { key: 'XYZ-3' }, { issueId: 'other' }]) assert.equal(await authorization.authorize({ ...target, ...patch }, () => true), false);
+  assert.equal(h.calls.filter(c => c.op === 'links.issue.read').length, 0);
 });
-test('visibility, session, workspace incarnation, and connection invalidate pending private reads', async () => {
-  for (const change of ['hidden', 'session', 'incarnation', 'connection']) {
-    const slow = defer(); let hit = false;
-    const h = harness({ command(c) { if (c.op === 'issue.read' && !hit) { hit = true; return slow.promise; } } });
-    h.render(); await settle(); h.render(); await settle(); assert.ok(hit, change);
+test('multiple linked issues require an explicit choice and selected target is current', async () => {
+  const h = harness({ incomplete: true, links: { '1': links['1'], '2': [{ sessionId: 's', issueKey: 'XYZ-3', issueId: 'id-3' }] } }); await ready(h);
+  assert.equal(h.nodes('select').length, 1); assert.equal(h.editor, null); assert.match(h.text(), /partial result/);
+  choose(h, 'XYZ-3'); assert.equal(h.editor.target.key, 'XYZ-3'); assert.equal(h.editor.target.boardId, '2'); const result = await h.flow(h.editor); assert.equal(result.value.key, 'XYZ-3'); assert.equal(h.calls.find(c => c.op === 'issue.read').boardId, '2');
+});
+test('visibility, abort, session, workspace incarnation, and connection invalidate pending editor flows', async () => {
+  for (const change of ['hidden', 'abort', 'session', 'incarnation', 'connection']) {
+    const slow = defer(); let hit = false; const controller = new AbortController();
+    const h = harness({ command(c) { if (c.op === 'issue.read') { hit = true; return slow.promise; } } }); h.setTab({ signal: controller.signal }); await ready(h); const old = h.editor; const pending = h.flow(old); await settle(); assert.ok(hit, change);
     if (change === 'hidden') h.setTab({ visible: false });
+    if (change === 'abort') controller.abort();
     if (change === 'session') { h.setSession('other'); h.mounted.set('other'); }
     if (change === 'incarnation') h.ws.set({ ...wsValue, items: [{ ...wsValue.items[0], createdAt: 'replacement' }] });
     if (change === 'connection') h.connection.set({ id: 2 });
-    h.render(); slow.resolve(issue('ABC-1', 'id-1')); await settle(); h.render(); assert.doesNotMatch(h.text(), /Private ABC-1|Comment a/, change); h.unmount();
+    h.render(); slow.resolve(issue('ABC-1', 'id-1')); const result = await pending; assert.deepEqual(result.events, ['authorize:before', 'issue.read', 'authorize:after'], change); assert.equal(result.value, null, change); assert.equal(old.authorization.valid(), false, change); h.unmount();
   }
 });
 test('ambiguous or unavailable membership never fetches private data', async () => {
   const h = harness(); h.ws.set({ ...wsValue, items: [...wsValue.items, { workspaceId: 'w2', createdAt: 'other', sessionIds: ['s'] }] }); h.render(); await settle(); assert.match(h.text(), /multiple workspaces/i); assert.equal(h.calls.length, 0);
   h.ws.set({ ...wsValue, archivedSessionIds: ['s'] }); h.render(); await settle(); assert.match(h.text(), /unavailable|archived/i); assert.equal(h.calls.length, 0);
 });
-test('cursor pages are sequential, duplicate cursor is partial, errors retain comments except authorization', async () => {
-  for (const mode of ['complete', 'duplicate', 'error', 'auth']) {
-    const h = harness({ command(c) {
-      if (c.op !== 'issue.comments') return;
-      if (!c.cursor) return { comments: [comment('first')], complete: false, nextCursor: '100' };
-      if (mode === 'error') return Promise.reject(Object.assign(Error('offline'), { status: 503 }));
-      if (mode === 'auth') return Promise.reject(Object.assign(Error('forbidden'), { status: 403 }));
-      return { comments: [comment('second')], complete: mode === 'complete', nextCursor: mode === 'complete' ? null : '100' };
-    } });
-    await ready(h); const pages = h.calls.filter(c => c.op === 'issue.comments'); assert.equal(pages.length, 2, mode); assert.equal(pages[1].cursor, '100');
-    if (mode === 'auth') { assert.doesNotMatch(h.text(), /Private ABC-1|Comment first/); assert.match(h.text(), /hidden/); }
-    else { assert.match(h.text(), /Comment first/); assert.match(h.text(), mode === 'complete' ? /Traversal complete/ : mode === 'error' ? /could not be loaded/ : /continuation cursor/); }
+test('mocked issue and comment flows authorize before and after each request', async () => {
+  const h = harness(); await ready(h); const editor = h.editor;
+  const detail = await h.flow(editor); const page = await h.flow(editor, 'issue.comments', { cursor: '100' });
+  assert.deepEqual(detail.events, ['authorize:before', 'issue.read', 'authorize:after']); assert.equal(detail.value.id, 'id-1');
+  assert.deepEqual(page.events, ['authorize:before', 'issue.comments', 'authorize:after']); assert.equal(page.value.comments[0].text, 'Comment a');
+  assert.equal(h.calls.filter(c => c.op === 'links.issue.read').length, 4);
+});
+test('link removal during detail or comment flow prevents publishing', async () => {
+  for (const op of ['issue.read', 'issue.comments']) {
+    let removed = false; const h = harness({ command(c) { if (c.op === 'links.issue.read' && removed) return { revision: 2, incomplete: false, links: [] }; if (c.op === op) { removed = true; return op === 'issue.read' ? issue('ABC-1', 'id-1') : { comments: [comment('secret')], complete: true, nextCursor: null }; } } });
+    await ready(h); const flow = await h.flow(h.editor, op); assert.deepEqual(flow.events, ['authorize:before', op, 'authorize:after']); assert.equal(flow.value, null); assert.equal(h.calls.filter(c => c.op === 'links.issue.read').length, 2);
   }
 });
-test('stale or mismatched immutable issue target is never rendered', async () => {
-  const h = harness({ command(c) { if (c.op === 'issue.read') return issue(c.issueKey, 'reused-id'); } }); await ready(h); assert.doesNotMatch(h.text(), /Private ABC-1/); assert.match(h.text(), /hidden/);
-});
-test('link removal during detail fetch hides the issue', async () => {
-  let reads = 0;
-  const h = harness({ command(c) { if (c.op === 'links.issue.read' && c.boardId === '1' && ++reads === 1) return { revision: 2, incomplete: false, links: [] }; } });
-  await ready(h); assert.equal(reads, 1); assert.doesNotMatch(h.text(), /Private ABC-1|Comment a/); assert.match(h.text(), /hidden/);
-});
-test('workspace ABA and settings revision changes invalidate old reads', async () => {
+test('workspace ABA and settings revision changes invalidate old flows', async () => {
   const slow = defer(); let hit = false, revision = 1;
   const h = harness({ settings: () => ({ ...settings, revision }), command(c) { if (c.op === 'issue.read' && !hit) { hit = true; return slow.promise; } } });
-  h.render(); await settle(); h.render(); await settle(); assert.ok(hit);
-  h.ws.set({ ...wsValue, items: [{ ...wsValue.items[0], createdAt: 'different' }] }); h.ws.set(wsValue); revision = 2;
-  slow.resolve(issue('ABC-1', 'id-1')); await settle(); h.render(); assert.doesNotMatch(h.text(), /Private ABC-1|Comment a/);
-  await settle(); h.render(); await settle(); h.render(); assert.match(h.text(), /Private ABC-1/);
+  await ready(h); const old = h.editor, pending = h.flow(old); await settle(); assert.ok(hit);
+  h.ws.set({ ...wsValue, items: [{ ...wsValue.items[0], createdAt: 'different' }] }); h.ws.set(wsValue); revision = 2; h.render();
+  slow.resolve(issue('ABC-1', 'id-1')); assert.equal((await pending).value, null); assert.equal(old.authorization.valid(), false);
+  await ready(h); assert.ok(h.editor); assert.equal(h.editor.target.settings.revision, 2); assert.ok((await h.flow(h.editor)).value);
 });
-test('board and comment traversal have bounded work', async () => {
-  const many = Array.from({ length: 20 }, (_, n) => String(n + 1));
-  const h = harness({ settings: () => ({ ...settings, workspaces: { w: many } }), command(c) { if (c.op === 'issue.comments') return { comments: [comment(c.cursor || '0')], complete: false, nextCursor: String(Number(c.cursor || 0) + 1) }; } });
-  await ready(h); assert.equal(h.calls.filter(c => c.op === 'links.session.read').length, 1); assert.equal(h.calls.filter(c => c.op === 'issue.comments').length, 10); assert.match(h.text(), /More comments/);
+test('discovery reads once for many selected boards', async () => {
+  const many = Array.from({ length: 20 }, (_, n) => String(n + 1)); const h = harness({ settings: () => ({ ...settings, workspaces: { w: many } }) }); await ready(h);
+  assert.equal(h.calls.filter(c => c.op === 'links.session.read').length, 1); assert.ok(h.editor); assert.equal(h.calls.filter(c => c.op === 'issue.comments').length, 0);
 });
-const clickButton = (h, label) => { const button = h.nodes('button').find(node => h.text(node) === label); assert.ok(button, label); button.props.onClick(); };
-test('load more traverses ten pages per explicit batch, retains prior pages, and completes', async () => {
-  const h = harness({ command(c) { if (c.op === 'issue.comments') { const n = Number(c.cursor || 0); return { comments: [comment('page-' + n)], complete: n === 22, nextCursor: n === 22 ? null : String(n + 1) }; } } });
-  await ready(h); assert.equal(h.calls.filter(c => c.op === 'issue.comments').length, 10); assert.match(h.text(), /Comment page-0/); assert.doesNotMatch(h.text(), /Comment page-10/);
-  clickButton(h, 'Load more'); h.render(); await settle(); h.render(); assert.equal(h.calls.filter(c => c.op === 'issue.comments').length, 20); assert.match(h.text(), /Comment page-0/); assert.match(h.text(), /Comment page-19/);
-  clickButton(h, 'Load more'); h.render(); await settle(); h.render(); assert.equal(h.calls.filter(c => c.op === 'issue.comments').length, 23); assert.match(h.text(), /Comment page-22/); assert.match(h.text(), /Traversal complete/); assert.equal(h.nodes('button').filter(n => h.text(n) === 'Load more').length, 0);
-});
-test('load more revalidates link and scope before displaying new content', async () => {
-  for (const scenario of ['removed', 'session', 'hidden']) {
-    const slow = defer(); let paging = false, unlinked = false;
-    const h = harness({ command(c) {
-      if (c.op === 'links.issue.read' && c.boardId === '1' && unlinked) return { revision: 2, incomplete: false, links: [] };
-      if (c.op === 'issue.comments') { const n = Number(c.cursor || 0); if (n === 10 && scenario !== 'removed') { paging = true; return slow.promise; } return { comments: [comment('page-' + n)], complete: false, nextCursor: String(n + 1) }; }
-    } });
-    await ready(h); if (scenario === 'removed') unlinked = true; clickButton(h, 'Load more'); h.render(); await settle();
-    if (scenario === 'removed') { h.render(); assert.doesNotMatch(h.text(), /Private ABC-1|Comment page-0/); assert.match(h.text(), /hidden/); assert.equal(h.calls.filter(c => c.op === 'issue.comments').length, 10); }
-    else { assert.ok(paging); if (scenario === 'session') { h.setSession('other'); h.mounted.set('other'); } else h.setTab({ visible: false }); h.render(); slow.resolve({ comments: [comment('secret')], complete: true, nextCursor: null }); await settle(); h.render(); assert.doesNotMatch(h.text(), /Private ABC-1|Comment secret|Comment page-0/); }
-    h.unmount();
+test('settings changes and invalid settings fail authorization closed', async () => {
+  for (const mode of ['revision', 'unconfigured', 'reselect', 'selection', 'invalid']) {
+    let current = settings; const h = harness({ settings: () => current }); await ready(h); const old = h.editor;
+    current = mode === 'revision' ? { ...settings, revision: 2 } : mode === 'unconfigured' ? { ...settings, configured: false } : mode === 'reselect' ? { ...settings, needsReselect: ['w'] } : mode === 'selection' ? { ...settings, workspaces: { w: ['2'] } } : { ...settings, revision: 'bad' };
+    const flow = await h.flow(old); assert.deepEqual(flow.events, ['authorize:before'], mode); assert.equal(flow.value, null, mode); assert.equal(h.calls.filter(c => c.op === 'issue.read').length, 0, mode);
   }
 });
-test('continuation retries known cursors, terminates without cursor, and fails closed on auth', async () => {
-  for (const scenario of ['retry', 'terminal', 'auth']) {
-    let attempts = 0;
-    const h = harness({ command(c) { if (c.op !== 'issue.comments') return; const n = Number(c.cursor || 0); if (n === 10 && ++attempts === 1) { if (scenario === 'terminal') return { comments: [comment('terminal')], complete: false, nextCursor: null }; return Promise.reject(Object.assign(Error('failed'), { status: scenario === 'auth' ? 403 : 503 })); } return { comments: [comment('page-' + n)], complete: n === 10, nextCursor: n === 10 ? null : String(n + 1) }; } });
-    await ready(h); clickButton(h, 'Load more'); h.render(); await settle(); h.render();
-    if (scenario === 'auth') { assert.doesNotMatch(h.text(), /Private ABC-1|Comment page-0/); assert.match(h.text(), /hidden/); }
-    if (scenario === 'terminal') { assert.match(h.text(), /continuation cursor/); assert.equal(h.nodes('button').filter(n => /Load more|Retry/.test(h.text(n))).length, 0); }
-    if (scenario === 'retry') { assert.match(h.text(), /could not be loaded/); assert.match(h.text(), /Comment page-0/); clickButton(h, 'Retry'); h.render(); await settle(); h.render(); assert.match(h.text(), /Comment page-10/); assert.match(h.text(), /Traversal complete/); }
-  }
+test('settings revision ABA during a mocked request rejects old content', async () => {
+  let current = settings; const slow = defer(); let hit = false;
+  const h = harness({ settings: () => current, command(c) { if (c.op === 'issue.read') { hit = true; return slow.promise; } } });
+  await ready(h); const pending = h.flow(h.editor); await settle(); assert.ok(hit);
+  // A settings change and restoration still advances the monotonic revision.
+  current = { ...settings, revision: 3 }; slow.resolve(issue('ABC-1', 'id-1'));
+  const result = await pending; assert.deepEqual(result.events, ['authorize:before', 'issue.read', 'authorize:after']); assert.equal(result.value, null);
+});
+test('settings changed during discovery are rejected', async () => {
+  let reads = 0; const h = harness({ settings: () => ({ ...settings, revision: ++reads === 1 ? 1 : 2 }) }); await ready(h);
+  assert.equal(h.editor, null); assert.match(h.text(), /unavailable/); assert.equal(h.calls.filter(c => c.op === 'issue.read').length, 0);
 });
 test('unrelated catalog and workspace changes do not refetch', async () => {
-  const h = harness(); await ready(h); const before = h.calls.length;
+  const h = harness(); await ready(h); const before = h.calls.length, old = h.editor;
   h.sessions.set({ phase: 'ready', ids: ['s', 'other'], byId: { other: { title: 'changed' } } }); h.ws.set({ ...wsValue, items: [{ ...wsValue.items[0], title: 'changed', sessionIds: ['s', 'other', 'new'] }] }); h.render(); await settle(); h.render();
-  assert.equal(h.calls.length, before); assert.match(h.text(), /Private ABC-1/);
+  assert.equal(h.calls.length, before); assert.equal(old.authorization.valid(), true); assert.equal(h.editor.target.key, 'ABC-1');
 });
-test('link unlink-relink ABA during initial or later batch fails closed', async () => {
-  for (const when of ['initial', 'continuation']) {
-    let revision = 1;
-    const h = harness({ command(c) {
-      if (c.op === 'links.issue.read' && c.boardId === '1') return { revision, incomplete: false, links: links['1'].filter(link => link.issueId === c.issueId) };
-      if (c.op === 'issue.comments') { const n = Number(c.cursor || 0); if ((when === 'initial' && n === 0) || (when === 'continuation' && n === 10)) revision = 3; return { comments: [comment('page-' + n)], complete: false, nextCursor: String(n + 1) }; }
-    } });
-    await ready(h); if (when === 'continuation') { assert.match(h.text(), /Private ABC-1/); clickButton(h, 'Load more'); h.render(); await settle(); h.render(); }
-    assert.doesNotMatch(h.text(), /Private ABC-1|Comment page-0/); assert.match(h.text(), /hidden/);
+test('link unlink-relink ABA during initial or later mocked request fails closed', async () => {
+  for (const op of ['issue.read', 'issue.comments']) {
+    let revision = 1; const h = harness({ command(c) { if (c.op === 'links.issue.read') return { revision, incomplete: false, links: [{ sessionId: 's', issueKey: 'ABC-1', issueId: 'id-1' }] }; if (c.op === op) { revision = 3; return op === 'issue.read' ? issue('ABC-1', 'id-1') : { comments: [comment('secret')], complete: true, nextCursor: null }; } } });
+    await ready(h); const flow = await h.flow(h.editor, op); assert.deepEqual(flow.events, ['authorize:before', op, 'authorize:after']); assert.equal(flow.value, null);
   }
+});
+test('authorization is revoked if scope changes while an exact-link read is pending', async () => {
+  const slow = defer(); let hit = false;
+  const h = harness({ command(c) { if (c.op === 'links.issue.read') { hit = true; return slow.promise; } } });
+  await ready(h); const stale = h.editor, pending = h.flow(stale); await settle(); assert.ok(hit);
+  h.setTab({ visible: false }); h.render(); slow.resolve({ revision: 1, incomplete: false, links: [{ sessionId: 's', issueKey: 'ABC-1', issueId: 'id-1' }] });
+  const result = await pending; assert.deepEqual(result.events, ['authorize:before']); assert.equal(result.value, null); assert.equal(h.calls.filter(c => c.op === 'issue.read').length, 0);
 });
 test('local unlink is revalidated even when Tracker is unconfigured or fails', async () => {
   for (const mode of ['unconfigured', 'failure']) {
     const local = count => ({ boards: [{ id: 'b', workspaceId: 'w', name: 'Board', tasks: [{ id: 't', title: 'Stale local' }] }], links: count === 1 ? [{ boardId: 'b', taskId: 't', sessionId: 's' }] : [] });
     const h = harness({ local, settings: () => { if (mode === 'failure') throw Error('offline'); return { ...settings, configured: false }; } });
-    await ready(h); assert.doesNotMatch(h.text(), /Stale local/); assert.equal(h.calls.filter(c => c.op === 'local.read').length, 2);
+    await ready(h); assert.doesNotMatch(h.text(), /Stale local/); assert.equal(h.calls.filter(c => c.op === 'local.read').length, 2); assert.equal(h.editor, null);
   }
 });
-test('old load-more action cannot run after issue selection before render', async () => {
-  const h = harness({ links: { '1': links['1'], '2': [{ sessionId: 's', issueKey: 'XYZ-3', issueId: 'id-3' }] }, command(c) { if (c.op === 'issue.comments') return { comments: [comment(c.cursor || '0')], complete: false, nextCursor: String(Number(c.cursor || 0) + 1) }; } });
-  await ready(h); const options = h.nodes('select')[0].children; h.select(options.find(n => n?.type === 'option' && h.text(n).includes('ABC-1')).props.value); await settle(); h.render();
-  const stale = h.nodes('button').find(n => h.text(n) === 'Load more'), select = h.nodes('select')[0], second = select.children.find(n => n?.type === 'option' && h.text(n).includes('XYZ-3')); const before = h.calls.length;
-  select.props.onChange({ target: { value: second.props.value } }); stale.props.onClick(); await settle(); assert.equal(h.calls.length, before);
+test('selection ABA invalidates old authorization immediately before rerender', async () => {
+  const h = harness({ links: { '1': links['1'], '2': [{ sessionId: 's', issueKey: 'XYZ-3', issueId: 'id-3' }] } }); await ready(h); choose(h, 'ABC-1'); const stale = h.editor;
+  const select = h.nodes('select')[0], first = select.children.find(n => n?.type === 'option' && h.text(n).includes('ABC-1')), second = select.children.find(n => n?.type === 'option' && h.text(n).includes('XYZ-3')); const before = h.calls.length;
+  select.props.onChange({ target: { value: second.props.value } }); select.props.onChange({ target: { value: first.props.value } }); assert.equal(stale.authorization.valid(), false); assert.equal((await h.flow(stale)).value, null); assert.equal(h.calls.length, before);
+  h.render(); assert.equal(h.editor.target.key, 'ABC-1'); assert.ok((await h.flow(h.editor)).value);
 });
 test('bounded retry handles read throttling and cancels after scope change', async () => {
   for (const revoked of [false, true]) {
@@ -202,8 +213,8 @@ test('bounded retry handles read throttling and cancels after scope change', asy
       const h = harness({ command(c) { if (c.op === 'links.session.read' && ++attempts === 1) return Promise.reject(Object.assign(Error('throttled'), { code: 'client_rate_limited' })); } });
       h.render(); await settle(); assert.equal(timers.length, 1); if (revoked) { h.mounted.set('other'); h.render(); }
       timers.shift()(); await settle(); h.render(); await settle(); h.render();
-      if (revoked) { assert.equal(attempts, 1); assert.doesNotMatch(h.text(), /Private ABC-1/); }
-      else { assert.equal(attempts, 2); assert.match(h.text(), /Private ABC-1/); }
+      if (revoked) { assert.equal(attempts, 1); assert.equal(h.editor, null); }
+      else { assert.equal(attempts, 2); assert.ok(h.editor); }
       h.unmount();
     } finally { globalThis.setTimeout = originalTimeout; }
   }

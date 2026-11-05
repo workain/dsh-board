@@ -50,7 +50,7 @@ function harness(sessionFixture, initialCommands = []) {
     if (path === 'api/dsh-board.tracker' && options.method === 'GET' && !sessionFixture?.manualTracker) return Promise.resolve(response({ revision: 0, configured: false, orgType: null, workspaces: {}, needsReselect: [] }));
     const d = deferred(); requests.push({ path, options, ...d }); return d.promise;
   };
-  vm.runInNewContext(client, { window, document, fetch, TextEncoder, URL }, { filename: 'client.js' });
+  vm.runInNewContext(client, { window, document, fetch, TextEncoder, URL, AbortController }, { filename: 'client.js' });
   const plugin = registration.factory(name => { assert.equal(name, 'react'); return React; });
   const ws = source({ phase: sessionFixture?.wsPhase || 'ready', state: sessionFixture?.wsState || 'ready', items: (sessionFixture?.workspaces || [{ workspaceId: 'w', title: 'Workspace', sessionIds: sessionFixture?.ids || [] }]).map(item => ({ createdAt: '2026-01-01T00:00:00Z', ...item })), archivedSessionIds: sessionFixture?.archived || [] });
   const sessions = source({ phase: sessionFixture?.sessionsPhase || 'ready', ids: sessionFixture?.ids || [], byId: sessionFixture?.byId || {} });
@@ -378,7 +378,7 @@ const commentRows = h => h.nodes('li').filter(n => n.props.className === 'dsh-bo
 const commentSummary = h => h.text(h.nodes('div').find(n => n.props.className === 'dsh-board-comment-summary'));
 const commentRequest = (h, index, cursor) => assert.deepEqual(JSON.parse(h.requests[index].options.body), { op: 'issue.comments', workspaceId: 'w', boardId: '1', issueKey: 'A-1', issueId: 'issue-1', ...(cursor === undefined ? {} : { cursor }) });
 
-const drawerSessionButton = h => h.nodes('button').find(n => n.props.className === 'dsh-board-tracker-session-link');
+const drawerSessionButton = h => h.nodes('a').find(n => n.props.className === 'dsh-board-tracker-session-link');
 
 test('Tracker comments automatically traverse two pages and show completion', async () => {
   const h = await trackerIssueReady({ editing: false, comments: commentPage(1) });
@@ -504,15 +504,16 @@ test('Tracker page authorization failure hides previously loaded comments and fe
   }
 });
 
-test('Tracker drawer session opens directly and modified without board links', async () => {
-  const h = await trackerIssueReady({ editing: false });
-  const button = drawerSessionButton(h); assert.ok(button); assert.equal(button.props.type, 'button'); assert.equal(button.props.href, undefined);
-  assert.equal(h.text(button), 'Session (session-1)');
-  button.props.onClick({}); button.props.onClick({ ctrlKey: true }); button.props.onClick({ metaKey: true });
-  let prevented = 0; button.props.onAuxClick({ button: 1, preventDefault() { prevented++; } });
-  assert.equal(prevented, 1); assert.deepEqual(h.openedSessions, ['session-1']);
-  assert.equal(h.openedTabs.length, 3);
-  for (const [url, target, features] of h.openedTabs) assert.deepEqual([url, target, features], ['http://localhost/app/#dsh-board-session-v1:w:session-1', '_blank', 'noopener,noreferrer']);
+test('Tracker drawer session anchor uses native modified navigation and scoped normal open', async () => {
+  const h = await trackerIssueReady({ editing: false, fixture: { url: 'http://localhost/app/?secret=yes#old', baseURI: 'http://localhost/app/?secret=yes#old' } });
+  const anchor = drawerSessionButton(h); assert.ok(anchor);
+  assert.equal(anchor.props.href, 'http://localhost/app/#dsh-board-session-v1:w:session-1');
+  assert.equal(h.text(anchor), 'Session');
+  let prevented = 0; const event = extra => ({ button: 0, preventDefault() { prevented++; }, ...extra });
+  anchor.props.onClick(event({})); assert.equal(prevented, 1); assert.deepEqual(h.openedSessions, ['session-1']);
+  anchor.props.onClick(event({ ctrlKey: true })); anchor.props.onClick(event({ metaKey: true }));
+  anchor.props.onClick(event({ shiftKey: true })); anchor.props.onAuxClick(event({ button: 1 }));
+  assert.equal(prevented, 1); assert.deepEqual(h.openedTabs, []);
   assert.equal(h.requests.length, 9, 'drawer links work without a board-links read or mutation'); h.unmount();
 });
 
@@ -522,8 +523,8 @@ test('Tracker drawer marks unavailable links and hides foreign or mismatched rel
   ] };
   const h = await trackerIssueReady({ editing: false, links, fixture: { ids: ['session-1', 'archived', 'foreign', 'wrong-key', 'wrong-id'], archived: ['archived'], workspaces: [{ workspaceId: 'w', title: 'Workspace', sessionIds: ['session-1', 'archived', 'missing', 'wrong-key', 'wrong-id'] }, { workspaceId: 'w2', title: 'Other', sessionIds: ['foreign'] }] } });
   let rows = h.nodes('li').filter(n => n.props.className === 'dsh-board-tracker-session');
-  assert.deepEqual(rows.map(n => h.text(n)), ['Session (session-1)issueUnlinkSession', 'archived — sessionArchivedissueUnlinkSession', 'missing — sessionUnavailableissueUnlinkSession']);
-  assert.equal(h.nodes('button').filter(n => n.props.className === 'dsh-board-tracker-session-link').length, 1);
+  assert.deepEqual(rows.map(n => h.text(n)), ['SessionissueUnlinkSession', 'untitled — sessionArchivedissueUnlinkSession', 'untitled — sessionUnavailableissueUnlinkSession']);
+  assert.equal(h.nodes('a').filter(n => n.props.className === 'dsh-board-tracker-session-link').length, 1);
   h.sessions.set({ ...h.sessions.getSnapshot(), phase: 'pending' });
   rows = h.nodes('li').filter(n => n.props.className === 'dsh-board-tracker-session');
   assert.ok(rows.every(n => h.text(n).includes(' — sessionLoading'))); assert.equal(drawerSessionButton(h), undefined);
@@ -559,8 +560,9 @@ test('Tracker drawer stale handler rechecks membership, catalogs, scope and gene
     if (scenario === 'token') { h.click('close'); h.nodes('button').find(n => n.props['aria-label'] === 'issueDetails: <script>unsafe</script>').props.onClick(); }
     if (scenario === 'privacy') { h.document.visibilityState = 'hidden'; h.documentEvents.get('visibilitychange')(); }
     if (scenario === 'tracker-generation') h.click('trackerRefreshBoard');
-    button.props.onClick({}); button.props.onClick({ ctrlKey: true }); let prevented = 0; button.props.onAuxClick({ button: 1, preventDefault() { prevented++; } });
-    assert.equal(prevented, 1, scenario); assert.deepEqual(h.openedSessions, [], scenario); assert.deepEqual(h.openedTabs, [], scenario); h.unmount();
+    let prevented = 0; const event = extra => ({ button: 0, preventDefault() { prevented++; }, ...extra });
+    button.props.onClick(event({})); button.props.onClick(event({ ctrlKey: true })); button.props.onAuxClick(event({ button: 1 }));
+    assert.equal(prevented, 3, scenario); assert.deepEqual(h.openedSessions, [], scenario); assert.deepEqual(h.openedTabs, [], scenario); h.unmount();
   }
 });
 
@@ -960,10 +962,12 @@ test('Tracker reselect retains unknown guard for in-flight issue mutation', asyn
   assert.equal(h.nodes('aside').length, 0);
   h.click('trackerConnect'); await h.resolve(12, trackerSettings(2, true, { w: ['1'] }, ['w']));
   h.click('trackerList'); await h.resolve(13, { boards: [{ id: '1', name: 'New board' }], complete: true });
+  h.click('trackerSelect');
+  assert.equal(h.requests.length, 14, 'settings selection cannot overlap an in-flight issue write');
+  await h.resolve(9, { id: 'created' });
   h.click('trackerSelect'); await h.resolve(14, { revision: 3, workspaceId: 'w', boardIds: ['1'] });
   await h.resolve(15, trackerSettings(3, true, { w: ['1'] }));
   h.click('trackerClose'); h.click('trackerRefreshBoard'); await h.resolve(16, trackerSettings(3, true, { w: ['1'] })); await h.resolve(17, trackerBoard);
-  await h.resolve(9, { id: 'created' });
   h.nodes('button').find(n => n.props['aria-label'] === 'issueDetails: <script>unsafe</script>').props.onClick();
   await h.resolve(18, issueFixture); await h.resolve(19, issueComments); await h.resolve(20, issueTransitions); await h.resolve(21, issueLinks); await h.resolve(22, issueFixture);
   assert.ok(h.nodes('p').some(n => h.text(n) === 'issueUnknown'));
@@ -975,10 +979,40 @@ test('Tracker reselect retains unknown guard for in-flight issue mutation', asyn
 test('Tracker session unlink confirms and uses immutable ID and exact link revision', async () => {
   const h = await trackerIssueReady();
   assert.equal(h.nodes('select').some(n => n.children.some(c => c?.props?.value === 'session-1')), false);
-  h.window.confirmResult = false; h.click('issueUnlinkSession: Session (session-1)'); assert.equal(h.requests.length, 9);
-  h.window.confirmResult = true; h.click('issueUnlinkSession: Session (session-1)');
+  h.window.confirmResult = false; h.click('issueUnlinkSession: Session'); assert.equal(h.requests.length, 9);
+  h.window.confirmResult = true; h.click('issueUnlinkSession: Session');
   assert.deepEqual(JSON.parse(h.requests[9].options.body), { op: 'links.set', workspaceId: 'w', boardId: '1', issueKey: 'A-1', issueId: 'issue-1', sessionId: 'session-1', linked: false, expectedRevision: 1 });
-  assert.equal(h.button('issueUnlinkSession: Session (session-1)').props.disabled, true); h.unmount();
+  assert.equal(h.button('issueUnlinkSession: Session').props.disabled, true); h.unmount();
+});
+
+test('Tracker archived member unlink works independently of closed status and rechecks confirmation', async () => {
+  const issue = { ...issueFixture, status: { id: 'closed', key: 'closed', display: 'Closed' } };
+  for (const stale of [false, true]) {
+    const h = await trackerIssueReady({ editing: false, issue, fixture: { archived: ['session-1'] } });
+    const row = h.nodes('li').find(n => n.props.className === 'dsh-board-tracker-session');
+    assert.equal(h.text(row), 'Session — sessionArchivedissueUnlinkSession');
+    assert.equal(drawerSessionButton(h), undefined);
+    assert.equal(h.button('edit').props.disabled, false);
+    const unlink = h.button('issueUnlinkSession: Session'); assert.equal(unlink.props.disabled, false);
+    if (stale) h.window.confirm = () => { h.ws.set({ ...h.ws.getSnapshot(), items: [{ ...h.ws.getSnapshot().items[0], sessionIds: [] }] }); return true; };
+    unlink.props.onClick();
+    if (stale) assert.equal(h.requests.length, 9);
+    else assert.deepEqual(JSON.parse(h.requests[9].options.body), { op: 'links.set', workspaceId: 'w', boardId: '1', issueKey: 'A-1', issueId: 'issue-1', sessionId: 'session-1', linked: false, expectedRevision: 1 });
+    h.unmount();
+  }
+});
+
+test('Tracker session heading, picker and comment selector never display opaque IDs', async () => {
+  const fixture = { ids: ['session-1', 'opaque-id'], byId: { 'session-1': { title: 'Session (session-1)' }, 'opaque-id': { title: '  opaque-id  ' } } };
+  const links = { revision: 1, incomplete: false, links: [issueLinks.links[0], { ...issueLinks.links[0], sessionId: 'opaque-id' }] };
+  const h = await trackerIssueReady({ editing: false, fixture, links });
+  const heading = h.nodes('div').find(n => n.props.className === 'dsh-board-tracker-session-heading');
+  assert.equal(h.text(heading), 'sessions+'); assert.equal(heading.children[1].props['aria-label'], 'issueAddSession');
+  assert.match(client, /\.dsh-board-tracker-session-heading\{display:flex;align-items:center;justify-content:space-between/);
+  assert.ok(!h.text(h.nodes('aside')[0]).includes('opaque-id'));
+  assert.ok(h.text(h.nodes('aside')[0]).includes('untitled'));
+  h.click('issueAddSession'); assert.ok(!h.text(h.nodes('aside')[0]).includes('session-1'));
+  h.unmount();
 });
 
 test('Tracker session picker opens only for empty exact links or plus, and cancel guards drafts', async () => {
@@ -998,14 +1032,13 @@ test('Tracker session picker opens only for empty exact links or plus, and cance
 });
 
 test('Tracker unlink handlers fence stale scope and membership, including confirmation races', async () => {
-  for (const scenario of ['membership', 'archive', 'session', 'panel', 'confirm-race']) {
+  for (const scenario of ['membership', 'session', 'panel', 'confirm-race']) {
     const h = await trackerIssueReady({ editing: false });
-    const button = h.button('issueUnlinkSession: Session (session-1)');
+    const button = h.button('issueUnlinkSession: Session');
     if (scenario === 'membership') h.ws.set({ ...h.ws.getSnapshot(), items: [{ ...h.ws.getSnapshot().items[0], sessionIds: [] }] });
-    if (scenario === 'archive') h.ws.set({ ...h.ws.getSnapshot(), archivedSessionIds: ['session-1'] });
     if (scenario === 'session') h.sessions.set({ ...h.sessions.getSnapshot(), ids: [] });
     if (scenario === 'panel') h.panelInfo.set({ activePanelId: null });
-    if (scenario === 'confirm-race') h.window.confirm = () => { h.ws.set({ ...h.ws.getSnapshot(), archivedSessionIds: ['session-1'] }); return true; };
+    if (scenario === 'confirm-race') h.window.confirm = () => { h.ws.set({ ...h.ws.getSnapshot(), items: [{ ...h.ws.getSnapshot().items[0], sessionIds: [] }] }); return true; };
     button.props.onClick(); assert.equal(h.requests.length, 9, scenario); h.unmount();
   }
 });
@@ -1586,6 +1619,20 @@ test('session send separately queues two targets and fences duplicate across dra
   h.change(h.nodes('textarea').find(n => n.props.value === ''), 'shared message');
   assert.ok(h.nodes('input').filter(n => n.props.type === 'checkbox').every(n => n.props.disabled)); assert.equal(service.calls.length, 2); h.unmount();
 });
+test('session send timeout releases lock and fences late validation', async () => {
+  const { h, service } = await sendReady();
+  selectSend(h); h.click('sessionSendAction'); await settle();
+  const pending = h.requests.length - 1;
+  assert.equal(JSON.parse(h.requests[pending].options.body).op, 'links.issue.read');
+  assert.ok(h.timeouts.size >= 1);
+  [...h.timeouts].at(-1)(); await settle();
+  assert.equal(service.calls.length, 0);
+  assert.match(h.text(h.nodes('aside')[0]), /sessionSendUnknown/);
+  await h.resolve(pending, sendLinks); await settle();
+  assert.equal(service.calls.length, 0, 'late authorization cannot dispatch after timeout');
+  h.unmount();
+});
+
 test('session send stops on uncertainty and requires explicit acknowledgement', async () => {
   const { h, service } = await sendReady(id => id === 'session-1' ? { ok: false, error: { code: 'network' } } : { ok: true, value: { accepted: true } });
   selectSend(h); h.click('sessionSendAction'); await sendValidation(h); await sendValidation(h);

@@ -161,11 +161,18 @@ window.__ModuleLoader__.load({
     function discardTrackerIssue(workspaceId) {
       const issue = memory.issue;
       if (!issue || (workspaceId && issue.workspaceId !== workspaceId)) return;
-      if ((issue.pending && !issue.preflight && !issue.sendOwner) || issue.unknown) unknownIssues.add(issueUnknownKey(issue));
+      if ((issue.pending && !issue.preflight && !issue.sendOwner && !issue.confirmedWrite) || issue.unknown) unknownIssues.add(issueUnknownKey(issue));
       updateMemory({ issue: null });
     }
     function discardReselectedIssue(settings) {
       if (memory.issue && (settings.needsReselect.includes(memory.issue.workspaceId) || settings.revision !== memory.issue.settingsRevision)) discardTrackerIssue(memory.issue.workspaceId);
+      for (const [key, holder] of sessionIssueStores) {
+        const issue = holder.memory.issue;
+        if (!issue || (settings.revision === issue.settingsRevision && settings.configured && !settings.needsReselect.includes(issue.workspaceId) && settings.workspaces[issue.workspaceId]?.includes(issue.boardId))) continue;
+        if ((issue.pending && !issue.preflight && !issue.sendOwner && !issue.confirmedWrite) || issue.unknown) unknownIssues.add(issueUnknownKey(issue));
+        holder.epoch++; sessionIssueStores.delete(key);
+      }
+      updateUnload();
     }
     function invalidateTracker(preserveOpen = true, preserveDraft = false) {
       privacyEpoch++;
@@ -180,13 +187,36 @@ window.__ModuleLoader__.load({
     }
     // Register only while needed: browsers may otherwise disable back/forward cache.
     let unloadArmed = false;
+    const sessionIssues = new Set();
+    // Session drawers have independent stores. Keep draft state across a temporary
+    // unmount, but never treat cached private data as authorization to display it.
+    const sessionIssueStores = new Map();
+    let sessionStoreSources = null;
+    function sessionStoreScopeValid(holder) {
+      const target = holder.target, sources = sessionStoreSources;
+      if (!target || !sources || sources.connection.getSnapshot()?.id !== target.connectionId) return false;
+      const ws = sources.workspaces.getSnapshot(), sessions = sources.sessions.getSnapshot();
+      if (ws?.phase !== 'ready' || ws.state === 'error' || !Array.isArray(ws.items) || !Array.isArray(ws.archivedSessionIds) || ws.archivedSessionIds.includes(target.sessionId) || sessions?.phase !== 'ready' || !Array.isArray(sessions.ids) || !sessions.ids.includes(target.sessionId)) return false;
+      const owners = ws.items.filter(item => Array.isArray(item?.sessionIds) && item.sessionIds.includes(target.sessionId));
+      return owners.length === 1 && owners[0].workspaceId === target.workspaceId && owners[0].createdAt === target.incarnation && !(owners[0].archivedSessionIds || []).includes(target.sessionId);
+    }
+    function purgeInvalidSessionStores() {
+      for (const [key, holder] of sessionIssueStores) {
+        if (sessionStoreScopeValid(holder)) continue;
+        const issue = holder.memory.issue;
+        if (issue && ((issue.pending && !issue.preflight && !issue.sendOwner && !issue.confirmedWrite) || issue.unknown)) unknownIssues.add(issueUnknownKey(issue));
+        holder.epoch++; sessionIssueStores.delete(key);
+      }
+      updateUnload();
+    }
     function beforeUnload(event) { event.preventDefault(); event.returnValue = ''; }
-    memory.listeners.add(() => {
-      const needed = memory.dirty || memory.pending || memory.uncertain || Boolean(memory.issue && (memory.issue.dirty || memory.issue.pending || memory.issue.unknown)) || [...sessionSendLedger.values()].some(status => status === 'inflight' || status === 'unknown');
+    function updateUnload() {
+      const needed = memory.dirty || memory.pending || memory.uncertain || Boolean(memory.issue && (memory.issue.dirty || memory.issue.pending || memory.issue.unknown)) || [...sessionIssueStores.values()].some(holder => { const issue = holder.memory.issue; return issue && (issue.dirty || issue.pending || issue.unknown); }) || [...sessionSendLedger.values()].some(status => status === 'inflight' || status === 'unknown');
       if (needed && !unloadArmed) window.addEventListener('beforeunload', beforeUnload);
       if (!needed && unloadArmed) window.removeEventListener('beforeunload', beforeUnload);
       unloadArmed = needed;
-    });
+    }
+    memory.listeners.add(updateUnload);
     function useSource(source) {
       return useSyncExternalStore((fn) => source.subscribe(fn), () => source.getSnapshot(), () => source.getSnapshot());
     }
@@ -229,14 +259,18 @@ window.__ModuleLoader__.load({
     // This fragment is a one-shot, same-origin handoff, not an application route.
     const sessionFragment = '#dsh-board-session-v1:';
     const validHandoffId = (id) => typeof id === 'string' && id.length > 0 && id.length <= 256 && !/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/u.test(id);
-    function newTabSession(workspaceId, sessionId) {
-      if (!validHandoffId(workspaceId) || !validHandoffId(sessionId)) return;
+    function sessionHandoffUrl(workspaceId, sessionId) {
+      if (!validHandoffId(workspaceId) || !validHandoffId(sessionId)) return null;
       try {
         const url = new URL(document.baseURI);
-        if (!['http:', 'https:'].includes(url.protocol) || url.origin !== window.location.origin || url.username || url.password) return;
+        if (!['http:', 'https:'].includes(url.protocol) || url.origin !== window.location.origin || url.username || url.password) return null;
         url.search = ''; url.hash = sessionFragment + encodeURIComponent(workspaceId) + ':' + encodeURIComponent(sessionId);
-        window.open(url.href, '_blank', 'noopener,noreferrer');
-      } catch { /* Invalid base URLs and blocked windows fail closed. */ }
+        return url.href;
+      } catch { return null; }
+    }
+    function newTabSession(workspaceId, sessionId) {
+      const href = sessionHandoffUrl(workspaceId, sessionId);
+      if (href) window.open(href, '_blank', 'noopener,noreferrer');
     }
     function modifiedSessionClick(event) { return Boolean(event && (event.button === 1 || event.ctrlKey || event.metaKey)); }
     function consumeSessionFragment(ctx) {
@@ -629,9 +663,9 @@ function groupTrackerStatuses({ columns, issues }) {
 
     return { groupTrackerStatuses };
   })(),
-  // session-card.mjs sha256:82f72008106de614610c41df42903d0795e01252eaf6075e5cc3af2b5a33e2d3
+  // session-card.mjs sha256:12df96c599fda6ce3b8756e8aaa2c3967a624b19401eed770f1927df5c03461d
   ...(() => {
-// A session-scoped, read-only view. Nothing in this module mutates Tracker or a board.
+// Session-scoped discovery and authorization for the shared Tracker editor.
 function createSessionCard(React, deps) {
   const h = React.createElement;
   const { useEffect, useRef, useState, useSyncExternalStore } = React;
@@ -676,9 +710,10 @@ function createSessionCard(React, deps) {
   function Body({ sessionId, useTabInfo }) {
     const { tab } = useTabInfo();
     const workspaces = useSource(wsSource), catalog = useSource(sessionSource), connected = useSource(connectionSource), mounted = useSource(mountedSource);
-    const [state, setState] = useState(null), [choice, setChoice] = useState(''), [refresh, setRefresh] = useState(0);
-    const liveRef = useRef(null), epoch = useRef(0), selectedRef = useRef('');
-    const visible = Boolean(tab?.visible && tab.signal && !tab.signal.aborted);
+    const [state, setState] = useState(null), [choice, setChoice] = useState(''), [closed, setClosed] = useState(false), [refresh, setRefresh] = useState(0);
+    const liveRef = useRef(null), epoch = useRef(0), selectedRef = useRef(''), selectionEpoch = useRef(0), revisionRef = useRef(null);
+    const documentVisible = () => typeof document === 'undefined' || document.visibilityState !== 'hidden';
+    const visible = Boolean(tab?.visible && tab.signal && !tab.signal.aborted && documentVisible());
     const currentScope = scope(sessionId);
     // This ref changes during render, before effects/cleanup. Old async work and old
     // render state must not survive a hidden tab or a changed session incarnation.
@@ -688,7 +723,7 @@ function createSessionCard(React, deps) {
       epoch.current++;
     }
     const generation = epoch.current;
-    const valid = () => epoch.current === generation && liveRef.current?.visible && !liveRef.current.signal?.aborted && liveRef.current.sessionId === sessionId && sameScope(liveRef.current.scope, scope(sessionId));
+    const valid = () => epoch.current === generation && liveRef.current?.visible && documentVisible() && !liveRef.current.signal?.aborted && liveRef.current.sessionId === sessionId && sameScope(liveRef.current.scope, scope(sessionId));
     const readCommand = async (command, accepts) => {
       for (let attempt = 0; ; attempt++) {
         if (!accepts()) return null;
@@ -712,16 +747,16 @@ function createSessionCard(React, deps) {
       return () => { disposers.forEach(dispose => dispose()); };
     }, [sessionId]);
     useEffect(() => {
-      if (!visible || !currentScope) return;
-      const invalidate = () => { epoch.current++; setState(null); setChoice(''); setRefresh(value => value + 1); };
-      const foreground = () => { if (typeof document !== 'undefined' && document.visibilityState === 'visible') invalidate(); };
+      if (!currentScope) return;
+      const invalidate = () => { epoch.current++; setState(null); setRefresh(value => value + 1); };
+      const foreground = () => invalidate();
       if (typeof document !== 'undefined') document.addEventListener('visibilitychange', foreground);
       return () => { if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', foreground); };
     }, [stamp, tab?.signal]);
     useEffect(() => {
       let active = true;
       const accepts = () => active && valid();
-      setState(null); setChoice('');
+      setState(null);
       if (!visible || !currentScope) return () => { active = false; };
       const run = async () => {
         let locals = [], localError = false;
@@ -760,6 +795,7 @@ function createSessionCard(React, deps) {
           if (!accepts()) return;
           if (!settingsValid(settings)) throw Error('invalid settings');
           const boards = selectedBoards(settings, currentScope.workspaceId);
+          deps.onSettings?.(settings);
           if (!settings.configured || settings.needsReselect.includes(currentScope.workspaceId)) {
             await publish({ links: [], settings, message: settings.needsReselect.includes(currentScope.workspaceId) ? 'reselect' : 'unconfigured' }); return;
           }
@@ -779,6 +815,7 @@ function createSessionCard(React, deps) {
           // A settings read after traversal detects changes that occurred while scanning.
           const after = await transport.trackerRead();
           if (!accepts()) return;
+          if (settingsValid(after)) deps.onSettings?.(after);
           if (!settingsValid(after) || after.revision !== settings.revision || !after.configured || after.needsReselect.includes(currentScope.workspaceId) || JSON.stringify(selectedBoards(after, currentScope.workspaceId)) !== JSON.stringify(boards)) throw Error('settings changed');
           await publish({ links, settings: after, partialError });
         } catch { if (accepts()) await publish({ links: [], message: 'unavailable' }); }
@@ -789,81 +826,54 @@ function createSessionCard(React, deps) {
       return () => { active = false; tab.signal.removeEventListener('abort', onAbort); };
     }, [stamp, tab?.signal]);
     const data = visible && currentScope && state?.stamp === stamp && state.generation === generation ? state : null;
-    const chosen = data?.links?.find(link => identity(link) === choice) || (data?.links?.length === 1 ? data.links[0] : null);
+    const chosen = !closed && (data?.links?.find(link => identity(link) === choice) || (data?.links?.length === 1 ? data.links[0] : null));
     selectedRef.current = chosen ? identity(chosen) : '';
-    const [detail, setDetail] = useState(null);
-    const detailRef = useRef(null), batchBusy = useRef(null);
-    detailRef.current = detail;
-    useEffect(() => {
-      let active = true;
-      setDetail(null);
-      if (!data?.settings || !chosen || !valid()) return () => { active = false; };
-      const id = identity(chosen), revision = data.settings.revision;
-      const accepts = () => active && valid() && selectedRef.current === id;
-      const command = op => ({ op, workspaceId: currentScope.workspaceId, boardId: chosen.boardId, issueKey: chosen.issueKey, issueId: chosen.issueId });
-      const checkSettings = async () => {
+    const selectedId = chosen ? identity(chosen) : '', selectionGeneration = selectionEpoch.current;
+    const revisionIdentity = JSON.stringify([sessionId, currentScope?.workspaceId, currentScope?.incarnation, currentScope?.connectionId, data?.settings?.revision, selectedId, generation]);
+    if (chosen && revisionRef.current?.identity !== revisionIdentity) revisionRef.current = { identity: revisionIdentity, revision: chosen.linkRevision };
+    const editorValid = () => valid() && selectionEpoch.current === selectionGeneration && selectedRef.current === selectedId && Boolean(data?.settings && chosen);
+    const authorization = {
+      valid: editorValid,
+      async reconcileLink(command, receipt, accepts) {
+        const allowed = () => editorValid() && accepts() && revisionRef.current?.identity === revisionIdentity && command.expectedRevision === revisionRef.current.revision;
+        if (!allowed() || !Number.isSafeInteger(receipt.revision) || receipt.revision !== command.expectedRevision + 1) return false;
+        if (!command.linked && command.sessionId === sessionId) {
+          epoch.current++; setState(null); setChoice(''); setRefresh(value => value + 1);
+          return false;
+        }
         const settings = await transport.trackerRead();
-        if (!accepts()) return false;
-        if (!settingsValid(settings) || settings.revision !== revision || !settings.configured || settings.needsReselect.includes(currentScope.workspaceId) || !selectedBoards(settings, currentScope.workspaceId).includes(chosen.boardId)) throw Error('settings changed');
+        if (allowed() && settingsValid(settings)) deps.onSettings?.(settings);
+        if (!allowed() || !settingsValid(settings) || settings.revision !== data.settings.revision || !settings.configured || settings.needsReselect.includes(currentScope.workspaceId) || !selectedBoards(settings, currentScope.workspaceId).includes(chosen.boardId)) return false;
+        const result = await readCommand({ op: 'links.issue.read', workspaceId: currentScope.workspaceId, boardId: chosen.boardId, issueKey: chosen.issueKey, issueId: chosen.issueId }, allowed);
+        if (!allowed() || !result || result.incomplete !== false || result.revision !== receipt.revision || !Array.isArray(result.links) || result.links.length > 10000) return false;
+        const seen = new Set();
+        if (result.links.some(link => !link || typeof link.sessionId !== 'string' || !link.sessionId || link.issueKey !== chosen.issueKey || link.issueId !== chosen.issueId || seen.has(link.sessionId) || (seen.add(link.sessionId), false)) || !seen.has(sessionId) || seen.has(command.sessionId) !== command.linked) return false;
+        const after = await transport.trackerRead();
+        if (allowed() && settingsValid(after)) deps.onSettings?.(after);
+        if (!allowed() || !settingsValid(after) || after.revision !== settings.revision || !after.configured || after.needsReselect.includes(currentScope.workspaceId) || !selectedBoards(after, currentScope.workspaceId).includes(chosen.boardId)) return false;
+        revisionRef.current.revision = receipt.revision;
         return true;
-      };
-      const checkLink = async () => {
-        const result = await readCommand(command('links.issue.read'), accepts);
-        if (!accepts()) return false;
-        if (!result || result.incomplete !== false || !Number.isSafeInteger(result.revision) || result.revision !== chosen.linkRevision || !Array.isArray(result.links) || result.links.length > 10000 || result.links.some(link => !link || typeof link.sessionId !== 'string' || link.issueKey !== chosen.issueKey || link.issueId !== chosen.issueId) || !result.links.some(link => link.sessionId === sessionId)) throw Error('link changed');
-        return true;
-      };
-      const checkIssue = async () => {
-        const issue = await transport.trackerCommand(command('issue.read'));
-        if (!accepts()) return null;
-        if (!issue || issue.key !== chosen.issueKey || issue.id !== chosen.issueId || typeof issue.summary !== 'string' || !(issue.description === null || typeof issue.description === 'string') || typeof issue.status?.display !== 'string') throw Error('issue changed');
-        return issue;
-      };
-      const run = async previous => {
-        const owner = {}; batchBusy.current = owner;
+      },
+      async authorize(issue, accepts, expectedRevision) {
+        const revision = revisionRef.current?.revision;
+        const allowed = () => editorValid() && accepts() && revisionRef.current?.revision === revision && issue.workspaceId === currentScope.workspaceId && issue.boardId === chosen.boardId && issue.key === chosen.issueKey && issue.issueId === chosen.issueId;
+        const checkSettings = async () => {
+          const settings = await transport.trackerRead();
+          if (!allowed()) return false;
+          if (settingsValid(settings)) deps.onSettings?.(settings);
+          if (!settingsValid(settings) || settings.revision !== data.settings.revision || !settings.configured || settings.needsReselect.includes(currentScope.workspaceId) || !selectedBoards(settings, currentScope.workspaceId).includes(chosen.boardId)) throw Error('settings changed');
+          return true;
+        };
         try {
-          if (!await checkSettings() || !accepts() || !await checkLink() || !accepts()) return;
-          if (!await checkIssue() || !accepts()) return;
-          const comments = previous ? [...previous.comments] : [], ids = new Set(comments.map(comment => comment.id));
-          const cursors = new Set(previous?.cursors || []); let cursor = previous?.cursor ?? null, bytes = previous?.bytes || 0, commentState = 'partial', resumable = false;
-          for (let page = 0; page < 10; page++) {
-            if (!accepts()) return;
-            resumable = false;
-            let result;
-            try { result = await transport.trackerCommand({ ...command('issue.comments'), ...(cursor === null ? {} : { cursor }) }); }
-            catch (error) { if (!accepts()) return; if (authError(error)) throw error; commentState = 'error'; resumable = cursor !== null; break; }
-            if (!accepts()) return;
-            if (!result || !Array.isArray(result.comments) || result.comments.length > 100 || typeof result.complete !== 'boolean' || !(result.nextCursor === null || typeof result.nextCursor === 'string')) { commentState = 'partial'; break; }
-            const pageIds = new Set();
-            if (result.comments.some(comment => !comment || typeof comment.id !== 'string' || !comment.id || ids.has(comment.id) || pageIds.has(comment.id) || (pageIds.add(comment.id), false) || typeof comment.text !== 'string' || typeof comment.createdBy?.display !== 'string' || typeof comment.createdAt !== 'string')) { commentState = 'partial'; break; }
-            const pageBytes = new TextEncoder().encode(JSON.stringify(result.comments)).byteLength;
-            if (comments.length + result.comments.length > 1000 || bytes + pageBytes > 2 * 1024 * 1024) { commentState = 'limit'; break; }
-            comments.push(...result.comments); for (const comment of result.comments) ids.add(comment.id); bytes += pageBytes;
-            if (result.complete && result.nextCursor === null) { commentState = 'complete'; break; }
-            if (result.complete || result.nextCursor === null || !/^(?:0|[1-9][0-9]{0,15})$/.test(result.nextCursor) || !Number.isSafeInteger(Number(result.nextCursor)) || cursors.has(result.nextCursor) || (cursor !== null && Number(result.nextCursor) <= Number(cursor))) { commentState = 'partial'; break; }
-            if (comments.length >= 1000 || bytes >= 2 * 1024 * 1024) { commentState = 'limit'; break; }
-            cursor = result.nextCursor; cursors.add(cursor); resumable = true;
-          }
-          if (!accepts() || !await checkSettings() || !accepts()) return;
-          const fresh = await checkIssue();
-          if (!fresh || !accepts() || !await checkLink() || !accepts() || !await checkSettings() || !accepts()) return;
-          const next = { stamp, generation, id, issue: fresh, comments, commentState, revision, cursor, cursors: [...cursors], bytes, resumable, loading: false, loadMore };
-          detailRef.current = next; setDetail(next);
-        } catch { if (accepts()) { const next = { stamp, generation, id, error: true, revision }; detailRef.current = next; setDetail(next); } }
-        finally { if (batchBusy.current === owner) batchBusy.current = null; }
-      };
-      const loadMore = () => {
-        const previous = detailRef.current;
-        if (!accepts() || batchBusy.current || !previous?.resumable || previous.stamp !== stamp || previous.generation !== generation || previous.id !== id || previous.revision !== revision) return;
-        const loading = { ...previous, loading: true, loadMore };
-        detailRef.current = loading; setDetail(loading); void run(previous);
-      };
-      // Keep the action scoped to this effect, not to a stale button closure.
-      void run(null);
-      return () => { active = false; if (batchBusy.current) batchBusy.current = null; };
-    }, [data, chosen ? identity(chosen) : '', stamp]);
-    // Render checks the sources again, not only the effect's captured state.
-    const safeDetail = data && chosen && valid() && detail?.stamp === stamp && detail.generation === generation && detail.id === identity(chosen) && detail.revision === data.settings?.revision ? detail : null;
+          if (!allowed() || !await checkSettings() || !allowed()) return false;
+          const result = await readCommand({ op: 'links.issue.read', workspaceId: currentScope.workspaceId, boardId: chosen.boardId, issueKey: chosen.issueKey, issueId: chosen.issueId }, allowed);
+          if (!allowed()) return false;
+          const seen = new Set();
+          if (!result || result.incomplete !== false || !Number.isSafeInteger(result.revision) || result.revision !== revisionRef.current?.revision || (expectedRevision !== undefined && result.revision !== expectedRevision) || !Array.isArray(result.links) || result.links.length > 10000 || result.links.some(link => !link || typeof link.sessionId !== 'string' || !link.sessionId || link.issueKey !== chosen.issueKey || link.issueId !== chosen.issueId || seen.has(link.sessionId) || (seen.add(link.sessionId), false)) || !result.links.some(link => link.sessionId === sessionId)) throw Error('link changed');
+          return await checkSettings() && allowed();
+        } catch (error) { if (allowed()) { error.sessionAuthorization = true; throw error; } return false; }
+      },
+    };
     if (!visible || mounted !== sessionId || !connected) return null;
     const openBoard = () => { if (valid()) openBoardForSession(sessionId); };
     const openCurrentSession = event => {
@@ -874,17 +884,16 @@ function createSessionCard(React, deps) {
       } else if (typeof deps.openSession === 'function') deps.openSession(sessionId);
     };
     const sessionTitle = catalog?.byId?.[sessionId]?.displayTitle || catalog?.byId?.[sessionId]?.title;
-    const sessionButton = h('button', { type: 'button', style: styles.button, onClick: openCurrentSession, onAuxClick: event => { if (event.button === 1) openCurrentSession(event); }, disabled: typeof deps.openSession !== 'function' }, text('sessionCardCurrentSession', 'Open current session'), ' · ', typeof sessionTitle === 'string' && sessionTitle.trim() ? sessionTitle : sessionId);
+    const sessionButton = h('button', { type: 'button', style: styles.button, onClick: openCurrentSession, onAuxClick: event => { if (event.button === 1) openCurrentSession(event); }, disabled: typeof deps.openSession !== 'function' }, text('sessionCardCurrentSession', 'Open current session'), ' · ', typeof sessionTitle === 'string' && sessionTitle.trim() && sessionTitle.trim() !== sessionId ? sessionTitle : text('untitled', 'Untitled session'));
     const boardButton = h('button', { type: 'button', style: styles.button, onClick: openBoard }, text('sessionCardBoard', 'Open full board to edit'));
     if (!currentScope) {
       const ambiguous = workspaces?.phase === 'ready' && Array.isArray(workspaces.items) && workspaces.items.filter(item => item?.sessionIds?.includes(sessionId)).length > 1;
       return h('section', { style: styles.card }, h('p', { style: styles.muted, role: 'status' }, ambiguous ? text('chooseSessionWorkspace', 'This session belongs to multiple workspaces. Open the board and choose a workspace explicitly.') : text('linkUnavailable', 'This session is unavailable, archived, or not registered in a workspace.')),
         h('button', { type: 'button', style: styles.button, onClick: () => { if (mountedSource.getSnapshot() === sessionId && connectionSource.getSnapshot()) openBoardForSession(sessionId); } }, text('sessionCardBoard', 'Open full board to edit')));
     }
-    const renderText = value => typeof renderTrackerText === 'function' ? renderTrackerText(value) : value;
-    return h('section', { style: styles.card, 'aria-label': text('sessionCardTitle', 'Linked tasks') },
-      h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' } }, h('strong', null, text('sessionCardTitle', 'Linked tasks')), h('span', { style: styles.badge }, text('trackerReadOnly', 'Read only'))),
-      h('p', { style: styles.muted }, text('sessionCardReadOnly', 'This view is read-only. Open the full board to edit. Access changes may not appear immediately.')), sessionButton, boardButton,
+        return h('section', { style: styles.card, 'aria-label': text('sessionCardTitle', 'Linked tasks') },
+      h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' } }, h('strong', null, text('sessionCardTitle', 'Linked tasks'))),
+      sessionButton, boardButton,
       !data ? h('p', { style: styles.muted, role: 'status' }, text('loading', 'Loading…')) : h(React.Fragment, null,
         h('section', { style: styles.panel }, h('strong', null, text('trackerLocal', 'Local tasks')),
           h('p', { style: styles.muted }, text('sessionCardLocalHistory', 'Local links are historical and do not record workspace incarnation; verify them on the full board.')),
@@ -893,13 +902,12 @@ function createSessionCard(React, deps) {
           data.message && h('p', { role: 'status', style: styles.muted }, data.message === 'reselect' ? text('trackerReselect', 'Tracker board selection needs confirmation.') : data.message === 'unconfigured' ? text('trackerNotConfigured', 'Tracker is not configured.') : data.message === 'no_boards' ? text('trackerNoBoardsSelected', 'No Tracker boards are selected.') : text('trackerError', 'Tracker is unavailable; issue details are hidden.')),
           data.partialError && h('p', { role: 'status', style: styles.muted }, text('sessionCardPartial', 'Linked issues are a partial result; other links may exist.')),
           !data.message && data.links.length === 0 && h('p', { style: styles.muted }, data.partialError ? text('sessionCardNoLinksPartial', 'No linked issues found in this partial result.') : text('sessionCardNoLinks', 'No linked issues found.')),
-          data.links.length > 1 && h('label', null, text('sessionCardChoose', 'Choose a linked issue'), h('select', { style: styles.select, value: choice, onChange: event => { if (valid()) { selectedRef.current = event.target.value; setDetail(null); setChoice(event.target.value); } } }, h('option', { value: '' }, text('sessionCardSelect', 'Select an issue')), data.links.map(link => h('option', { key: identity(link), value: identity(link) }, link.issueKey + ' · ' + text('board', 'Board') + ' ' + link.boardId)))),
-          chosen && !safeDetail && h('p', { style: styles.muted, role: 'status' }, text('loading', 'Loading…')),
-          safeDetail?.error && h('p', { role: 'alert', style: styles.muted }, text('issueUnavailable', 'Issue details are hidden until access is revalidated.')),
-          safeDetail?.issue && h('article', { style: { marginTop: '12px', minWidth: 0 } }, h('div', { style: styles.muted }, chosen.issueKey, ' · ', safeDetail.issue.status.display), h('h3', { style: { margin: '5px 0 10px', fontSize: '16px', overflowWrap: 'anywhere' } }, safeDetail.issue.summary), safeDetail.issue.description && h('div', null, renderText(safeDetail.issue.description)),
-            h('h4', { style: { marginBottom: '6px' } }, text('issueComments', 'Comments & activity')), h('p', { style: styles.muted, role: 'status' }, safeDetail.loading ? text('issueCommentsLoading', 'Loading comments…') : safeDetail.commentState === 'complete' ? text('issueCommentsComplete', 'Traversal complete; comments may have changed while loading.') : safeDetail.commentState === 'error' ? text('issueCommentsError', 'Comments could not be loaded; earlier comments are retained.') : safeDetail.commentState === 'limit' ? text('issueCommentsLimit', 'Loading stopped at the comment or size limit.') : safeDetail.resumable ? text('issueCommentsPartial', 'More comments may be available.') : text('issueCommentsTerminalPartial', 'Traversal stopped without a usable continuation cursor; more comments may exist.')),
-            safeDetail.comments.map(comment => h('div', { key: comment.id, style: { borderTop: '1px solid var(--border, #8885)', padding: '10px 0', overflowWrap: 'anywhere' } }, h('strong', null, comment.createdBy.display), ' ', h('time', { dateTime: comment.createdAt, style: styles.muted }, comment.createdAt), h('div', null, renderText(comment.text)))),
-            safeDetail.resumable && h('button', { type: 'button', style: styles.button, disabled: safeDetail.loading, onClick: safeDetail.loadMore }, safeDetail.commentState === 'error' ? text('retry', 'Retry') : text('issueCommentsMore', 'Load more'))))));
+          data.links.length > 1 && h('label', null, text('sessionCardChoose', 'Choose a linked issue'), h('select', { style: styles.select, value: choice, onChange: event => { if (valid()) { selectionEpoch.current++; selectedRef.current = event.target.value; setClosed(false); setChoice(event.target.value); } } }, h('option', { value: '' }, text('sessionCardSelect', 'Select an issue')), data.links.map(link => h('option', { key: identity(link), value: identity(link) }, link.issueKey + ' · ' + text('board', 'Board') + ' ' + link.boardId)))),
+          closed && data.links.length === 1 && h('button', { type: 'button', style: styles.button, onClick: () => { if (valid()) { selectionEpoch.current++; setClosed(false); } } }, data.links[0].issueKey),
+          chosen && editorValid() && typeof deps.renderIssueEditor === 'function' && deps.renderIssueEditor({
+            target: { sessionId, ...currentScope, settings: data.settings, boardId: chosen.boardId, key: chosen.issueKey, issueId: chosen.issueId, linkRevision: chosen.linkRevision },
+            authorization, onClose: () => { selectionEpoch.current++; selectedRef.current = ''; setChoice(''); setClosed(true); },
+          }))));
   }
   return { Header, Body };
 }
@@ -1075,6 +1083,7 @@ function createSessionSender({ sessions, validateSession }) {
       .dsh-board-tracker-drawer .dsh-board-tracker-head{position:sticky;top:0;z-index:2;display:flex;align-items:center;justify-content:space-between;gap:12px;min-width:0;padding:12px 24px;border-bottom:1px solid var(--line);background:var(--base)}
       .dsh-board-tracker-head h2{min-width:0;color:var(--muted);font-size:12px;font-weight:650;overflow-wrap:anywhere}.dsh-board-tracker-head h2:focus-visible{outline:2px solid var(--accent);outline-offset:3px}.dsh-board-tracker-head a{color:var(--accent);text-decoration:none}.dsh-board-tracker-head a:hover{text-decoration:underline}.dsh-board-tracker-head-actions{display:flex;align-items:center;gap:8px;flex:none}.dsh-board .dsh-board-tracker-close{min-width:36px;padding:8px;font-size:18px;line-height:1}
       .dsh-board-tracker-body{display:grid;gap:0;min-width:0;padding:24px}.dsh-board-tracker-body>*{min-width:0}.dsh-board-tracker-body .dsh-board-tracker-hero{display:grid;gap:14px;margin:0 0 22px}.dsh-board-tracker-hero h3{font-size:20px;line-height:1.3;letter-spacing:-.025em;overflow-wrap:anywhere}.dsh-board-tracker-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.dsh-board-tracker-meta p{display:flex;align-items:center;gap:6px;min-width:0;color:var(--muted);font-size:12px}.dsh-board-tracker-meta strong{color:var(--ink);font-weight:600;overflow-wrap:anywhere}.dsh-board-tracker-status{padding:5px 9px;border-radius:7px;background:var(--accent-soft);color:var(--ink);font-size:12px;font-weight:650;overflow-wrap:anywhere}
+      .dsh-board-tracker-session-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.dsh-board-tracker-session-heading button{margin-left:auto}
       .dsh-board-tracker-drawer section.dsh-board-tracker-section{display:grid;gap:12px;min-width:0;margin:0;padding:22px 0;border-top:1px solid var(--line)}.dsh-board-tracker-section h3{font-size:14px;font-weight:700;letter-spacing:-.01em}.dsh-board-tracker-section label{font-size:12px}.dsh-board-tracker-section .dsh-board-richtext{font-size:14px;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere}.dsh-board-tracker-section button{justify-self:start;max-width:100%;overflow-wrap:anywhere;text-align:left}.dsh-board-tracker-section .dsh-board-row{align-items:flex-end}.dsh-board-tracker-section .dsh-board-row label{flex:1 1 180px;min-width:0}
       .dsh-board-tracker-drawer ul.dsh-board-tracker-list{display:grid;gap:12px;margin:0;padding:0;list-style:none}.dsh-board-tracker-list li{min-width:0;overflow-wrap:anywhere}.dsh-board-tracker-session{padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:var(--layer);font-size:13px}.dsh-board-tracker-session-link{padding:0;border:0;background:none;color:var(--accent);font:inherit;text-align:left;text-decoration:underline;cursor:pointer;overflow-wrap:anywhere}.dsh-board-tracker-comment{display:grid;gap:8px;padding:14px;border:1px solid var(--line);border-radius:10px;background:var(--layer)}.dsh-board-tracker-comment-meta{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;color:var(--muted);font-size:11px}.dsh-board-tracker-comment-meta strong{color:var(--ink);font-size:12px}.dsh-board-tracker-comment p{font-size:13px;line-height:1.55}.dsh-board-tracker-notices{display:grid;gap:8px;margin-bottom:16px}.dsh-board-tracker-notices p{font-size:12px;line-height:1.5;overflow-wrap:anywhere}.dsh-board-tracker-separate{color:var(--muted);font-size:12px;line-height:1.5}.dsh-board-tracker-draft{justify-self:start;margin-top:12px!important;padding:6px 9px;border:1px solid var(--line);border-radius:7px;background:var(--layer);color:var(--ink);font-size:12px;line-height:1.4}.dsh-board-tracker-footer{padding:4px 0 12px}
       @media(max-width:600px){.dsh-board-tracker-drawer .dsh-board-tracker-head{padding:10px 16px}.dsh-board-tracker-body{padding:20px 16px}.dsh-board .dsh-board-tracker-drawer button,.dsh-board .dsh-board-tracker-drawer input,.dsh-board .dsh-board-tracker-drawer select{min-height:44px}.dsh-board .dsh-board-tracker-close{min-width:44px}.dsh-board-tracker-head-actions{gap:6px}.dsh-board-tracker-head-actions button{padding:8px}}
@@ -1097,6 +1106,611 @@ function createSessionSender({ sessions, validateSession }) {
         columns: h(React.Fragment, null, h('rect', { x: 3, y: 4, width: 18, height: 16, rx: 2 }), h('path', { d: 'M9 4v16M15 4v16' })),
       };
       return h('svg', { className: 'dsh-board-icon', width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }, paths[name]);
+    }
+    // Shared issue editor. Each invocation receives one surface's store and
+    // access policy; the uncertainty and mutation gates remain page-global.
+    function createIssueEditor(adapter) {
+      const { memory, updateMemory, connectionSource, trackerActive, currentWorkspace,
+        transport, workspacesSource, sessionsSource, setForm, issueOrigin, setSessionMenu, updateTracker,
+        invalidateTracker, loadTracker, loadBoardLinks, t, openSession, sessionService, workspaces, sessions,
+        workspace, workspaceId, boardId, overview, showContext, connection, tracker, trackerLive, availableSessions,
+        issueSessionLabel, statusSelection, statusPopover, setStatusPopover, statusButton, statusFirstOption,
+        issueHeading, issueEditButton, issueTitleInput, issueFocusRequest, drawerWidth, resizeHandle } = adapter;
+      // An issue draft belongs to one connection, workspace incarnation and board.
+      // Reselection discards it; ordinary board refresh keeps it independently.
+      function closeIssue(expected = memory.issue, expectedEpoch = adapter.privacyEpoch) {
+        const issue = memory.issue;
+        if (!issue) return !expected;
+        if (issue !== expected || !issueScope(issue) || adapter.privacyEpoch !== expectedEpoch || issue.pending) return false;
+        if ((issue.dirty || issue.unknown) && !window.confirm(t('discardDraft'))) return false;
+        if (memory.issue !== issue || !issueScope(issue) || adapter.privacyEpoch !== expectedEpoch || issue.pending) return false;
+        updateMemory({ issue: null });
+        adapter.onClose?.();
+        return true;
+      }
+      function issueScope(issue, requireAccess = true) {
+        return adapter.issueScope(issue, requireAccess);
+      }
+      function issuePatch(patch) { if (memory.issue) updateMemory({ issue: { ...memory.issue, ...patch } }); }
+      function validIssue(value, key) {
+        const status = value?.status, assignee = value?.assignee;
+        if (!value || value.key !== key || typeof value.summary !== 'string' || !(value.description === null || typeof value.description === 'string') ||
+            !(value.version === null || (Number.isSafeInteger(value.version) && value.version >= 0)) || typeof value.assigneeKnown !== 'boolean' ||
+            (value.assigneeKnown && assignee !== null && (!assignee || typeof assignee.id !== 'string' || !assignee.id || typeof assignee.display !== 'string')) ||
+            !status || typeof status.id !== 'string' || typeof status.key !== 'string' || typeof status.display !== 'string') throw new Error('invalid response');
+        return value;
+      }
+      function validTransitions(value) {
+        if (!Array.isArray(value) || value.some((item) => !item || typeof item.id !== 'string' || !item.id || typeof item.display !== 'string' || !item.to || ['id', 'key', 'display'].some((k) => typeof item.to[k] !== 'string' || !item.to[k])) || new Set(value.map((item) => item.id)).size !== value.length) throw new Error('invalid response');
+        return value.map(({ id, display, to }) => ({ id, display, to: { id: to.id, key: to.key, display: to.display } }));
+      }
+      const validCommentCursor = value => typeof value === 'string' && /^(?:0|[1-9][0-9]{0,15})$/.test(value) && Number.isSafeInteger(Number(value));
+      function validComments(value, cursor, seenIds, seenCursors) {
+        if (!value || typeof value.complete !== 'boolean' || !Array.isArray(value.comments) || value.comments.length > 100 ||
+            (value.complete ? value.nextCursor !== null : value.nextCursor !== null && (!validCommentCursor(value.nextCursor) || cursor !== null && Number(value.nextCursor) <= Number(cursor) || seenCursors.includes(value.nextCursor))) ||
+            value.comments.some((c) => !c || typeof c.id !== 'string' || !c.id || typeof c.text !== 'string' || !c.createdBy || typeof c.createdBy.display !== 'string' || typeof c.createdAt !== 'string')) throw new Error('invalid response');
+        const ids = new Set(seenIds);
+        for (const comment of value.comments) { if (ids.has(comment.id)) throw new Error('invalid response'); ids.add(comment.id); }
+        return value;
+      }
+      function commentInitials(name) {
+        return name.trim().split(/\s+/u).filter(Boolean).slice(0, 2).map(part => Array.from(part)[0]).join('').toLocaleUpperCase() || '?';
+      }
+      function commentTime(value) {
+        const date = new Date(value);
+        return Number.isFinite(date.getTime()) ? date.toLocaleString() : value;
+      }
+      // Each bounded turn has a single owner and checks the complete privacy scope on
+      // both sides of every await. The server independently revalidates each page.
+      async function loadCommentPages(stamp, firstResult) {
+        const accepts = () => issueScope(stamp) && memory.issue.generation === stamp.generation && adapter.privacyEpoch === stamp.epoch && memory.issue.available && !memory.issue.loading && memory.issue.issue?.id === stamp.issueId && memory.issue.commentsOwner === stamp.owner;
+        if (!accepts()) return;
+        if (adapter.authorize && !firstResult) {
+          try { if (!await adapter.authorize(stamp, accepts) || !accepts()) return; }
+          catch { if (accepts()) adapter.revoke(stamp); return; }
+        }
+        let result = firstResult;
+        for (let page = 0; page < 10; page++) {
+          if (!accepts()) return;
+          const current = memory.issue, cursor = current.commentsCursor;
+          try {
+            if (!result) {
+              if (!accepts()) return;
+              result = { value: await transport.trackerCommand({ op: 'issue.comments', workspaceId: stamp.workspaceId, boardId: stamp.boardId, issueKey: stamp.key, issueId: stamp.issueId, ...(cursor === null ? {} : { cursor }) }) };
+              if (!accepts()) return;
+            }
+            if (result.error) throw result.error;
+            const value = validComments(result.value, cursor, current.comments.map(comment => comment.id), current.commentsCursors);
+            if (adapter.authorize && (!await adapter.authorize(stamp, accepts) || !accepts())) { if (accepts()) adapter.revoke(stamp); return; }
+            const bytes = new TextEncoder().encode(JSON.stringify(value.comments)).byteLength;
+            if (current.comments.length + value.comments.length > 1000 || current.commentsBytes + bytes > 2 * 1024 * 1024) {
+              issuePatch({ commentsState: 'limit', commentsOwner: null }); return;
+            }
+            const comments = [...current.comments, ...value.comments], totalBytes = current.commentsBytes + bytes;
+            const state = value.complete ? 'complete' : comments.length >= 1000 || totalBytes >= 2 * 1024 * 1024 ? 'limit' : value.nextCursor === null ? 'terminalPartial' : page === 9 ? 'partial' : 'loading';
+            issuePatch({ comments, commentsBytes: totalBytes, commentsCursor: value.nextCursor, commentsCursors: value.nextCursor === null ? current.commentsCursors : [...current.commentsCursors, value.nextCursor], commentsState: state, ...(state !== 'loading' ? { commentsOwner: null } : {}) });
+            if (state !== 'loading') return;
+            result = null;
+          } catch (error) {
+            if (!accepts()) return;
+            if (adapter.authorize && error?.sessionAuthorization) { adapter.revoke(stamp); return; }
+            if (error?.code === 'needs_reselect') invalidateIssueAccess(stamp);
+            else if ([401, 403, 404, 409, 412].includes(error?.status) || ['unauthorized', 'forbidden', 'not_found', 'issue_not_in_selected_boards', 'board_not_selected', 'conflict', 'credential_changed', 'credentials_unavailable', 'invalid_credentials', 'scope_expired'].includes(error?.code)) {
+              // Revocation, changed identity, or lost membership is not a
+              // recoverable page error: do not retain previously visible data.
+              const issue = memory.issue, writing = issue.pending && !issue.preflight && !issue.sendOwner;
+              if (writing) unknownIssues.add(issueUnknownKey(issue));
+              issuePatch({ generation: issue.generation + 1, available: false, comments: [], commentsBytes: 0, commentsCursor: null, commentsCursors: [], commentsState: 'error', commentsOwner: null, unknown: issue.unknown || writing, error: writing ? 'issueUnknown' : 'issueUnavailable' });
+            } else issuePatch({ commentsState: error?.message === 'invalid response' ? 'invalid' : 'error', commentsOwner: null });
+            return;
+          }
+        }
+      }
+      function loadMoreComments() {
+        const issue = memory.issue;
+        if (!issueScope(issue) || !issue.available || issue.loading || issue.pending || !['partial', 'error'].includes(issue.commentsState)) return;
+        const owner = {};
+        issuePatch({ commentsState: 'loading', commentsOwner: owner });
+        void loadCommentPages({ ...issue, epoch: adapter.privacyEpoch, owner });
+      }
+      function validIssueLinks(value, issue) {
+        if (!value || !Number.isSafeInteger(value.revision) || value.revision < 0 || value.incomplete !== false || !Array.isArray(value.links) || value.links.length > 10000) return null;
+        const seen = new Set();
+        for (const link of value.links) {
+          if (!link || link.issueKey !== issue.key || link.issueId !== issue.issueId || typeof link.sessionId !== 'string' || !link.sessionId || link.sessionId.length > 256 || seen.has(link.sessionId)) return null;
+          seen.add(link.sessionId);
+        }
+        return value;
+      }
+      function invalidateIssueAccess(issue) {
+        if (issue && memory.issue?.token !== issue.token) return;
+        adapter.invalidateIssueAccess(issue);
+      }
+      async function loadIssue() {
+        const issue = memory.issue;
+        if (!issueScope(issue) || issue.loading || issue.pending) return;
+        const generation = issue.generation + 1, epoch = adapter.privacyEpoch;
+        // A fetched transition is tied to the read that produced it. Refresh never
+        // silently carries that selection over to a potentially different action.
+        statusSelection.current = null;
+        issuePatch({ loading: true, available: false, generation, transitionId: '', comments: [], commentsBytes: 0, commentsCursor: null, commentsCursors: [], commentsState: 'loading', commentsOwner: null, dirty: Boolean(issue.comment || issue.editComment || issue.linkSessionId || (issue.draft && issue.original && JSON.stringify(issue.draft) !== JSON.stringify(issue.original)) || issue.assigneeEdited), error: issue.unknown ? 'issueUnknown' : '' });
+        const accepts = () => issueScope(issue) && memory.issue.generation === generation && adapter.privacyEpoch === epoch;
+        const command = (op) => transport.trackerCommand({ op, workspaceId: issue.workspaceId, boardId: issue.boardId, issueKey: issue.key, issueId: issue.issueId });
+        try {
+          if (adapter.authorize && (!await adapter.authorize(issue, accepts) || !accepts())) { if (accepts()) adapter.revoke(issue); return; }
+          const first = validIssue(await command('issue.read'), issue.key);
+          if (!accepts()) return;
+          const [commentsResult, transitions, linksResult] = await Promise.all([command('issue.comments').then(value => ({ value }), error => ({ error })), command('issue.transitions'), command('links.issue.read').then(value => ({ value }), error => { if (error?.code === 'needs_reselect' || [401, 403, 404, 409, 412].includes(error?.status)) throw error; return { value: null }; })]);
+          if (!accepts()) return;
+          if (commentsResult.error?.code === 'needs_reselect' || [401, 403, 404, 409, 412].includes(commentsResult.error?.status) || ['unauthorized', 'forbidden', 'not_found', 'issue_not_in_selected_boards', 'board_not_selected', 'conflict', 'credential_changed', 'credentials_unavailable', 'invalid_credentials', 'scope_expired'].includes(commentsResult.error?.code)) throw commentsResult.error;
+          const fresh = validIssue(await command('issue.read'), issue.key), safeTransitions = validTransitions(transitions);
+          if (!accepts()) return;
+          if (!issue.issueId || first.id !== issue.issueId || fresh.id !== issue.issueId || !Number.isSafeInteger(first.version) || !Number.isSafeInteger(fresh.version) || first.version !== fresh.version || first.status.id !== fresh.status.id || first.status.key !== fresh.status.key) { if (accepts()) issuePatch({ loading: false, available: false, error: 'issueConflict' }); return; }
+          const rawLinks = linksResult.value;
+          const links = validIssueLinks(rawLinks, issue);
+          if (adapter.authorize && (!await adapter.authorize(issue, accepts) || !accepts())) { if (accepts()) adapter.revoke(issue); return; }
+          if (!accepts()) return;
+          const current = memory.issue, freshOriginal = { summary: fresh.summary, description: fresh.description ?? '', assignee: fresh.assigneeKnown ? (fresh.assignee?.id || '') : '' };
+          // Preserve the draft's CAS baseline across refresh; never silently rebase edits.
+          const original = current.dirty && current.original ? current.original : freshOriginal;
+          const draft = current.dirty && current.draft ? current.draft : { ...freshOriginal };
+          const liveVersion = fresh.version;
+          if (current.dirty && current.issue) fresh.version = current.issue.version;
+          const owner = {};
+          issuePatch({ loading: false, available: true, original, draft, liveVersion, issue: fresh, commentsOwner: owner, transitions: safeTransitions, links, transitionId: current.transitionId || '', conflict: Boolean(current.conflict), error: current.unknown ? 'issueUnknown' : current.conflict ? 'issueConflict' : '', dirty: Boolean(current.dirty) });
+          void loadCommentPages({ ...issue, generation, epoch, owner }, commentsResult);
+        } catch (err) {
+          if (accepts()) {
+            if (adapter.authorize) adapter.revoke(issue);
+            else if (err?.code === 'needs_reselect') invalidateIssueAccess(issue);
+            else issuePatch({ loading: false, available: false, error: 'trackerError' });
+          }
+        }
+      }
+      function openIssue(issue) {
+        if (!/^[A-Z][A-Z0-9_]{0,31}-[1-9][0-9]{0,14}$/.test(issue.key) || typeof issue.id !== 'string' || !issue.id || memory.tracker.busy || !setForm(null)) return;
+        const connectionId = connectionSource.getSnapshot()?.id, incarnation = memory.tracker.incarnations[workspaceId];
+        if (connectionId === undefined || !currentWorkspace(workspaceId, incarnation) || !memory.tracker.settings || memory.tracker.settings.needsReselect.includes(workspaceId) || !memory.tracker.settings.workspaces[workspaceId]?.includes(boardId)) return;
+        const draft = { token: {}, generation: 0, workspaceId, boardId, key: issue.key, issueId: issue.id || '', connectionId, incarnation, settingsRevision: memory.tracker.settings.revision, draft: null, comment: '', editComment: null, transitionId: '', linkSessionId: '', addingSession: false, sendTargets: [], sendResult: null, savedComment: null, editingFields: false, dirty: false, pending: false, unknown: false, loading: false, available: false, error: '', notice: '' };
+        draft.unknown = unknownIssues.has(issueUnknownKey(draft));
+        issueOrigin.current = document.activeElement;
+        setSessionMenu(null);
+        updateMemory({ issue: draft });
+        void loadIssue();
+      }
+      function editIssue(key, value) {
+        const current = memory.issue;
+        if (!current || !issueScope(current) || !current.available || current.pending) return;
+        const next = key === 'comment' || key === 'transitionId' || key === 'linkSessionId' ? { [key]: value } : { draft: { ...current.draft, [key]: value }, ...(key === 'assignee' ? { assigneeEdited: true } : {}) };
+        issuePatch({ ...next, dirty: true, notice: '' });
+      }
+      const sameStatus = (a, b) => Boolean(a && b && a.id === b.id && a.key === b.key && a.display === b.display);
+      function validStatusSelection(selection, pending = false) {
+        const current = memory.issue;
+        return Boolean(selection && statusSelection.current === selection && issueScope(current) && current.token === selection.token &&
+          current.generation === selection.generation && adapter.privacyEpoch === selection.epoch && current.available && !current.loading &&
+          current.pending === pending && !current.unknown && !current.conflict && current.issueId === selection.issueId && current.issue?.id === selection.issueId &&
+          current.liveVersion === selection.version && sameStatus(current.issue.status, selection.from) && current.transitionId === selection.id &&
+          current.transitions.some(item => item.id === selection.id && item.display === selection.display && sameStatus(item.to, selection.to)));
+      }
+      const safeIssueText = (value, max, multiline = false, empty = false) => typeof value === 'string' && value.length <= max && (empty || Boolean(value.trim())) && !(multiline ? /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u : /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u).test(value);
+      async function saveIssue(kind, unlink = null) {
+        const issue = memory.issue;
+        if (!issueScope(issue) || !issue.available || issue.pending || adapter.issueMutationPending || issue.unknown || unknownIssues.has(issueUnknownKey(issue)) || issue.conflict || issue.loading) return;
+        const base = { workspaceId: issue.workspaceId, boardId: issue.boardId, issueKey: issue.key, issueId: issue.issueId };
+        let command, selection;
+        if (kind === 'fields') {
+          const { draft, original } = issue, changes = { expectedVersion: issue.issue.version };
+          if (!Number.isSafeInteger(changes.expectedVersion) || !safeIssueText(draft.summary, 4096) || !safeIssueText(draft.description, 48 * 1024, true, true) || !safeIssueText(draft.assignee, 128, false, true)) { issuePatch({ error: 'issueInvalid' }); return; }
+          if (draft.summary !== original.summary) changes.summary = draft.summary;
+          if (draft.description !== original.description) changes.description = draft.description;
+          if (issue.assigneeEdited && (draft.assignee !== original.assignee || !issue.issue.assigneeKnown)) changes.assignee = draft.assignee.trim() || null;
+          if (Object.keys(changes).length === 1) return;
+          command = { op: 'issue.update', ...base, changes };
+        } else if (kind === 'comment') {
+          if (issue.savedComment === issue.comment) return;
+          if (!safeIssueText(issue.comment, 48 * 1024, true)) { issuePatch({ error: 'issueInvalid' }); return; }
+          command = { op: 'issue.comment', ...base, text: issue.comment };
+        } else if (kind === 'editComment') {
+          const edit = issue.editComment;
+          if (!edit || !Number.isSafeInteger(edit.version) || edit.version < 0 || !safeIssueText(edit.text, 48 * 1024, true)) { issuePatch({ error: 'issueInvalid' }); return; }
+          if (edit.text === edit.original) return;
+          command = { op: 'issue.editComment', ...base, commentId: edit.id, expectedVersion: edit.version, text: edit.text };
+        } else if (kind === 'link') {
+          const linked = !unlink, sessionId = unlink?.sessionId || issue.linkSessionId;
+          const validLinkChange = () => {
+            const current = memory.issue, ws = workspacesSource.getSnapshot(), sess = sessionsSource.getSnapshot(), member = ws.items.find(item => item.workspaceId === issue.workspaceId);
+            return current === issue && issueScope(current) && current.available && !current.loading && !current.pending && !current.unknown && !current.conflict && !adapter.issueMutationPending &&
+              current.generation === generation && adapter.privacyEpoch === epoch && memory.tracker.generation === trackerGeneration && current.links === links &&
+              Boolean(current.issueId && current.issue?.id === current.issueId && sessionId && ws.phase === 'ready' && ws.state !== 'error' && member?.sessionIds?.includes(sessionId) && (sessionState(sessionId, sess, ws) === 'available' || (!linked && sessionState(sessionId, sess, ws) === 'sessionArchived'))) &&
+              linked !== links.links.some(link => link.issueKey === current.key && link.issueId === current.issueId && link.sessionId === sessionId) &&
+              (linked ? current.linkSessionId === sessionId : unlink.token === current.token && unlink.generation === current.generation && unlink.epoch === adapter.privacyEpoch && unlink.trackerGeneration === memory.tracker.generation && unlink.links === links);
+          };
+          const generation = issue.generation, epoch = adapter.privacyEpoch, trackerGeneration = memory.tracker.generation, links = issue.links;
+          if (!links || !validLinkChange()) return;
+          if (!linked && (!window.confirm(t('issueConfirmUnlinkSession') + ' ' + issueSessionLabel(sessionId)) || !validLinkChange())) return;
+          ++adapter.boardLinksGeneration;
+          updateTracker({ boardLinks: null });
+          command = { op: 'links.set', workspaceId: issue.workspaceId, boardId: issue.boardId, issueKey: issue.key, issueId: issue.issueId, sessionId, linked, expectedRevision: links.revision };
+        } else {
+          selection = statusSelection.current;
+          if (!validStatusSelection(selection) || !Number.isSafeInteger(selection.version) || !window.confirm(t('issueConfirmTransition') + ' ' + selection.display + ': ' + selection.from.display + ' → ' + selection.to.display)) return;
+          // confirm() can synchronously trigger navigation, reauthorization or other state changes.
+          if (!validStatusSelection(selection) || adapter.issueMutationPending) return;
+          command = { op: 'issue.transition', ...base, transitionId: selection.id, expectedTo: selection.to };
+        }
+        if (new TextEncoder().encode(JSON.stringify(command)).byteLength > 64 * 1024) { issuePatch({ error: 'tooLarge' }); return; }
+        if (adapter.authorize) {
+          // The session relation is a separate access boundary: do not dispatch
+          // after selection, visibility, settings or link revision changes.
+          const epoch = adapter.privacyEpoch, generation = issue.generation;
+          const stillCurrent = () => issueScope(issue) && memory.issue === issue && memory.issue.generation === generation && adapter.privacyEpoch === epoch && !adapter.issueMutationPending && !unknownIssues.has(issueUnknownKey(issue));
+          let timer, authorizing = true;
+          try {
+            const authorized = await Promise.race([adapter.authorize(issue, () => authorizing && stillCurrent(), kind === 'link' ? command.expectedRevision : undefined), new Promise(resolve => { timer = window.setTimeout(() => resolve(false), 15000); })]);
+            if (!authorized || !stillCurrent()) { if (stillCurrent()) adapter.revoke(issue); return; }
+          } catch { if (stillCurrent()) adapter.revoke(issue); return; }
+          finally { authorizing = false; window.clearTimeout(timer); }
+        }
+        const epoch = adapter.privacyEpoch, generation = issue.generation;
+        adapter.issueMutationPending = true;
+        if (kind !== 'transition') unknownIssues.add(issueUnknownKey(issue));
+        issuePatch({ pending: true, confirmedWrite: false, ...(kind === 'transition' ? { preflight: true } : {}), error: '', notice: '' });
+        const accepts = () => issueScope(issue) && memory.issue.generation === generation && adapter.privacyEpoch === epoch;
+        if (kind === 'transition') {
+          try {
+            let timer;
+            const fresh = validIssue(await Promise.race([
+              transport.trackerCommand({ op: 'issue.read', ...base }),
+              new Promise((_, reject) => { timer = window.setTimeout(() => reject(new Error('preflight timeout')), 15000); }),
+            ]).finally(() => window.clearTimeout(timer)), issue.key);
+            if (!validStatusSelection(selection, true)) return;
+            if (fresh.id !== selection.issueId || fresh.version !== selection.version || !sameStatus(fresh.status, selection.from)) {
+              issuePatch({ pending: false, preflight: false, conflict: true, conflictKind: 'transition', error: 'issueConflict' }); return;
+            }
+          } catch (err) {
+            if (accepts()) {
+              if (err?.code === 'needs_reselect') invalidateIssueAccess(issue);
+              else { statusSelection.current = null; issuePatch({ pending: false, preflight: false, error: 'trackerError' }); }
+            }
+            return;
+          } finally {
+            if (!validStatusSelection(selection, true)) {
+              adapter.issueMutationPending = false;
+              if (memory.issue?.token === issue.token && memory.issue.preflight) issuePatch({ pending: false, preflight: false });
+            }
+          }
+          if (!validStatusSelection(selection, true)) { adapter.issueMutationPending = false; return; }
+          if (adapter.authorize) {
+            let timer;
+            try {
+              const authorized = await Promise.race([
+                adapter.authorize(issue, () => validStatusSelection(selection, true)),
+                new Promise(resolve => { timer = window.setTimeout(() => resolve(false), 15000); }),
+              ]).finally(() => window.clearTimeout(timer));
+              if (!authorized || !validStatusSelection(selection, true)) {
+                if (validStatusSelection(selection, true)) adapter.revoke(issue);
+                if (memory.issue?.token === issue.token && memory.issue.preflight) issuePatch({ pending: false, preflight: false });
+                adapter.issueMutationPending = false; return;
+              }
+            } catch {
+              if (validStatusSelection(selection, true)) adapter.revoke(issue);
+              if (memory.issue?.token === issue.token && memory.issue.preflight) issuePatch({ pending: false, preflight: false });
+              adapter.issueMutationPending = false; return;
+            }
+          }
+          issuePatch({ preflight: false });
+          unknownIssues.add(issueUnknownKey(issue));
+        }
+        try {
+          let timer;
+          const receipt = await Promise.race([transport.trackerCommand(command), new Promise((_, reject) => { timer = window.setTimeout(() => reject(Object.assign(new Error('write timeout'), { code: 'outcome_unknown' })), 15000); })]).finally(() => window.clearTimeout(timer));
+          if (!accepts()) return;
+          if (kind === 'fields' && (!Number.isSafeInteger(receipt?.version) || receipt.version < 0) || kind === 'comment' && (typeof receipt?.id !== 'string' || !receipt.id) || kind === 'editComment' && (receipt?.id !== command.commentId || !Number.isSafeInteger(receipt?.version) || receipt.version < 0) || kind === 'transition' && receipt?.ok !== true || kind === 'link' && (!Number.isSafeInteger(receipt?.revision) || ![command.expectedRevision, command.expectedRevision + 1].includes(receipt.revision))) throw new Error('invalid receipt');
+          unknownIssues.delete(issueUnknownKey(issue));
+          if (kind === 'link' && adapter.reconcileLink) {
+            // The write is confirmed; an access/readback failure is not an unknown mutation.
+            issuePatch({ confirmedWrite: true });
+            let verified = false;
+            let timer, reconciling = true;
+            try { verified = await Promise.race([adapter.reconcileLink(command, receipt, () => reconciling && accepts()), new Promise(resolve => { timer = window.setTimeout(() => resolve(false), 15000); })]); } catch {} finally { reconciling = false; window.clearTimeout(timer); }
+            if (!verified || !accepts()) {
+              if (accepts()) { issuePatch({ pending: false }); adapter.revoke(issue); }
+              return;
+            }
+          }
+          const current = memory.issue;
+          if (kind === 'fields') issuePatch({ pending: false, original: { ...current.draft }, issue: { ...current.issue, version: receipt.version }, assigneeEdited: false, dirty: Boolean(current.comment || current.editComment || current.transitionId || current.linkSessionId), notice: 'issueSaved' });
+          else if (kind === 'comment') { const keep = current.sendTargets?.length > 0; issuePatch({ pending: false, savedComment: keep ? current.comment : null, comment: keep ? current.comment : '', dirty: Boolean(keep || current.editComment || current.transitionId || current.linkSessionId || JSON.stringify(current.draft) !== JSON.stringify(current.original) || current.assigneeEdited), notice: keep ? 'sessionSendSaved' : 'issueSaved' }); }
+          else if (kind === 'editComment') issuePatch({ pending: false, editComment: null, dirty: Boolean(current.comment || current.transitionId || current.linkSessionId || JSON.stringify(current.draft) !== JSON.stringify(current.original) || current.assigneeEdited), notice: 'issueSaved' });
+          else if (kind === 'transition') issuePatch({ pending: false, transitionId: '', dirty: Boolean(current.comment || current.editComment || current.linkSessionId || JSON.stringify(current.draft) !== JSON.stringify(current.original) || current.assigneeEdited), notice: 'issueSaved' });
+          else { issuePatch({ pending: false, ...(command.linked ? { linkSessionId: '', addingSession: false } : {}), dirty: Boolean(current.comment || current.editComment || current.transitionId || (!command.linked && current.linkSessionId) || JSON.stringify(current.draft) !== JSON.stringify(current.original) || current.assigneeEdited), notice: 'issueSaved' }); updateTracker({ boardLinks: null }); void loadBoardLinks(); }
+          adapter.issueMutationPending = false;
+          void loadIssue();
+        } catch (err) {
+          if (!accepts()) return;
+          if (err?.code === 'needs_reselect') { invalidateIssueAccess(issue); return; }
+          const conflict = err.status === 409 || err.status === 412 || /conflict|precondition|transition_not_available/.test(err.code || '');
+          const unknown = !conflict && (!(err.status >= 400 && err.status < 500) || err.status === 499 || err.code === 'outcome_unknown');
+          if (unknown) unknownIssues.add(issueUnknownKey(issue)); else unknownIssues.delete(issueUnknownKey(issue));
+          issuePatch({ pending: false, unknown, conflict, conflictKind: conflict ? kind : '', error: unknown ? 'issueUnknown' : conflict ? 'issueConflict' : 'issueRejected' });
+        } finally {
+          adapter.issueMutationPending = false;
+          if (memory.issue?.token === issue.token && memory.issue.pending) { const confirmed = memory.issue.confirmedWrite; if (!confirmed) unknownIssues.add(issueUnknownKey(issue)); issuePatch({ pending: false, confirmedWrite: false, ...(!confirmed ? { unknown: true, error: 'issueUnknown' } : {}) }); }
+        }
+      }
+      function discardCommentEdit(reload = false, expected = memory.issue, expectedEpoch = adapter.privacyEpoch) {
+        const current = memory.issue;
+        if (current !== expected || adapter.privacyEpoch !== expectedEpoch || !issueScope(current) || !current.available || current.pending || !current.editComment || !window.confirm(t('discardDraft'))) return;
+        if (memory.issue !== current || adapter.privacyEpoch !== expectedEpoch || !issueScope(current) || !current.available || current.pending) return;
+        const commentConflict = current.conflict && current.conflictKind === 'editComment';
+        issuePatch({ editComment: null, ...(commentConflict ? { conflict: false, conflictKind: '', error: '' } : {}),
+          dirty: Boolean(current.comment || current.transitionId || current.linkSessionId || JSON.stringify(current.draft) !== JSON.stringify(current.original) || current.assigneeEdited) });
+        if (reload || commentConflict) void loadIssue();
+      }
+      function commentEditor(issue) {
+        const edit = issue.editComment, viewEpoch = adapter.privacyEpoch;
+        return h(React.Fragment, null,
+          h('p', { className: 'dsh-board-alert' }, t('issueCommentRaceWarning')),
+          h('label', null, t('issueEditCommentText'), h('textarea', { value: edit.text, maxLength: 48 * 1024, readOnly: issue.pending, onChange: e => { const current = memory.issue; if (issueScope(current) && current.available && !current.pending && current.editComment?.id === edit.id) issuePatch({ editComment: { ...current.editComment, text: e.target.value }, dirty: true, notice: '' }); } })),
+          h('button', { type: 'button', disabled: issue.pending || issue.unknown || issue.conflict || !edit.text.trim(), onClick: () => saveIssue('editComment') }, t('issueSaveCommentEdit')),
+          h('button', { type: 'button', disabled: issue.pending, 'aria-label': t('cancel') + ': ' + t('issueEditComment'), onClick: () => discardCommentEdit(false, issue, viewEpoch) }, t('cancel')));
+      }
+      function openIssueSession(stamp, id, event) {
+        // The drawer has its own link snapshot; boardLinks may be absent or stale.
+        const current = memory.issue, ws = workspacesSource.getSnapshot(), sess = sessionsSource.getSnapshot();
+        const owner = ws.items.find(item => item.workspaceId === stamp.workspaceId);
+        const valid = Boolean(current && current.token === stamp.token && current.generation === stamp.generation && memory.tracker.generation === stamp.trackerGeneration && adapter.privacyEpoch === stamp.privacyEpoch &&
+            issueScope(current) && current.available && !current.loading && !current.pending && !current.unknown &&
+            current.workspaceId === stamp.workspaceId && current.key === stamp.key && current.issueId === stamp.issueId && current.issueId && current.issue?.id === current.issueId &&
+            current.links === stamp.links && current.links?.links.some(link => link.issueKey === stamp.key && link.issueId === stamp.issueId && link.sessionId === id) &&
+            ws.phase === 'ready' && ws.state !== 'error' && Array.isArray(owner?.sessionIds) && owner.sessionIds.includes(id) && sessionState(id, sess, ws) === 'available' && sessionHandoffUrl(stamp.workspaceId, id));
+        if (!valid) { event.preventDefault(); return; }
+        if (event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) { event.preventDefault(); openSession(id); }
+      }
+      function toggleIssueAddSession(stamp) {
+        const current = memory.issue;
+        if (!issueScope(current) || current.token !== stamp.token || current.generation !== stamp.generation || adapter.privacyEpoch !== stamp.privacyEpoch || memory.tracker.generation !== stamp.trackerGeneration || !current.available || current.loading || current.pending || !current.links || current.links !== stamp.links) return;
+        if (current.addingSession && current.linkSessionId && !window.confirm(t('discardDraft'))) return;
+        if (memory.issue !== current || !issueScope(current) || current.generation !== stamp.generation || adapter.privacyEpoch !== stamp.privacyEpoch || memory.tracker.generation !== stamp.trackerGeneration || current.pending || current.links !== stamp.links) return;
+        issuePatch({ addingSession: !current.addingSession, ...(current.addingSession ? { linkSessionId: '', dirty: Boolean(current.comment || current.editComment || current.transitionId || JSON.stringify(current.draft) !== JSON.stringify(current.original) || current.assigneeEdited) } : {}) });
+      }
+      async function sendIssueToSessions() {
+        const initial = memory.issue;
+        if (!sessionService || typeof sessionService.using !== 'function' || !issueScope(initial) || !initial.available || initial.loading || initial.pending || initial.unknown || initial.conflict || adapter.issueMutationPending || !initial.links) return;
+        const selected = [...(initial.sendTargets || [])], text = initial.comment, revision = initial.links.revision;
+        if (!safeIssueText(text, 48 * 1024, true) || new TextEncoder().encode(text).byteLength > 48 * 1024 || !selected.length || selected.length > 20 || new Set(selected).size !== selected.length) { issuePatch({ error: 'issueInvalid' }); return; }
+        const stamp = { ...initial, trackerGeneration: memory.tracker.generation, epoch: adapter.privacyEpoch };
+        let sendActive = true;
+        const key = id => sessionSendKey(stamp, id, text);
+        const scopeValid = () => Boolean(sendActive && issueScope(stamp) && memory.issue.generation === stamp.generation && memory.tracker.generation === stamp.trackerGeneration && adapter.privacyEpoch === stamp.epoch && memory.issue.available && !memory.issue.loading && memory.issue.issue?.id === stamp.issueId);
+        const localValid = id => {
+          const current = memory.issue, ws = workspacesSource.getSnapshot(), catalog = sessionsSource.getSnapshot();
+          const owner = ws?.items?.find(item => item.workspaceId === stamp.workspaceId);
+          return Boolean(scopeValid() && current.comment === text && current.links?.revision === revision && current.links.links.some(link => link.issueKey === stamp.key && link.issueId === stamp.issueId && link.sessionId === id) && ws.phase === 'ready' && ws.state !== 'error' && owner?.sessionIds?.includes(id) && sessionState(id, catalog, ws) === 'available');
+        };
+        const unreserved = () => selected.every(id => !sessionSendLedger.has(key(id)));
+        if (!unreserved() || !selected.every(localValid) || !window.confirm(t('sessionSendConfirm') + '\n\n' + selected.map(id => issueSessionLabel(id)).join('\n') + '\n\n' + text)) return;
+        if (!unreserved() || !selected.every(localValid) || memory.issue.pending || adapter.issueMutationPending) return;
+        // Without a dispatch callback, reserve all targets until the helper returns.
+        // On an unexpected exception the conservative outcome is unknown, not unsent.
+        selected.forEach(id => sessionSendLedger.set(key(id), 'inflight'));
+        adapter.issueMutationPending = true;
+        issuePatch({ pending: true, sendOwner: stamp, sendResult: { state: 'stopped', targets: selected.map(id => ({ id, status: 'inflight' })) }, notice: '' });
+        const validateSession = async id => {
+          if (!localValid(id)) return false;
+          try {
+            if (adapter.authorize && (!await adapter.authorize(stamp, () => localValid(id)) || !localValid(id))) return false;
+            const result = validIssueLinks(await transport.trackerCommand({ op: 'links.issue.read', workspaceId: stamp.workspaceId, boardId: stamp.boardId, issueKey: stamp.key, issueId: stamp.issueId }), { key: stamp.key, issueId: stamp.issueId });
+            return Boolean(result && localValid(id) && result.revision === revision && result.links.some(link => link.sessionId === id));
+          } catch { return false; }
+        };
+        const record = (result, final = false) => {
+          if (!sendActive) return;
+          for (const item of result.targets) {
+            if (item.status === 'accepted' || item.status === 'unknown') sessionSendLedger.set(key(item.id), item.status);
+            else if (final && item.status === 'not-sent') sessionSendLedger.delete(key(item.id));
+          }
+          updateUnload();
+          if (scopeValid()) issuePatch({ ...(final ? { pending: false, sendTargets: selected.filter(id => !sessionSendLedger.has(key(id))) } : {}), sendResult: { state: result.state, targets: selected.map(id => ({ id, status: sessionSendLedger.get(key(id)) || 'not-sent' })) } });
+        };
+        try {
+          const sender = createSessionSender({ sessions: sessionService, validateSession });
+          const controller = new AbortController(); let timer;
+          try {
+            const result = await Promise.race([
+              sender.send(selected, text, { signal: controller.signal, onProgress: result => record(result) }),
+              new Promise((_, reject) => { timer = window.setTimeout(() => { controller.abort(); reject(new Error('send timeout')); }, 15000); }),
+            ]);
+            record(result, true);
+          } finally { window.clearTimeout(timer); }
+        } catch {
+          selected.forEach(id => { if (sessionSendLedger.get(key(id)) === 'inflight') sessionSendLedger.set(key(id), 'unknown'); });
+          updateUnload();
+          if (scopeValid()) issuePatch({ pending: false, sendResult: { state: 'unknown', targets: selected.map(id => ({ id, status: sessionSendLedger.get(key(id)) || 'not-sent' })) } });
+        } finally {
+          sendActive = false;
+          adapter.issueMutationPending = false;
+          // Release only this operation's lock, even when its scope was hidden or
+          // invalidated; never repaint its private result into a stale drawer.
+          if (memory.issue?.token === stamp.token && memory.issue.sendOwner === stamp) issuePatch({ pending: false, sendOwner: null });
+        }
+      }
+      function reviewSessionSend(issue, id) {
+        const text = issue.comment, key = sessionSendKey(issue, id, text), epoch = adapter.privacyEpoch, generation = issue.generation, trackerGeneration = memory.tracker.generation;
+        const valid = () => issueScope(issue) && memory.issue.generation === generation && adapter.privacyEpoch === epoch && memory.tracker.generation === trackerGeneration && memory.issue.available && !memory.issue.loading && !memory.issue.pending && memory.issue.comment === text && sessionSendLedger.get(key) === 'unknown';
+        if (!valid() || !window.confirm(t('sessionSendReviewConfirm') + '\n\n' + issueSessionLabel(id)) || !valid()) return;
+        sessionSendLedger.delete(key);
+        issuePatch({ sendResult: null });
+      }
+      function issueView() {
+        const issue = memory.issue;
+        if (!issue || !adapter.shouldRender(issue)) return null;
+        const visible = issue.available && issueScope(issue) && connection && trackerLive(workspaceId);
+        const retryAvailable = issueScope(issue) && !issue.loading && !issue.pending;
+        const sessionStamp = { token: issue.token, generation: issue.generation, trackerGeneration: memory.tracker.generation, privacyEpoch: adapter.privacyEpoch, epoch: adapter.privacyEpoch, workspaceId: issue.workspaceId, key: issue.key, issueId: issue.issueId, links: issue.links };
+        const viewEpoch = adapter.privacyEpoch;
+        const viewValid = () => memory.issue?.token === issue.token && memory.issue.generation === issue.generation && adapter.privacyEpoch === viewEpoch && issueScope(memory.issue) && memory.issue.available && !memory.issue.pending;
+        const statusOpen = visible && statusPopover === issue.token;
+        const statusDisabled = issue.pending || issue.unknown || issue.conflict || issue.loading || adapter.issueMutationPending || !issue.issueId || issue.issue?.id !== issue.issueId || !issue.transitions?.length;
+        const closeStatus = () => { setStatusPopover(null); statusSelection.current = null; const current = memory.issue; if (issueScope(current) && current.available && !current.pending && !current.unknown && !current.conflict && current.transitionId) issuePatch({ transitionId: '', dirty: Boolean(current.comment || current.editComment || current.linkSessionId || JSON.stringify(current.draft) !== JSON.stringify(current.original) || current.assigneeEdited) }); statusButton.current?.focus(); };
+        return h('aside', { className: (adapter.embedded ? 'dsh-board-tracker-embedded' : 'dsh-board-drawer') + ' dsh-board-tracker-drawer', style: adapter.embedded ? undefined : { width: drawerWidth() + 'px' }, 'aria-label': t('issueDetails'), onKeyDown: (event) => { if (event.key === 'Escape') { event.preventDefault(); if (statusOpen) closeStatus(); else closeIssue(issue, viewEpoch); } } },
+          !adapter.embedded && resizeHandle(), h('div', { className: 'dsh-board-tracker-head' },
+            h('h2', { ref: issueHeading, tabIndex: -1 }, visible ? h('a', { href: 'https://tracker.yandex.ru/' + encodeURIComponent(issue.key), target: '_blank', rel: 'noopener noreferrer' }, issue.key, ' ↗') : t('issueDetails')),
+            h('div', { className: 'dsh-board-tracker-head-actions' },
+              visible && !issue.editingFields && h('button', { ref: issueEditButton, type: 'button', disabled: issue.pending, onClick: () => { issueFocusRequest.current = { token: issue.token, editing: true }; issuePatch({ editingFields: true }); } }, t('edit')),
+              h('button', { type: 'button', disabled: !retryAvailable, onClick: loadIssue }, t('issueReload')),
+              h('button', { className: 'dsh-board-tracker-close', type: 'button', disabled: issue.pending, 'aria-label': t('close'), title: t('close'), onClick: () => closeIssue(issue, viewEpoch) }, '×'))),
+          h('div', { className: 'dsh-board-tracker-body' },
+            !visible ? h('p', { role: 'status' }, t(issue.loading ? 'loading' : issue.error || 'issueUnavailable')) : h(React.Fragment, null,
+              h('div', { className: 'dsh-board-tracker-hero' }, h('h3', null, issue.issue.summary),
+                h('div', { className: 'dsh-board-tracker-meta' },
+                  h('div', { style: { position: 'relative' } },
+                    h('button', { ref: statusButton, className: 'dsh-board-tracker-status', type: 'button', disabled: statusDisabled, 'aria-label': t('issueChangeStatus') + ': ' + issue.issue.status.display, 'aria-expanded': Boolean(statusOpen), 'aria-controls': 'dsh-board-issue-transitions', title: !issue.transitions.length ? t('issueTransitionsUnavailable') : t('issueChangeStatus'), onClick: () => { const current = memory.issue; if (!issueScope(current) || !current.available || current.pending || current.unknown || current.conflict || current.loading || adapter.issueMutationPending || current.issue?.id !== current.issueId || !current.transitions.length) return; if (statusOpen) closeStatus(); else setStatusPopover(current.token); } }, issue.issue.status.display),
+                    !issue.transitions.length && h('span', { className: 'dsh-board-muted' }, t('issueTransitionsUnavailable')),
+                    statusOpen && h('div', { id: 'dsh-board-issue-transitions', className: 'dsh-board-session-menu', role: 'group', 'aria-label': t('issueTransitions'), style: { position: 'absolute', zIndex: 2 } },
+                      issue.transitions.map((transition, index) => h('button', { key: transition.id, ref: index === 0 ? statusFirstOption : undefined, type: 'button', disabled: statusDisabled, 'aria-pressed': issue.transitionId === transition.id, onClick: () => { const current = memory.issue; if (!issueScope(current) || !current.available || current.pending || current.unknown || current.conflict || current.loading || adapter.issueMutationPending || current.issue?.id !== current.issueId || !current.transitions.some(item => item.id === transition.id && item.display === transition.display && item.to.id === transition.to.id && item.to.key === transition.to.key && item.to.display === transition.to.display)) return; statusSelection.current = Object.freeze({ token: current.token, generation: current.generation, epoch: adapter.privacyEpoch, issueId: current.issueId, version: current.liveVersion, id: transition.id, display: transition.display, to: Object.freeze({ ...transition.to }), from: Object.freeze({ ...current.issue.status }) }); editIssue('transitionId', transition.id); } }, transition.display, ' → ', transition.to.display)),
+                      h('button', { type: 'button', disabled: statusDisabled || !issue.transitions.some(item => item.id === issue.transitionId) || statusSelection.current?.token !== issue.token || statusSelection.current?.generation !== issue.generation || statusSelection.current?.id !== issue.transitionId, onClick: () => { const current = memory.issue, selection = statusSelection.current; if (!selection || !issueScope(current) || !current.available || current.token !== selection.token || current.generation !== selection.generation || current.transitionId !== selection.id) return; void saveIssue('transition'); } }, t('issueChangeStatus')))),
+                  h('p', null, t('assignee'), ': ', h('strong', null, issue.issue.assigneeKnown ? (issue.issue.assignee?.display || t('unassigned')) : t('assigneeUnknown'))))),
+              h('div', { className: 'dsh-board-tracker-notices' },
+                issue.error && h('p', { role: 'alert' }, t(issue.error)), issue.notice && h('p', { role: 'status' }, t(issue.notice)),
+                issue.unknown && h('button', { type: 'button', onClick: () => { if (viewValid() && window.confirm(t('issueUnknown')) && viewValid() && memory.issue.unknown) { unknownIssues.delete(issueUnknownKey(issue)); issuePatch({ unknown: false, error: '' }); } } }, t('issueReview')),
+                issue.conflict && h('button', { type: 'button', onClick: () => { if (viewValid() && window.confirm(t('discardDraft')) && viewValid() && memory.issue.conflict) { const current = memory.issue; issuePatch({ conflict: false, conflictKind: '', available: false, draft: null, original: null, dirty: Boolean(current.comment || current.editComment || current.transitionId || current.linkSessionId), assigneeEdited: false }); void loadIssue(); } } }, t('issueDiscardConflict')),
+                issue.conflict && issue.conflictKind === 'editComment' && issue.editComment && h('button', { type: 'button', onClick: () => discardCommentEdit(true, issue, viewEpoch) }, t('issueDiscardCommentConflict'))),
+              h('p', { className: 'dsh-board-tracker-separate' }, t('issueSeparateOperations')),
+              !issue.editingFields && issue.draft && issue.original && (JSON.stringify(issue.draft) !== JSON.stringify(issue.original) || (issue.assigneeEdited && !issue.issue.assigneeKnown)) && h('p', { className: 'dsh-board-tracker-draft', role: 'status' }, t('unsaved')),
+              h('section', { className: 'dsh-board-tracker-section' },
+                h('h3', null, t('description')),
+                issue.editingFields ? h(React.Fragment, null,
+                  h('label', null, t('title'), h('input', { ref: issueTitleInput, value: issue.draft.summary, maxLength: 4096, readOnly: issue.pending, onChange: (e) => editIssue('summary', e.target.value) })),
+                  h('label', null, t('description'), h('textarea', { value: issue.draft.description, maxLength: 48 * 1024, readOnly: issue.pending, onChange: (e) => editIssue('description', e.target.value) })),
+                  h('label', null, t('issueAssigneeId'), h('input', { value: issue.draft.assignee, maxLength: 128, readOnly: issue.pending, onChange: (e) => editIssue('assignee', e.target.value) })),
+                  !issue.issue.assigneeKnown && h('p', null, t('assigneeUnknown')), issue.issue.version === null && h('p', null, t('issueVersionUnavailable')),
+                  h('div', { className: 'dsh-board-row' }, h('button', { className: 'dsh-board-primary', type: 'button', disabled: issue.pending || issue.unknown || issue.conflict || issue.issue.version === null, onClick: () => saveIssue('fields') }, t('issueSaveFields')), h('button', { type: 'button', disabled: issue.pending, onClick: () => { issueFocusRequest.current = { token: issue.token, editing: false }; issuePatch({ editingFields: false }); } }, t('issueKeepDraft')))) :
+                  renderTrackerText(issue.issue.description || t('emptyDescription'))),
+              h('section', { className: 'dsh-board-tracker-section' }, h('div', { className: 'dsh-board-tracker-session-heading' }, h('h3', null, t('sessions')),
+                issue.links?.links.length > 0 && h('button', { type: 'button', disabled: issue.pending, 'aria-expanded': Boolean(issue.addingSession), 'aria-label': t(issue.addingSession ? 'issueCancelAddSession' : 'issueAddSession'), onClick: () => toggleIssueAddSession(sessionStamp) }, issue.addingSession ? t('issueCancelAddSession') : '+')), issue.links ? h(React.Fragment, null,
+                h('p', { className: 'dsh-board-muted' }, t('issueSessionPartial')),
+                h('ul', { className: 'dsh-board-tracker-list' }, issue.links.links.filter(link => issue.issueId && issue.issue?.id === issue.issueId && link.issueId === issue.issueId && link.issueKey === issue.key && workspace?.sessionIds?.includes(link.sessionId)).map(link => {
+                  const state = sessionState(link.sessionId, sessions, workspaces), href = sessionHandoffUrl(issue.workspaceId, link.sessionId);
+                  const unavailable = state !== 'available' || issue.loading || issue.pending || issue.unknown || !href;
+                  const unlinkDisabled = !['available', 'sessionArchived'].includes(state) || issue.loading || issue.pending || issue.unknown || issue.conflict;
+                  return h('li', { className: 'dsh-board-tracker-session', key: link.sessionId }, unavailable ? h('span', null, issueSessionLabel(link.sessionId), ' — ', t(state !== 'available' ? state : 'issueUnavailable')) : h('a', { className: 'dsh-board-tracker-session-link', href, onClick: event => openIssueSession(sessionStamp, link.sessionId, event), onAuxClick: event => openIssueSession(sessionStamp, link.sessionId, event) }, issueSessionLabel(link.sessionId)),
+                    h('button', { type: 'button', className: 'dsh-board-tracker-session-unlink', disabled: unlinkDisabled, 'aria-label': t('issueUnlinkSession') + ': ' + issueSessionLabel(link.sessionId), onClick: () => saveIssue('link', { ...sessionStamp, sessionId: link.sessionId }) }, t('issueUnlinkSession')));
+                })),
+                (issue.links.links.length === 0 || issue.addingSession) && h(React.Fragment, null,
+                  h('label', null, t('issueChooseSession'), h('select', { value: issue.linkSessionId, disabled: issue.pending, onChange: e => editIssue('linkSessionId', e.target.value) }, h('option', { value: '' }, t('issueChooseSession')), availableSessions.filter(id => sessionState(id, sessions, workspaces) === 'available' && !issue.links.links.some(link => link.sessionId === id)).map(id => h('option', { key: id, value: id }, issueSessionLabel(id))))),
+                  h('button', { type: 'button', disabled: issue.pending || issue.unknown || issue.conflict || !issue.issueId || issue.issue?.id !== issue.issueId || !issue.linkSessionId, onClick: () => saveIssue('link') }, t('issueLinkSave')))) : h('p', null, t('issueLinkUnavailable'))),
+              h('section', { className: 'dsh-board-tracker-section' }, h('h3', null, t('issueComments')), h('div', { className: 'dsh-board-comment-summary', role: 'status' }, h('strong', null, t('issueCommentsLoaded'), ' ', String(issue.comments.length)), h('span', null, t(({ loading: 'issueCommentsLoading', complete: 'issueCommentsComplete', partial: 'issueCommentsPartial', terminalPartial: 'issueCommentsTerminalPartial', error: 'issueCommentsError', invalid: 'issueCommentsInvalid', limit: 'issueCommentsLimit' })[issue.commentsState]))),
+                h('div', { className: 'dsh-board-comment-composer' }, h('label', null, t('issueNewComment'), h('textarea', { value: issue.comment, maxLength: 48 * 1024, readOnly: issue.pending, onChange: (e) => editIssue('comment', e.target.value) })), h('button', { className: 'dsh-board-primary', type: 'button', disabled: issue.pending || issue.unknown || issue.conflict || !issue.comment.trim() || issue.savedComment === issue.comment, onClick: () => saveIssue('comment') }, t('issueAddComment')),
+                  issue.links && issue.links.links.length > 0 && h(React.Fragment, null,
+                    h('fieldset', { disabled: issue.pending }, h('legend', null, t('sessionSendChoose')), issue.links.links.filter(link => workspace?.sessionIds?.includes(link.sessionId) && link.issueKey === issue.key && link.issueId === issue.issueId).map(link => {
+                      const id = link.sessionId, status = sessionSendLedger.get(sessionSendKey(issue, id, issue.comment));
+                      return h('div', { key: id }, h('label', null, h('input', { type: 'checkbox', checked: (issue.sendTargets || []).includes(id), disabled: sessionState(id, sessions, workspaces) !== 'available' || Boolean(status), onChange: e => { const current = memory.issue; if (!issueScope(current) || current.pending || sessionSendLedger.has(sessionSendKey(current, id, current.comment)) || !current.links?.links.some(item => item.sessionId === id && item.issueId === current.issueId)) return; const ids = current.sendTargets || []; issuePatch({ sendTargets: e.target.checked ? [...new Set([...ids, id])] : ids.filter(item => item !== id), sendResult: null }); } }), issueSessionLabel(id)), status && h('span', { role: 'status' }, ' — ', t(status === 'accepted' ? 'sessionSendAccepted' : status === 'unknown' ? 'sessionSendUnknown' : 'sessionSendInflight')), status === 'unknown' && h('button', { type: 'button', disabled: issue.pending, onClick: () => reviewSessionSend(issue, id) }, t('sessionSendReview')));
+                    })),
+                    h('p', { className: 'dsh-board-muted' }, t('sessionSendWarning')),
+                    typeof sessionService?.using !== 'function' && h('p', null, t('sessionSendUnavailable')),
+                    h('button', { type: 'button', disabled: issue.pending || issue.unknown || issue.conflict || !issue.comment.trim() || !(issue.sendTargets || []).length || issue.sendTargets.some(id => sessionSendLedger.has(sessionSendKey(issue, id, issue.comment))) || typeof sessionService?.using !== 'function', onClick: sendIssueToSessions }, t('sessionSendAction'))),
+                  issue.sendResult && h('ul', { role: 'status' }, issue.sendResult.targets.map(item => h('li', { key: item.id }, issueSessionLabel(item.id), ' — ', t(item.status === 'accepted' ? 'sessionSendAccepted' : item.status === 'unknown' ? 'sessionSendUnknown' : item.status === 'inflight' ? 'sessionSendInflight' : 'sessionSendNotSent'))))),
+                h('ul', { className: 'dsh-board-tracker-list' }, issue.comments.map((comment) => h('li', { className: 'dsh-board-tracker-comment', key: comment.id }, h('div', { className: 'dsh-board-tracker-comment-meta' }, h('span', { className: 'dsh-board-comment-avatar', 'aria-hidden': true }, commentInitials(comment.createdBy.display)), h('strong', null, comment.createdBy.display), h('time', { dateTime: comment.createdAt, title: comment.createdAt }, commentTime(comment.createdAt))), renderTrackerText(comment.text),
+                issue.editComment?.id === comment.id ? commentEditor(issue) :
+                  Number.isSafeInteger(comment.version) && comment.version >= 0 ? h('button', { type: 'button', disabled: issue.pending || Boolean(issue.editComment), 'aria-label': t('issueEditComment') + ': ' + comment.id, onClick: () => { const current = memory.issue; if (issueScope(current) && current.available && !current.pending && !current.editComment) issuePatch({ editComment: { id: comment.id, version: comment.version, original: comment.text, text: comment.text }, dirty: true, notice: '' }); } }, t('issueEditComment')) : h('p', { className: 'dsh-board-muted' }, t('issueCommentVersionUnavailable'))))),
+                issue.editComment && !issue.comments.some(comment => comment.id === issue.editComment.id) && h('div', null, h('p', { role: 'status' }, t('issueEditedCommentMissing')), commentEditor(issue)),
+                ['partial', 'error'].includes(issue.commentsState) && h('button', { type: 'button', disabled: issue.pending, onClick: loadMoreComments }, t('issueCommentsMore'))))));
+      }
+      useEffect(() => {
+        const issue = memory.issue;
+        if (!adapter.embedded && issue && !issue.available && !issue.loading && !issue.pending && issueScope(issue) && tracker.board && !tracker.busy && (!issue.error || issue.unknown)) void loadIssue();
+      }, [tracker.board, tracker.busy, tracker.settings, connection, memory.issue?.pending]);
+      return { closeIssue, openIssue, issueView, issueScope, invalidateIssueAccess, loadIssue };
+    }
+    function SessionIssueEditor({ target, authorization, onClose, transport, workspacesSource, sessionsSource, connectionSource, sessionService, openSession, t }) {
+      const workspaces = useSource(workspacesSource), sessions = useSource(sessionsSource), connection = useSource(connectionSource);
+      const [, render] = useState(0), [statusPopover, setStatusPopover] = useState(null);
+      const store = useRef(null), statusSelection = useRef(null), statusButton = useRef(null), statusFirstOption = useRef(null);
+      const issueHeading = useRef(null), issueEditButton = useRef(null), issueTitleInput = useRef(null), issueFocusRequest = useRef(null), issueOrigin = useRef(null);
+      const identity = JSON.stringify([target.sessionId, target.workspaceId, target.incarnation, target.connectionId, target.settings.revision, target.boardId, target.key, target.issueId]);
+      if (!store.current || store.current.identity !== identity) {
+        const cached = sessionIssueStores.get(identity);
+        const issue = cached?.memory.issue || { token: {}, generation: 0, workspaceId: target.workspaceId, boardId: target.boardId, key: target.key, issueId: target.issueId, connectionId: target.connectionId, incarnation: target.incarnation, settingsRevision: target.settings.revision, draft: null, comment: '', editComment: null, transitionId: '', linkSessionId: '', addingSession: false, sendTargets: [], sendResult: null, savedComment: null, editingFields: false, dirty: false, pending: false, unknown: false, loading: false, available: false, error: '', notice: '' };
+        issue.unknown = issue.unknown || unknownIssues.has(issueUnknownKey(issue));
+        store.current = cached || { identity, target: { sessionId: target.sessionId, workspaceId: target.workspaceId, incarnation: target.incarnation, connectionId: target.connectionId }, epoch: 0, globalEpoch: privacyEpoch, active: false, memory: { issue, tracker: { settings: target.settings, incarnations: { [target.workspaceId]: target.incarnation }, generation: 0, busy: false, board: null }, workspaceId: target.workspaceId, boardId: target.boardId, provider: 'tracker', overview: false, showContext: false } };
+        sessionIssueStores.set(identity, store.current);
+      }
+      const holder = store.current, local = holder.memory;
+      const current = () => store.current === holder && sessionIssueStores.get(identity) === holder && holder.active && !trackerMutationPending && holder.globalEpoch === privacyEpoch && authorization.valid() && connectionSource.getSnapshot()?.id === target.connectionId;
+      const update = patch => { if (store.current !== holder || !holder.active) return; Object.assign(local, patch); updateUnload(); render(value => value + 1); };
+      const revoke = issue => {
+        if (store.current !== holder || local.issue?.token !== issue?.token) return;
+        const current = local.issue, writing = current.pending && !current.preflight && !current.sendOwner && !current.confirmedWrite;
+        if (writing || current.unknown) unknownIssues.add(issueUnknownKey(current));
+        holder.epoch++;
+        update({ issue: { ...current, generation: current.generation + 1, available: false, loading: false, comments: [], commentsOwner: null, unknown: current.unknown || writing, error: writing ? 'issueUnknown' : 'issueUnavailable' } });
+      };
+      const owner = workspaces.items?.find(item => item.workspaceId === target.workspaceId);
+      const availableSessions = owner?.sessionIds?.filter(id => sessions.phase === 'ready' && sessions.ids?.includes(id)) || [];
+      const issueSessionLabel = id => { const title = sessions.byId?.[id]?.displayTitle || sessions.byId?.[id]?.title; return typeof title === 'string' && title.trim() && !title.includes(id) ? title.trim() : t('untitled'); };
+      const editor = createIssueEditor({ memory: local, updateMemory: update, connectionSource, transport, workspacesSource, sessionsSource,
+        sessionService, openSession, t, workspaces, sessions, workspace: owner, workspaceId: target.workspaceId, boardId: target.boardId,
+        tracker: local.tracker, connection, availableSessions, issueSessionLabel, statusSelection, statusPopover, setStatusPopover, statusButton, statusFirstOption,
+        issueHeading, issueEditButton, issueTitleInput, issueFocusRequest, issueOrigin, embedded: true,
+        trackerActive: current, currentWorkspace: () => current(), trackerLive: () => current(), shouldRender: () => current(),
+        setForm: () => true, setSessionMenu: () => {}, updateTracker: patch => {
+          if (Object.hasOwn(patch, 'boardLinks') && memory.workspaceId === target.workspaceId && memory.boardId === target.boardId) updateMemory({ tracker: { ...memory.tracker, boardLinks: null } });
+          update({ tracker: { ...local.tracker, ...patch } });
+        },
+        invalidateTracker: () => {}, loadTracker: () => {}, loadBoardLinks: () => {}, drawerWidth: () => 0, resizeHandle: () => null,
+        onClose: () => { sessionIssueStores.delete(identity); updateUnload(); onClose(); }, revoke, invalidateIssueAccess: revoke,
+        issueScope(issue) { return Boolean(current() && issue && local.issue?.token === issue.token && issue.connectionId === target.connectionId && issue.workspaceId === target.workspaceId && issue.boardId === target.boardId && issue.issueId === target.issueId && issue.settingsRevision === target.settings.revision); },
+        async authorize(issue, accepts, revision) { return authorization.authorize(issue, accepts, revision); },
+        async reconcileLink(command, receipt, accepts) { return authorization.reconcileLink(command, receipt, accepts); },
+        get privacyEpoch() { return holder.epoch; },
+        get issueMutationPending() { return issueMutationPending; }, set issueMutationPending(value) { issueMutationPending = value; },
+        get boardLinksGeneration() { return boardLinksGeneration; }, set boardLinksGeneration(value) { boardLinksGeneration = value; },
+      });
+      useEffect(() => {
+        if (statusPopover && local.issue?.token === statusPopover && local.issue.available && editor.issueScope(local.issue)) statusFirstOption.current?.focus();
+      }, [statusPopover]);
+      useEffect(() => {
+        const issue = local.issue;
+        if (statusPopover && (!issue || issue.token !== statusPopover || !issue.available || !editor.issueScope(issue))) setStatusPopover(null);
+        const request = issueFocusRequest.current;
+        if (request && issue?.token === request.token && issue.available && issue.editingFields === request.editing && editor.issueScope(issue)) {
+          const target = request.editing ? issueTitleInput.current : issueEditButton.current;
+          if (target) { issueFocusRequest.current = null; target.focus(); }
+        } else if (request && issue?.token !== request.token) issueFocusRequest.current = null;
+      });
+      useEffect(() => {
+        holder.active = true; holder.globalEpoch = privacyEpoch; sessionIssueStores.set(identity, holder); sessionIssues.add(holder); updateUnload(); render(value => value + 1);
+        // StrictMode may set up, clean up, and immediately set up again.
+        if (local.issue?.loading) local.issue = { ...local.issue, loading: false, generation: local.issue.generation + 1 };
+        if (current()) void editor.loadIssue();
+        const onGlobal = () => {
+          if (holder.globalEpoch !== privacyEpoch) {
+            const issue = local.issue, writing = issue?.pending && !issue.preflight && !issue.sendOwner && !issue.confirmedWrite;
+            if (writing) unknownIssues.add(issueUnknownKey(issue));
+            holder.epoch++; holder.globalEpoch = privacyEpoch;
+            if (issue) local.issue = { ...issue, generation: issue.generation + 1, available: false, loading: false, pending: false, comments: [], commentsOwner: null, unknown: issue.unknown || writing };
+          }
+          updateUnload(); render(value => value + 1);
+        };
+        memory.listeners.add(onGlobal);
+        return () => {
+          holder.active = false; holder.epoch++; memory.listeners.delete(onGlobal); sessionIssues.delete(holder);
+          const issue = local.issue;
+          if (issue) {
+            const writing = issue.pending && !issue.preflight && !issue.sendOwner && !issue.confirmedWrite;
+            if (writing || issue.unknown) unknownIssues.add(issueUnknownKey(issue));
+            local.issue = { ...issue, generation: issue.generation + 1, available: false, loading: false, pending: false, preflight: false, comments: [], commentsOwner: null, unknown: issue.unknown || writing };
+            if (!issue.dirty && !issue.unknown && !writing && sessionIssueStores.get(identity) === holder) sessionIssueStores.delete(identity);
+          }
+          updateUnload();
+        };
+      }, [identity]);
+      useEffect(() => {
+        if (current() && local.issue && !local.issue.available && !local.issue.loading && !local.issue.pending && !local.issue.error) void editor.loadIssue();
+      });
+      return h('div', { className: 'dsh-board' }, h('style', null, css + '\n.dsh-board .dsh-board-tracker-embedded{position:static;width:100%;min-width:0;max-width:100%;height:auto;box-shadow:none;overflow:visible}'), editor.issueView());
     }
     function Page({ t, transport, workspacesSource, sessionsSource, sessionService, openSession, sessionContext, connectionSource, panelSource }) {
       const connection = useSource(connectionSource);
@@ -1210,6 +1824,12 @@ function createSessionSender({ sessions, validateSession }) {
         // Titles are not unique. Keep the complete stable ID visible for an
         // unambiguous session choice and independently verifiable links.
         return title && title !== id ? `${title} (${id})` : id;
+      }
+      function issueSessionLabel(id) {
+        const title = sessions.byId[id]?.displayTitle || sessions.byId[id]?.title;
+        // Catalog titles can themselves contain the opaque ID (including a
+        // padded bare ID). Do not leak it through issue-session labels.
+        return typeof title === 'string' && title.trim() && !title.includes(id) ? title.trim() : t('untitled');
       }
       async function load() {
         if (memory.pending || !trackerActive() || connectionSource.getSnapshot()?.id === undefined) return;
@@ -1375,7 +1995,7 @@ function createSessionSender({ sessions, validateSession }) {
       function suspendIssueForRefresh() {
         const issue = memory.issue;
         if (!issue) return;
-        const writing = issue.pending && !issue.preflight && !issue.sendOwner;
+        const writing = issue.pending && !issue.preflight && !issue.sendOwner && !issue.confirmedWrite;
         if (writing) unknownIssues.add(issueUnknownKey(issue));
         updateMemory({ issue: { ...issue, available: false, loading: false, generation: issue.generation + 1, unknown: issue.unknown || writing, error: writing ? 'issueUnknown' : issue.error } });
       }
@@ -1437,10 +2057,12 @@ function createSessionSender({ sessions, validateSession }) {
       useEffect(() => () => { ++silentTracker.current.sequence; silentTracker.current.running = false; }, []);
       async function configureTracker() {
         const current = memory.tracker;
-        if (current.busy || !current.settings || (current.settings.configured && !window.confirm(t('trackerConfigureWarning')))) return;
+        if (current.busy || issueMutationPending || trackerMutationPending || !current.settings || (current.settings.configured && !window.confirm(t('trackerConfigureWarning')))) return;
+        if (issueMutationPending || trackerMutationPending || memory.tracker !== current) return;
         const revision = current.settings.revision, connectionId = connectionSource.getSnapshot()?.id;
         if (connectionId === undefined) return;
-        const generation = current.generation + 1, epoch = privacyEpoch;
+        sessionIssueStores.clear(); updateUnload();
+        const generation = current.generation + 1, epoch = ++privacyEpoch;
         trackerMutationPending = true;
         discardTrackerIssue();
         updateTracker({ busy: true, mutating: true, error: '', notice: '', listing: null, pickerWorkspace: '', board: null, boardLinks: null, settings: null, generation });
@@ -1480,14 +2102,16 @@ function createSessionSender({ sessions, validateSession }) {
       }
       async function selectTrackerBoards() {
         const current = memory.tracker, target = memory.workspaceId;
-        if (current.busy || !current.settings || !current.listing || current.pickerWorkspace !== target || !workspaceReady) return;
+        if (current.busy || issueMutationPending || trackerMutationPending || !current.settings || !current.listing || current.pickerWorkspace !== target || !workspaceReady) return;
         if (Date.now() - current.listingStarted >= 30000 || current.reviewRequired) { updateTracker({ error: 'trackerListRequired' }); return; }
         if (current.picked.some((id) => !current.listing.boards.some((board) => board.id === id))) { updateTracker({ error: 'trackerListRequired' }); return; }
         const revision = current.settings.revision, connectionId = connectionSource.getSnapshot()?.id;
         if (connectionId === undefined || !currentWorkspace(target)) return;
         const removed = (current.settings.workspaces[target] || []).filter((id) => !current.picked.includes(id));
         if (!window.confirm(t('trackerConfirmSelection') + (removed.join(', ') || '—'))) return;
-        const generation = current.generation + 1, incarnations = workspaceIncarnations(), epoch = privacyEpoch;
+        if (issueMutationPending || trackerMutationPending || memory.tracker !== current || memory.workspaceId !== target || connectionSource.getSnapshot()?.id !== connectionId || !currentWorkspace(target)) return;
+        sessionIssueStores.clear(); updateUnload();
+        const generation = current.generation + 1, incarnations = workspaceIncarnations(), epoch = ++privacyEpoch;
         trackerMutationPending = true;
         discardTrackerIssue(target);
         updateTracker({ busy: true, mutating: true, error: '', notice: '', settings: null, listing: null, pickerWorkspace: '', draftWorkspace: target, draftPicked: [...current.picked], draftIncarnation: incarnations[target], reviewRequired: true, board: null, boardLinks: null, generation });
@@ -1675,107 +2299,6 @@ function createSessionSender({ sessions, validateSession }) {
           h('div', { className: 'dsh-board-row' }, h('button', { type: 'submit', disabled: busy || loading || uncertain || !snapshot || (form.kind !== 'board' && !selected) || ((form.kind === 'board' || form.kind === 'status') && !form.name.trim()) || (form.kind === 'task' && (!form.title.trim() || !form.statusId)) }, busy ? t('saving') : t('save')),
             h('button', { type: 'button', disabled: busy || uncertain, onClick: () => setForm(null) }, t('cancel'))));
       }
-      // An issue draft belongs to one connection, workspace incarnation and board.
-      // Reselection discards it; ordinary board refresh keeps it independently.
-      function closeIssue() {
-        const issue = memory.issue;
-        if (!issue) return true;
-        if (issue.pending) return false;
-        if ((issue.dirty || issue.unknown) && !window.confirm(t('discardDraft'))) return false;
-        updateMemory({ issue: null });
-        return true;
-      }
-      function issueScope(issue, requireAccess = true) {
-        const settings = memory.tracker.settings;
-        return Boolean(issue && memory.issue?.token === issue.token && connectionSource.getSnapshot()?.id === issue.connectionId && trackerActive() &&
-          memory.provider === 'tracker' && !memory.overview && !memory.showContext && memory.workspaceId === issue.workspaceId && memory.boardId === issue.boardId &&
-          currentWorkspace(issue.workspaceId, issue.incarnation) && (!requireAccess || (settings && settings.revision === issue.settingsRevision && !settings.needsReselect.includes(issue.workspaceId) && settings.workspaces[issue.workspaceId]?.includes(issue.boardId))));
-      }
-      function issuePatch(patch) { if (memory.issue) updateMemory({ issue: { ...memory.issue, ...patch } }); }
-      function validIssue(value, key) {
-        const status = value?.status, assignee = value?.assignee;
-        if (!value || value.key !== key || typeof value.summary !== 'string' || !(value.description === null || typeof value.description === 'string') ||
-            !(value.version === null || (Number.isSafeInteger(value.version) && value.version >= 0)) || typeof value.assigneeKnown !== 'boolean' ||
-            (value.assigneeKnown && assignee !== null && (!assignee || typeof assignee.id !== 'string' || !assignee.id || typeof assignee.display !== 'string')) ||
-            !status || typeof status.id !== 'string' || typeof status.key !== 'string' || typeof status.display !== 'string') throw new Error('invalid response');
-        return value;
-      }
-      function validTransitions(value) {
-        if (!Array.isArray(value) || value.some((item) => !item || typeof item.id !== 'string' || !item.id || typeof item.display !== 'string' || !item.to || ['id', 'key', 'display'].some((k) => typeof item.to[k] !== 'string' || !item.to[k])) || new Set(value.map((item) => item.id)).size !== value.length) throw new Error('invalid response');
-        return value.map(({ id, display, to }) => ({ id, display, to: { id: to.id, key: to.key, display: to.display } }));
-      }
-      const validCommentCursor = value => typeof value === 'string' && /^(?:0|[1-9][0-9]{0,15})$/.test(value) && Number.isSafeInteger(Number(value));
-      function validComments(value, cursor, seenIds, seenCursors) {
-        if (!value || typeof value.complete !== 'boolean' || !Array.isArray(value.comments) || value.comments.length > 100 ||
-            (value.complete ? value.nextCursor !== null : value.nextCursor !== null && (!validCommentCursor(value.nextCursor) || cursor !== null && Number(value.nextCursor) <= Number(cursor) || seenCursors.includes(value.nextCursor))) ||
-            value.comments.some((c) => !c || typeof c.id !== 'string' || !c.id || typeof c.text !== 'string' || !c.createdBy || typeof c.createdBy.display !== 'string' || typeof c.createdAt !== 'string')) throw new Error('invalid response');
-        const ids = new Set(seenIds);
-        for (const comment of value.comments) { if (ids.has(comment.id)) throw new Error('invalid response'); ids.add(comment.id); }
-        return value;
-      }
-      function commentInitials(name) {
-        return name.trim().split(/\s+/u).filter(Boolean).slice(0, 2).map(part => Array.from(part)[0]).join('').toLocaleUpperCase() || '?';
-      }
-      function commentTime(value) {
-        const date = new Date(value);
-        return Number.isFinite(date.getTime()) ? date.toLocaleString() : value;
-      }
-      // Each bounded turn has a single owner and checks the complete privacy scope on
-      // both sides of every await. The server independently revalidates each page.
-      async function loadCommentPages(stamp, firstResult) {
-        const accepts = () => issueScope(stamp) && memory.issue.generation === stamp.generation && privacyEpoch === stamp.epoch && memory.issue.available && !memory.issue.loading && memory.issue.issue?.id === stamp.issueId && memory.issue.commentsOwner === stamp.owner;
-        if (!accepts()) return;
-        let result = firstResult;
-        for (let page = 0; page < 10; page++) {
-          if (!accepts()) return;
-          const current = memory.issue, cursor = current.commentsCursor;
-          try {
-            if (!result) {
-              if (!accepts()) return;
-              result = { value: await transport.trackerCommand({ op: 'issue.comments', workspaceId: stamp.workspaceId, boardId: stamp.boardId, issueKey: stamp.key, issueId: stamp.issueId, ...(cursor === null ? {} : { cursor }) }) };
-              if (!accepts()) return;
-            }
-            if (result.error) throw result.error;
-            const value = validComments(result.value, cursor, current.comments.map(comment => comment.id), current.commentsCursors);
-            const bytes = new TextEncoder().encode(JSON.stringify(value.comments)).byteLength;
-            if (current.comments.length + value.comments.length > 1000 || current.commentsBytes + bytes > 2 * 1024 * 1024) {
-              issuePatch({ commentsState: 'limit', commentsOwner: null }); return;
-            }
-            const comments = [...current.comments, ...value.comments], totalBytes = current.commentsBytes + bytes;
-            const state = value.complete ? 'complete' : comments.length >= 1000 || totalBytes >= 2 * 1024 * 1024 ? 'limit' : value.nextCursor === null ? 'terminalPartial' : page === 9 ? 'partial' : 'loading';
-            issuePatch({ comments, commentsBytes: totalBytes, commentsCursor: value.nextCursor, commentsCursors: value.nextCursor === null ? current.commentsCursors : [...current.commentsCursors, value.nextCursor], commentsState: state, ...(state !== 'loading' ? { commentsOwner: null } : {}) });
-            if (state !== 'loading') return;
-            result = null;
-          } catch (error) {
-            if (!accepts()) return;
-            if (error?.code === 'needs_reselect') invalidateIssueAccess(stamp);
-            else if ([401, 403, 404, 409, 412].includes(error?.status) || ['unauthorized', 'forbidden', 'not_found', 'issue_not_in_selected_boards', 'board_not_selected', 'conflict', 'credential_changed', 'credentials_unavailable', 'invalid_credentials', 'scope_expired'].includes(error?.code)) {
-              // Revocation, changed identity, or lost membership is not a
-              // recoverable page error: do not retain previously visible data.
-              const issue = memory.issue, writing = issue.pending && !issue.preflight && !issue.sendOwner;
-              if (writing) unknownIssues.add(issueUnknownKey(issue));
-              issuePatch({ generation: issue.generation + 1, available: false, comments: [], commentsBytes: 0, commentsCursor: null, commentsCursors: [], commentsState: 'error', commentsOwner: null, unknown: issue.unknown || writing, error: writing ? 'issueUnknown' : 'issueUnavailable' });
-            } else issuePatch({ commentsState: error?.message === 'invalid response' ? 'invalid' : 'error', commentsOwner: null });
-            return;
-          }
-        }
-      }
-      function loadMoreComments() {
-        const issue = memory.issue;
-        if (!issueScope(issue) || !issue.available || issue.loading || issue.pending || !['partial', 'error'].includes(issue.commentsState)) return;
-        const owner = {};
-        issuePatch({ commentsState: 'loading', commentsOwner: owner });
-        void loadCommentPages({ ...issue, epoch: privacyEpoch, owner });
-      }
-      function validIssueLinks(value, issue) {
-        if (!value || !Number.isSafeInteger(value.revision) || value.revision < 0 || value.incomplete !== false || !Array.isArray(value.links) || value.links.length > 10000) return null;
-        const seen = new Set();
-        for (const link of value.links) {
-          if (!link || link.issueKey !== issue.key || link.issueId !== issue.issueId || typeof link.sessionId !== 'string' || !link.sessionId || link.sessionId.length > 256 || seen.has(link.sessionId)) return null;
-          seen.add(link.sessionId);
-        }
-        return value;
-      }
       function validBoardLinks(value) {
         return value && Number.isSafeInteger(value.revision) && value.revision >= 0 && value.incomplete === true && Array.isArray(value.links) && value.links.every(link => link && typeof link.issueKey === 'string' && typeof link.issueId === 'string' && Boolean(link.issueId) && typeof link.sessionId === 'string') ? value : null;
       }
@@ -1800,348 +2323,32 @@ function createSessionSender({ sessions, validateSession }) {
         const timer = window.setTimeout(() => void loadBoardLinks(), 350);
         return () => window.clearTimeout(timer);
       }, [tracker.board, tracker.busy]);
-      function invalidateIssueAccess(issue) {
-        if (issue && memory.issue?.token !== issue.token) return;
-        discardTrackerIssue();
-        invalidateTracker(true, false);
-        updateTracker({ error: 'trackerReselect' });
-        if (trackerActive() && connectionSource.getSnapshot()) void loadTracker();
-      }
-      async function loadIssue() {
-        const issue = memory.issue;
-        if (!issueScope(issue) || issue.loading || issue.pending) return;
-        const generation = issue.generation + 1, epoch = privacyEpoch;
-        // A fetched transition is tied to the read that produced it. Refresh never
-        // silently carries that selection over to a potentially different action.
-        statusSelection.current = null;
-        issuePatch({ loading: true, available: false, generation, transitionId: '', comments: [], commentsBytes: 0, commentsCursor: null, commentsCursors: [], commentsState: 'loading', commentsOwner: null, dirty: Boolean(issue.comment || issue.editComment || issue.linkSessionId || (issue.draft && issue.original && JSON.stringify(issue.draft) !== JSON.stringify(issue.original)) || issue.assigneeEdited), error: issue.unknown ? 'issueUnknown' : '' });
-        const accepts = () => issueScope(issue) && memory.issue.generation === generation && privacyEpoch === epoch;
-        const command = (op) => transport.trackerCommand({ op, workspaceId: issue.workspaceId, boardId: issue.boardId, issueKey: issue.key, issueId: issue.issueId });
-        try {
-          const first = validIssue(await command('issue.read'), issue.key);
-          if (!accepts()) return;
-          const [commentsResult, transitions, linksResult] = await Promise.all([command('issue.comments').then(value => ({ value }), error => ({ error })), command('issue.transitions'), command('links.issue.read').then(value => ({ value }), error => { if (error?.code === 'needs_reselect' || [401, 403, 404, 409, 412].includes(error?.status)) throw error; return { value: null }; })]);
-          if (!accepts()) return;
-          if (commentsResult.error?.code === 'needs_reselect' || [401, 403, 404, 409, 412].includes(commentsResult.error?.status) || ['unauthorized', 'forbidden', 'not_found', 'issue_not_in_selected_boards', 'board_not_selected', 'conflict', 'credential_changed', 'credentials_unavailable', 'invalid_credentials', 'scope_expired'].includes(commentsResult.error?.code)) throw commentsResult.error;
-          const fresh = validIssue(await command('issue.read'), issue.key), safeTransitions = validTransitions(transitions);
-          if (!accepts()) return;
-          if (!issue.issueId || first.id !== issue.issueId || fresh.id !== issue.issueId || !Number.isSafeInteger(first.version) || !Number.isSafeInteger(fresh.version) || first.version !== fresh.version || first.status.id !== fresh.status.id || first.status.key !== fresh.status.key) { if (accepts()) issuePatch({ loading: false, available: false, error: 'issueConflict' }); return; }
-          const rawLinks = linksResult.value;
-          const links = validIssueLinks(rawLinks, issue);
-          if (!accepts()) return;
-          const current = memory.issue, freshOriginal = { summary: fresh.summary, description: fresh.description ?? '', assignee: fresh.assigneeKnown ? (fresh.assignee?.id || '') : '' };
-          // Preserve the draft's CAS baseline across refresh; never silently rebase edits.
-          const original = current.dirty && current.original ? current.original : freshOriginal;
-          const draft = current.dirty && current.draft ? current.draft : { ...freshOriginal };
-          const liveVersion = fresh.version;
-          if (current.dirty && current.issue) fresh.version = current.issue.version;
-          const owner = {};
-          issuePatch({ loading: false, available: true, original, draft, liveVersion, issue: fresh, commentsOwner: owner, transitions: safeTransitions, links, transitionId: current.transitionId || '', conflict: Boolean(current.conflict), error: current.unknown ? 'issueUnknown' : current.conflict ? 'issueConflict' : '', dirty: Boolean(current.dirty) });
-          void loadCommentPages({ ...issue, generation, epoch, owner }, commentsResult);
-        } catch (err) {
-          if (accepts()) {
-            if (err?.code === 'needs_reselect') invalidateIssueAccess(issue);
-            else issuePatch({ loading: false, available: false, error: 'trackerError' });
-          }
-        }
-      }
-      function openIssue(issue) {
-        if (!/^[A-Z][A-Z0-9_]{0,31}-[1-9][0-9]{0,14}$/.test(issue.key) || typeof issue.id !== 'string' || !issue.id || memory.tracker.busy || !setForm(null)) return;
-        const connectionId = connectionSource.getSnapshot()?.id, incarnation = memory.tracker.incarnations[workspaceId];
-        if (connectionId === undefined || !currentWorkspace(workspaceId, incarnation) || !memory.tracker.settings || memory.tracker.settings.needsReselect.includes(workspaceId) || !memory.tracker.settings.workspaces[workspaceId]?.includes(boardId)) return;
-        const draft = { token: {}, generation: 0, workspaceId, boardId, key: issue.key, issueId: issue.id || '', connectionId, incarnation, settingsRevision: memory.tracker.settings.revision, draft: null, comment: '', editComment: null, transitionId: '', linkSessionId: '', addingSession: false, sendTargets: [], sendResult: null, savedComment: null, editingFields: false, dirty: false, pending: false, unknown: false, loading: false, available: false, error: '', notice: '' };
-        draft.unknown = unknownIssues.has(issueUnknownKey(draft));
-        issueOrigin.current = document.activeElement;
-        setSessionMenu(null);
-        updateMemory({ issue: draft });
-        void loadIssue();
-      }
-      function editIssue(key, value) {
-        const current = memory.issue;
-        if (!current || !issueScope(current) || !current.available || current.pending) return;
-        const next = key === 'comment' || key === 'transitionId' || key === 'linkSessionId' ? { [key]: value } : { draft: { ...current.draft, [key]: value }, ...(key === 'assignee' ? { assigneeEdited: true } : {}) };
-        issuePatch({ ...next, dirty: true, notice: '' });
-      }
-      const sameStatus = (a, b) => Boolean(a && b && a.id === b.id && a.key === b.key && a.display === b.display);
-      function validStatusSelection(selection, pending = false) {
-        const current = memory.issue;
-        return Boolean(selection && statusSelection.current === selection && issueScope(current) && current.token === selection.token &&
-          current.generation === selection.generation && privacyEpoch === selection.epoch && current.available && !current.loading &&
-          current.pending === pending && !current.unknown && !current.conflict && current.issueId === selection.issueId && current.issue?.id === selection.issueId &&
-          current.liveVersion === selection.version && sameStatus(current.issue.status, selection.from) && current.transitionId === selection.id &&
-          current.transitions.some(item => item.id === selection.id && item.display === selection.display && sameStatus(item.to, selection.to)));
-      }
-      const safeIssueText = (value, max, multiline = false, empty = false) => typeof value === 'string' && value.length <= max && (empty || Boolean(value.trim())) && !(multiline ? /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u : /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u).test(value);
-      async function saveIssue(kind, unlink = null) {
-        const issue = memory.issue;
-        if (!issueScope(issue) || !issue.available || issue.pending || issueMutationPending || issue.unknown || issue.conflict || issue.loading) return;
-        const base = { workspaceId: issue.workspaceId, boardId: issue.boardId, issueKey: issue.key, issueId: issue.issueId };
-        let command, selection;
-        if (kind === 'fields') {
-          const { draft, original } = issue, changes = { expectedVersion: issue.issue.version };
-          if (!Number.isSafeInteger(changes.expectedVersion) || !safeIssueText(draft.summary, 4096) || !safeIssueText(draft.description, 48 * 1024, true, true) || !safeIssueText(draft.assignee, 128, false, true)) { issuePatch({ error: 'issueInvalid' }); return; }
-          if (draft.summary !== original.summary) changes.summary = draft.summary;
-          if (draft.description !== original.description) changes.description = draft.description;
-          if (issue.assigneeEdited && (draft.assignee !== original.assignee || !issue.issue.assigneeKnown)) changes.assignee = draft.assignee.trim() || null;
-          if (Object.keys(changes).length === 1) return;
-          command = { op: 'issue.update', ...base, changes };
-        } else if (kind === 'comment') {
-          if (issue.savedComment === issue.comment) return;
-          if (!safeIssueText(issue.comment, 48 * 1024, true)) { issuePatch({ error: 'issueInvalid' }); return; }
-          command = { op: 'issue.comment', ...base, text: issue.comment };
-        } else if (kind === 'editComment') {
-          const edit = issue.editComment;
-          if (!edit || !Number.isSafeInteger(edit.version) || edit.version < 0 || !safeIssueText(edit.text, 48 * 1024, true)) { issuePatch({ error: 'issueInvalid' }); return; }
-          if (edit.text === edit.original) return;
-          command = { op: 'issue.editComment', ...base, commentId: edit.id, expectedVersion: edit.version, text: edit.text };
-        } else if (kind === 'link') {
-          const linked = !unlink, sessionId = unlink?.sessionId || issue.linkSessionId;
-          const validLinkChange = () => {
-            const current = memory.issue, ws = workspacesSource.getSnapshot(), sess = sessionsSource.getSnapshot(), member = ws.items.find(item => item.workspaceId === issue.workspaceId);
-            return current === issue && issueScope(current) && current.available && !current.loading && !current.pending && !current.unknown && !current.conflict && !issueMutationPending &&
-              current.generation === generation && privacyEpoch === epoch && memory.tracker.generation === trackerGeneration && current.links === links &&
-              Boolean(current.issueId && current.issue?.id === current.issueId && sessionId && ws.phase === 'ready' && ws.state !== 'error' && member?.sessionIds?.includes(sessionId) && sessionState(sessionId, sess, ws) === 'available') &&
-              linked !== links.links.some(link => link.issueKey === current.key && link.issueId === current.issueId && link.sessionId === sessionId) &&
-              (linked ? current.linkSessionId === sessionId : unlink.token === current.token && unlink.generation === current.generation && unlink.epoch === privacyEpoch && unlink.trackerGeneration === memory.tracker.generation && unlink.links === links);
-          };
-          const generation = issue.generation, epoch = privacyEpoch, trackerGeneration = memory.tracker.generation, links = issue.links;
-          if (!links || !validLinkChange()) return;
-          if (!linked && (!window.confirm(t('issueConfirmUnlinkSession') + ' ' + label(sessionId)) || !validLinkChange())) return;
-          ++boardLinksGeneration;
-          updateTracker({ boardLinks: null });
-          command = { op: 'links.set', workspaceId: issue.workspaceId, boardId: issue.boardId, issueKey: issue.key, issueId: issue.issueId, sessionId, linked, expectedRevision: links.revision };
-        } else {
-          selection = statusSelection.current;
-          if (!validStatusSelection(selection) || !Number.isSafeInteger(selection.version) || !window.confirm(t('issueConfirmTransition') + ' ' + selection.display + ': ' + selection.from.display + ' → ' + selection.to.display)) return;
-          // confirm() can synchronously trigger navigation, reauthorization or other state changes.
-          if (!validStatusSelection(selection) || issueMutationPending) return;
-          command = { op: 'issue.transition', ...base, transitionId: selection.id, expectedTo: selection.to };
-        }
-        if (new TextEncoder().encode(JSON.stringify(command)).byteLength > 64 * 1024) { issuePatch({ error: 'tooLarge' }); return; }
-        const epoch = privacyEpoch, generation = issue.generation;
-        issueMutationPending = true;
-        if (kind !== 'transition') unknownIssues.add(issueUnknownKey(issue));
-        issuePatch({ pending: true, ...(kind === 'transition' ? { preflight: true } : {}), error: '', notice: '' });
-        const accepts = () => issueScope(issue) && memory.issue.generation === generation && privacyEpoch === epoch;
-        if (kind === 'transition') {
-          try {
-            let timer;
-            const fresh = validIssue(await Promise.race([
-              transport.trackerCommand({ op: 'issue.read', ...base }),
-              new Promise((_, reject) => { timer = window.setTimeout(() => reject(new Error('preflight timeout')), 15000); }),
-            ]).finally(() => window.clearTimeout(timer)), issue.key);
-            if (!validStatusSelection(selection, true)) return;
-            if (fresh.id !== selection.issueId || fresh.version !== selection.version || !sameStatus(fresh.status, selection.from)) {
-              issuePatch({ pending: false, preflight: false, conflict: true, conflictKind: 'transition', error: 'issueConflict' }); return;
-            }
-          } catch (err) {
-            if (accepts()) {
-              if (err?.code === 'needs_reselect') invalidateIssueAccess(issue);
-              else { statusSelection.current = null; issuePatch({ pending: false, preflight: false, error: 'trackerError' }); }
-            }
-            return;
-          } finally {
-            if (!validStatusSelection(selection, true)) {
-              issueMutationPending = false;
-              if (memory.issue?.token === issue.token && memory.issue.preflight) issuePatch({ pending: false, preflight: false });
-            }
-          }
-          if (!validStatusSelection(selection, true)) { issueMutationPending = false; return; }
-          issuePatch({ preflight: false });
-          unknownIssues.add(issueUnknownKey(issue));
-        }
-        try {
-          const receipt = await transport.trackerCommand(command);
-          if (!accepts()) return;
-          if (kind === 'fields' && (!Number.isSafeInteger(receipt?.version) || receipt.version < 0) || kind === 'comment' && (typeof receipt?.id !== 'string' || !receipt.id) || kind === 'editComment' && (receipt?.id !== command.commentId || !Number.isSafeInteger(receipt?.version) || receipt.version < 0) || kind === 'transition' && receipt?.ok !== true || kind === 'link' && (!Number.isSafeInteger(receipt?.revision) || ![command.expectedRevision, command.expectedRevision + 1].includes(receipt.revision))) throw new Error('invalid receipt');
-          unknownIssues.delete(issueUnknownKey(issue));
-          const current = memory.issue;
-          if (kind === 'fields') issuePatch({ pending: false, original: { ...current.draft }, issue: { ...current.issue, version: receipt.version }, assigneeEdited: false, dirty: Boolean(current.comment || current.editComment || current.transitionId || current.linkSessionId), notice: 'issueSaved' });
-          else if (kind === 'comment') { const keep = current.sendTargets?.length > 0; issuePatch({ pending: false, savedComment: keep ? current.comment : null, comment: keep ? current.comment : '', dirty: Boolean(keep || current.editComment || current.transitionId || current.linkSessionId || JSON.stringify(current.draft) !== JSON.stringify(current.original) || current.assigneeEdited), notice: keep ? 'sessionSendSaved' : 'issueSaved' }); }
-          else if (kind === 'editComment') issuePatch({ pending: false, editComment: null, dirty: Boolean(current.comment || current.transitionId || current.linkSessionId || JSON.stringify(current.draft) !== JSON.stringify(current.original) || current.assigneeEdited), notice: 'issueSaved' });
-          else if (kind === 'transition') issuePatch({ pending: false, transitionId: '', dirty: Boolean(current.comment || current.editComment || current.linkSessionId || JSON.stringify(current.draft) !== JSON.stringify(current.original) || current.assigneeEdited), notice: 'issueSaved' });
-          else { issuePatch({ pending: false, ...(command.linked ? { linkSessionId: '', addingSession: false } : {}), dirty: Boolean(current.comment || current.editComment || current.transitionId || (!command.linked && current.linkSessionId) || JSON.stringify(current.draft) !== JSON.stringify(current.original) || current.assigneeEdited), notice: 'issueSaved' }); updateTracker({ boardLinks: null }); void loadBoardLinks(); }
-          issueMutationPending = false;
-          void loadIssue();
-        } catch (err) {
-          if (!accepts()) return;
-          if (err?.code === 'needs_reselect') { invalidateIssueAccess(issue); return; }
-          const conflict = err.status === 409 || err.status === 412 || /conflict|precondition|transition_not_available/.test(err.code || '');
-          const unknown = !conflict && (!(err.status >= 400 && err.status < 500) || err.status === 499 || err.code === 'outcome_unknown');
-          if (unknown) unknownIssues.add(issueUnknownKey(issue)); else unknownIssues.delete(issueUnknownKey(issue));
-          issuePatch({ pending: false, unknown, conflict, conflictKind: conflict ? kind : '', error: unknown ? 'issueUnknown' : conflict ? 'issueConflict' : 'issueRejected' });
-        } finally {
-          issueMutationPending = false;
-          if (memory.issue?.token === issue.token && memory.issue.pending) { unknownIssues.add(issueUnknownKey(issue)); issuePatch({ pending: false, unknown: true, error: 'issueUnknown' }); }
-        }
-      }
-      function discardCommentEdit(reload = false) {
-        const current = memory.issue;
-        if (!issueScope(current) || !current.available || current.pending || !current.editComment || !window.confirm(t('discardDraft'))) return;
-        const commentConflict = current.conflict && current.conflictKind === 'editComment';
-        issuePatch({ editComment: null, ...(commentConflict ? { conflict: false, conflictKind: '', error: '' } : {}),
-          dirty: Boolean(current.comment || current.transitionId || current.linkSessionId || JSON.stringify(current.draft) !== JSON.stringify(current.original) || current.assigneeEdited) });
-        if (reload || commentConflict) void loadIssue();
-      }
-      function commentEditor(issue) {
-        const edit = issue.editComment;
-        return h(React.Fragment, null,
-          h('p', { className: 'dsh-board-alert' }, t('issueCommentRaceWarning')),
-          h('label', null, t('issueEditCommentText'), h('textarea', { value: edit.text, maxLength: 48 * 1024, readOnly: issue.pending, onChange: e => { const current = memory.issue; if (issueScope(current) && current.available && !current.pending && current.editComment?.id === edit.id) issuePatch({ editComment: { ...current.editComment, text: e.target.value }, dirty: true, notice: '' }); } })),
-          h('button', { type: 'button', disabled: issue.pending || issue.unknown || issue.conflict || !edit.text.trim(), onClick: () => saveIssue('editComment') }, t('issueSaveCommentEdit')),
-          h('button', { type: 'button', disabled: issue.pending, 'aria-label': t('cancel') + ': ' + t('issueEditComment'), onClick: () => discardCommentEdit() }, t('cancel')));
-      }
-      function openIssueSession(stamp, id, event) {
-        // The drawer has its own link snapshot; boardLinks may be absent or stale.
-        const current = memory.issue, ws = workspacesSource.getSnapshot(), sess = sessionsSource.getSnapshot();
-        const owner = ws.items.find(item => item.workspaceId === stamp.workspaceId);
-        if (!current || current.token !== stamp.token || current.generation !== stamp.generation || memory.tracker.generation !== stamp.trackerGeneration || privacyEpoch !== stamp.privacyEpoch ||
-            !issueScope(current) || !current.available || current.loading || current.pending || current.unknown ||
-            current.workspaceId !== stamp.workspaceId || current.key !== stamp.key || current.issueId !== stamp.issueId || !current.issueId || current.issue?.id !== current.issueId ||
-            !current.links?.links.some(link => link.issueKey === stamp.key && link.issueId === stamp.issueId && link.sessionId === id) ||
-            ws.phase !== 'ready' || ws.state === 'error' || !Array.isArray(owner?.sessionIds) || !owner.sessionIds.includes(id) || sessionState(id, sess, ws) !== 'available') return;
-        if (modifiedSessionClick(event)) newTabSession(stamp.workspaceId, id);
-        else openSession(id);
-      }
-      function toggleIssueAddSession(stamp) {
-        const current = memory.issue;
-        if (!issueScope(current) || current.token !== stamp.token || current.generation !== stamp.generation || privacyEpoch !== stamp.privacyEpoch || memory.tracker.generation !== stamp.trackerGeneration || !current.available || current.loading || current.pending || !current.links || current.links !== stamp.links) return;
-        if (current.addingSession && current.linkSessionId && !window.confirm(t('discardDraft'))) return;
-        if (memory.issue !== current || !issueScope(current) || current.generation !== stamp.generation || privacyEpoch !== stamp.privacyEpoch || memory.tracker.generation !== stamp.trackerGeneration || current.pending || current.links !== stamp.links) return;
-        issuePatch({ addingSession: !current.addingSession, ...(current.addingSession ? { linkSessionId: '', dirty: Boolean(current.comment || current.editComment || current.transitionId || JSON.stringify(current.draft) !== JSON.stringify(current.original) || current.assigneeEdited) } : {}) });
-      }
-      async function sendIssueToSessions() {
-        const initial = memory.issue;
-        if (!sessionService || typeof sessionService.using !== 'function' || !issueScope(initial) || !initial.available || initial.loading || initial.pending || initial.unknown || initial.conflict || issueMutationPending || !initial.links) return;
-        const selected = [...(initial.sendTargets || [])], text = initial.comment, revision = initial.links.revision;
-        if (!safeIssueText(text, 48 * 1024, true) || new TextEncoder().encode(text).byteLength > 48 * 1024 || !selected.length || selected.length > 20 || new Set(selected).size !== selected.length) { issuePatch({ error: 'issueInvalid' }); return; }
-        const stamp = { ...initial, trackerGeneration: memory.tracker.generation, epoch: privacyEpoch };
-        const key = id => sessionSendKey(stamp, id, text);
-        const scopeValid = () => Boolean(issueScope(stamp) && memory.issue.generation === stamp.generation && memory.tracker.generation === stamp.trackerGeneration && privacyEpoch === stamp.epoch && memory.issue.available && !memory.issue.loading && memory.issue.issue?.id === stamp.issueId);
-        const localValid = id => {
-          const current = memory.issue, ws = workspacesSource.getSnapshot(), catalog = sessionsSource.getSnapshot();
-          const owner = ws?.items?.find(item => item.workspaceId === stamp.workspaceId);
-          return Boolean(scopeValid() && current.comment === text && current.links?.revision === revision && current.links.links.some(link => link.issueKey === stamp.key && link.issueId === stamp.issueId && link.sessionId === id) && ws.phase === 'ready' && ws.state !== 'error' && owner?.sessionIds?.includes(id) && sessionState(id, catalog, ws) === 'available');
-        };
-        const unreserved = () => selected.every(id => !sessionSendLedger.has(key(id)));
-        if (!unreserved() || !selected.every(localValid) || !window.confirm(t('sessionSendConfirm') + '\n\n' + selected.map(id => label(id)).join('\n') + '\n\n' + text)) return;
-        if (!unreserved() || !selected.every(localValid) || memory.issue.pending || issueMutationPending) return;
-        // Without a dispatch callback, reserve all targets until the helper returns.
-        // On an unexpected exception the conservative outcome is unknown, not unsent.
-        selected.forEach(id => sessionSendLedger.set(key(id), 'inflight'));
-        issueMutationPending = true;
-        issuePatch({ pending: true, sendOwner: stamp, sendResult: { state: 'stopped', targets: selected.map(id => ({ id, status: 'inflight' })) }, notice: '' });
-        const validateSession = async id => {
-          if (!localValid(id)) return false;
-          try {
-            const result = validIssueLinks(await transport.trackerCommand({ op: 'links.issue.read', workspaceId: stamp.workspaceId, boardId: stamp.boardId, issueKey: stamp.key, issueId: stamp.issueId }), { key: stamp.key, issueId: stamp.issueId });
-            return Boolean(result && localValid(id) && result.revision === revision && result.links.some(link => link.sessionId === id));
-          } catch { return false; }
-        };
-        const record = (result, final = false) => {
-          for (const item of result.targets) {
-            if (item.status === 'accepted' || item.status === 'unknown') sessionSendLedger.set(key(item.id), item.status);
-            else if (final && item.status === 'not-sent') sessionSendLedger.delete(key(item.id));
-          }
-          if (scopeValid()) issuePatch({ ...(final ? { pending: false, sendTargets: selected.filter(id => !sessionSendLedger.has(key(id))) } : {}), sendResult: { state: result.state, targets: selected.map(id => ({ id, status: sessionSendLedger.get(key(id)) || 'not-sent' })) } });
-        };
-        try {
-          const sender = createSessionSender({ sessions: sessionService, validateSession });
-          const result = await sender.send(selected, text, { onProgress: result => record(result) });
-          record(result, true);
-        } catch {
-          selected.forEach(id => { if (sessionSendLedger.get(key(id)) === 'inflight') sessionSendLedger.set(key(id), 'unknown'); });
-          if (scopeValid()) issuePatch({ pending: false, sendResult: { state: 'unknown', targets: selected.map(id => ({ id, status: sessionSendLedger.get(key(id)) || 'not-sent' })) } });
-        } finally {
-          issueMutationPending = false;
-          // Release only this operation's lock, even when its scope was hidden or
-          // invalidated; never repaint its private result into a stale drawer.
-          if (memory.issue?.token === stamp.token && memory.issue.sendOwner === stamp) issuePatch({ pending: false, sendOwner: null });
-        }
-      }
-      function reviewSessionSend(issue, id) {
-        const text = issue.comment, key = sessionSendKey(issue, id, text), epoch = privacyEpoch, generation = issue.generation, trackerGeneration = memory.tracker.generation;
-        const valid = () => issueScope(issue) && memory.issue.generation === generation && privacyEpoch === epoch && memory.tracker.generation === trackerGeneration && memory.issue.available && !memory.issue.loading && !memory.issue.pending && memory.issue.comment === text && sessionSendLedger.get(key) === 'unknown';
-        if (!valid() || !window.confirm(t('sessionSendReviewConfirm') + '\n\n' + label(id)) || !valid()) return;
-        sessionSendLedger.delete(key);
-        issuePatch({ sendResult: null });
-      }
-      function issueView() {
-        const issue = memory.issue;
-        if (!issue || memory.provider !== 'tracker' || overview || showContext) return null;
-        const visible = issue.available && issueScope(issue) && connection && trackerLive(workspaceId);
-        const retryAvailable = issueScope(issue) && !issue.loading && !issue.pending;
-        const sessionStamp = { token: issue.token, generation: issue.generation, trackerGeneration: memory.tracker.generation, privacyEpoch, epoch: privacyEpoch, workspaceId: issue.workspaceId, key: issue.key, issueId: issue.issueId, links: issue.links };
-        const statusOpen = visible && statusPopover === issue.token;
-        const statusDisabled = issue.pending || issue.unknown || issue.conflict || issue.loading || issueMutationPending || !issue.issueId || issue.issue?.id !== issue.issueId || !issue.transitions?.length;
-        const closeStatus = () => { setStatusPopover(null); statusSelection.current = null; const current = memory.issue; if (issueScope(current) && current.available && !current.pending && !current.unknown && !current.conflict && current.transitionId) issuePatch({ transitionId: '', dirty: Boolean(current.comment || current.editComment || current.linkSessionId || JSON.stringify(current.draft) !== JSON.stringify(current.original) || current.assigneeEdited) }); statusButton.current?.focus(); };
-        return h('aside', { className: 'dsh-board-drawer dsh-board-tracker-drawer', style: { width: drawerWidth() + 'px' }, 'aria-label': t('issueDetails'), onKeyDown: (event) => { if (event.key === 'Escape') { event.preventDefault(); if (statusOpen) closeStatus(); else closeIssue(); } } },
-          resizeHandle(), h('div', { className: 'dsh-board-tracker-head' },
-            h('h2', { ref: issueHeading, tabIndex: -1 }, visible ? h('a', { href: 'https://tracker.yandex.ru/' + encodeURIComponent(issue.key), target: '_blank', rel: 'noopener noreferrer' }, issue.key, ' ↗') : t('issueDetails')),
-            h('div', { className: 'dsh-board-tracker-head-actions' },
-              visible && !issue.editingFields && h('button', { ref: issueEditButton, type: 'button', disabled: issue.pending, onClick: () => { issueFocusRequest.current = { token: issue.token, editing: true }; issuePatch({ editingFields: true }); } }, t('edit')),
-              h('button', { type: 'button', disabled: !retryAvailable, onClick: loadIssue }, t('issueReload')),
-              h('button', { className: 'dsh-board-tracker-close', type: 'button', disabled: issue.pending, 'aria-label': t('close'), title: t('close'), onClick: closeIssue }, '×'))),
-          h('div', { className: 'dsh-board-tracker-body' },
-            !visible ? h('p', { role: 'status' }, t(issue.loading ? 'loading' : issue.error || 'issueUnavailable')) : h(React.Fragment, null,
-              h('div', { className: 'dsh-board-tracker-hero' }, h('h3', null, issue.issue.summary),
-                h('div', { className: 'dsh-board-tracker-meta' },
-                  h('div', { style: { position: 'relative' } },
-                    h('button', { ref: statusButton, className: 'dsh-board-tracker-status', type: 'button', disabled: statusDisabled, 'aria-label': t('issueChangeStatus') + ': ' + issue.issue.status.display, 'aria-expanded': Boolean(statusOpen), 'aria-controls': 'dsh-board-issue-transitions', title: !issue.transitions.length ? t('issueTransitionsUnavailable') : t('issueChangeStatus'), onClick: () => { const current = memory.issue; if (!issueScope(current) || !current.available || current.pending || current.unknown || current.conflict || current.loading || issueMutationPending || current.issue?.id !== current.issueId || !current.transitions.length) return; if (statusOpen) closeStatus(); else setStatusPopover(current.token); } }, issue.issue.status.display),
-                    !issue.transitions.length && h('span', { className: 'dsh-board-muted' }, t('issueTransitionsUnavailable')),
-                    statusOpen && h('div', { id: 'dsh-board-issue-transitions', className: 'dsh-board-session-menu', role: 'group', 'aria-label': t('issueTransitions'), style: { position: 'absolute', zIndex: 2 } },
-                      issue.transitions.map((transition, index) => h('button', { key: transition.id, ref: index === 0 ? statusFirstOption : undefined, type: 'button', disabled: statusDisabled, 'aria-pressed': issue.transitionId === transition.id, onClick: () => { const current = memory.issue; if (!issueScope(current) || !current.available || current.pending || current.unknown || current.conflict || current.loading || issueMutationPending || current.issue?.id !== current.issueId || !current.transitions.some(item => item.id === transition.id && item.display === transition.display && item.to.id === transition.to.id && item.to.key === transition.to.key && item.to.display === transition.to.display)) return; statusSelection.current = Object.freeze({ token: current.token, generation: current.generation, epoch: privacyEpoch, issueId: current.issueId, version: current.liveVersion, id: transition.id, display: transition.display, to: Object.freeze({ ...transition.to }), from: Object.freeze({ ...current.issue.status }) }); editIssue('transitionId', transition.id); } }, transition.display, ' → ', transition.to.display)),
-                      h('button', { type: 'button', disabled: statusDisabled || !issue.transitions.some(item => item.id === issue.transitionId) || statusSelection.current?.token !== issue.token || statusSelection.current?.generation !== issue.generation || statusSelection.current?.id !== issue.transitionId, onClick: () => { const current = memory.issue, selection = statusSelection.current; if (!selection || !issueScope(current) || !current.available || current.token !== selection.token || current.generation !== selection.generation || current.transitionId !== selection.id) return; void saveIssue('transition'); } }, t('issueChangeStatus')))),
-                  h('p', null, t('assignee'), ': ', h('strong', null, issue.issue.assigneeKnown ? (issue.issue.assignee?.display || t('unassigned')) : t('assigneeUnknown'))))),
-              h('div', { className: 'dsh-board-tracker-notices' },
-                issue.error && h('p', { role: 'alert' }, t(issue.error)), issue.notice && h('p', { role: 'status' }, t(issue.notice)),
-                issue.unknown && h('button', { type: 'button', onClick: () => { if (window.confirm(t('issueUnknown'))) { unknownIssues.delete(issueUnknownKey(issue)); issuePatch({ unknown: false, error: '' }); } } }, t('issueReview')),
-                issue.conflict && h('button', { type: 'button', onClick: () => { if (window.confirm(t('discardDraft'))) { issuePatch({ conflict: false, conflictKind: '', available: false, draft: null, original: null, dirty: Boolean(issue.comment || issue.editComment || issue.transitionId || issue.linkSessionId), assigneeEdited: false }); void loadIssue(); } } }, t('issueDiscardConflict')),
-                issue.conflict && issue.conflictKind === 'editComment' && issue.editComment && h('button', { type: 'button', onClick: () => discardCommentEdit(true) }, t('issueDiscardCommentConflict'))),
-              h('p', { className: 'dsh-board-tracker-separate' }, t('issueSeparateOperations')),
-              !issue.editingFields && issue.draft && issue.original && (JSON.stringify(issue.draft) !== JSON.stringify(issue.original) || (issue.assigneeEdited && !issue.issue.assigneeKnown)) && h('p', { className: 'dsh-board-tracker-draft', role: 'status' }, t('unsaved')),
-              h('section', { className: 'dsh-board-tracker-section' },
-                h('h3', null, t('description')),
-                issue.editingFields ? h(React.Fragment, null,
-                  h('label', null, t('title'), h('input', { ref: issueTitleInput, value: issue.draft.summary, maxLength: 4096, readOnly: issue.pending, onChange: (e) => editIssue('summary', e.target.value) })),
-                  h('label', null, t('description'), h('textarea', { value: issue.draft.description, maxLength: 48 * 1024, readOnly: issue.pending, onChange: (e) => editIssue('description', e.target.value) })),
-                  h('label', null, t('issueAssigneeId'), h('input', { value: issue.draft.assignee, maxLength: 128, readOnly: issue.pending, onChange: (e) => editIssue('assignee', e.target.value) })),
-                  !issue.issue.assigneeKnown && h('p', null, t('assigneeUnknown')), issue.issue.version === null && h('p', null, t('issueVersionUnavailable')),
-                  h('div', { className: 'dsh-board-row' }, h('button', { className: 'dsh-board-primary', type: 'button', disabled: issue.pending || issue.unknown || issue.conflict || issue.issue.version === null, onClick: () => saveIssue('fields') }, t('issueSaveFields')), h('button', { type: 'button', disabled: issue.pending, onClick: () => { issueFocusRequest.current = { token: issue.token, editing: false }; issuePatch({ editingFields: false }); } }, t('issueKeepDraft')))) :
-                  renderTrackerText(issue.issue.description || t('emptyDescription'))),
-              h('section', { className: 'dsh-board-tracker-section' }, h('h3', null, t('sessions')), issue.links ? h(React.Fragment, null,
-                h('p', { className: 'dsh-board-muted' }, t('issueSessionPartial')),
-                h('ul', { className: 'dsh-board-tracker-list' }, issue.links.links.filter(link => issue.issueId && issue.issue?.id === issue.issueId && link.issueId === issue.issueId && link.issueKey === issue.key && workspace?.sessionIds?.includes(link.sessionId)).map(link => {
-                  const state = sessionState(link.sessionId, sessions, workspaces);
-                  const unavailable = state !== 'available' || issue.loading || issue.pending || issue.unknown;
-                  return h('li', { className: 'dsh-board-tracker-session', key: link.sessionId }, unavailable ? h('span', null, label(link.sessionId), ' — ', t(state !== 'available' ? state : 'issueUnavailable')) : h('button', { className: 'dsh-board-tracker-session-link', type: 'button', role: 'link', onClick: event => openIssueSession(sessionStamp, link.sessionId, event), onAuxClick: event => { if (event.button === 1) { event.preventDefault(); openIssueSession(sessionStamp, link.sessionId, event); } } }, label(link.sessionId)),
-                    h('button', { type: 'button', className: 'dsh-board-tracker-session-unlink', disabled: unavailable || issue.conflict, 'aria-label': t('issueUnlinkSession') + ': ' + label(link.sessionId), onClick: () => saveIssue('link', { ...sessionStamp, sessionId: link.sessionId }) }, t('issueUnlinkSession')));
-                })),
-                issue.links.links.length > 0 && h('button', { type: 'button', disabled: issue.pending, 'aria-expanded': Boolean(issue.addingSession), 'aria-label': t(issue.addingSession ? 'issueCancelAddSession' : 'issueAddSession'), onClick: () => toggleIssueAddSession(sessionStamp) }, issue.addingSession ? t('issueCancelAddSession') : '+'),
-                (issue.links.links.length === 0 || issue.addingSession) && h(React.Fragment, null,
-                  h('label', null, t('issueChooseSession'), h('select', { value: issue.linkSessionId, disabled: issue.pending, onChange: e => editIssue('linkSessionId', e.target.value) }, h('option', { value: '' }, t('issueChooseSession')), availableSessions.filter(id => sessionState(id, sessions, workspaces) === 'available' && !issue.links.links.some(link => link.sessionId === id)).map(id => h('option', { key: id, value: id }, label(id))))),
-                  h('button', { type: 'button', disabled: issue.pending || issue.unknown || issue.conflict || !issue.issueId || issue.issue?.id !== issue.issueId || !issue.linkSessionId, onClick: () => saveIssue('link') }, t('issueLinkSave')))) : h('p', null, t('issueLinkUnavailable'))),
-              h('section', { className: 'dsh-board-tracker-section' }, h('h3', null, t('issueComments')), h('div', { className: 'dsh-board-comment-summary', role: 'status' }, h('strong', null, t('issueCommentsLoaded'), ' ', String(issue.comments.length)), h('span', null, t(({ loading: 'issueCommentsLoading', complete: 'issueCommentsComplete', partial: 'issueCommentsPartial', terminalPartial: 'issueCommentsTerminalPartial', error: 'issueCommentsError', invalid: 'issueCommentsInvalid', limit: 'issueCommentsLimit' })[issue.commentsState]))),
-                h('div', { className: 'dsh-board-comment-composer' }, h('label', null, t('issueNewComment'), h('textarea', { value: issue.comment, maxLength: 48 * 1024, readOnly: issue.pending, onChange: (e) => editIssue('comment', e.target.value) })), h('button', { className: 'dsh-board-primary', type: 'button', disabled: issue.pending || issue.unknown || issue.conflict || !issue.comment.trim() || issue.savedComment === issue.comment, onClick: () => saveIssue('comment') }, t('issueAddComment')),
-                  issue.links && issue.links.links.length > 0 && h(React.Fragment, null,
-                    h('fieldset', { disabled: issue.pending }, h('legend', null, t('sessionSendChoose')), issue.links.links.filter(link => workspace?.sessionIds?.includes(link.sessionId) && link.issueKey === issue.key && link.issueId === issue.issueId).map(link => {
-                      const id = link.sessionId, status = sessionSendLedger.get(sessionSendKey(issue, id, issue.comment));
-                      return h('div', { key: id }, h('label', null, h('input', { type: 'checkbox', checked: (issue.sendTargets || []).includes(id), disabled: sessionState(id, sessions, workspaces) !== 'available' || Boolean(status), onChange: e => { const current = memory.issue; if (!issueScope(current) || current.pending || sessionSendLedger.has(sessionSendKey(current, id, current.comment)) || !current.links?.links.some(item => item.sessionId === id && item.issueId === current.issueId)) return; const ids = current.sendTargets || []; issuePatch({ sendTargets: e.target.checked ? [...new Set([...ids, id])] : ids.filter(item => item !== id), sendResult: null }); } }), label(id)), status && h('span', { role: 'status' }, ' — ', t(status === 'accepted' ? 'sessionSendAccepted' : status === 'unknown' ? 'sessionSendUnknown' : 'sessionSendInflight')), status === 'unknown' && h('button', { type: 'button', disabled: issue.pending, onClick: () => reviewSessionSend(issue, id) }, t('sessionSendReview')));
-                    })),
-                    h('p', { className: 'dsh-board-muted' }, t('sessionSendWarning')),
-                    typeof sessionService?.using !== 'function' && h('p', null, t('sessionSendUnavailable')),
-                    h('button', { type: 'button', disabled: issue.pending || issue.unknown || issue.conflict || !issue.comment.trim() || !(issue.sendTargets || []).length || issue.sendTargets.some(id => sessionSendLedger.has(sessionSendKey(issue, id, issue.comment))) || typeof sessionService?.using !== 'function', onClick: sendIssueToSessions }, t('sessionSendAction'))),
-                  issue.sendResult && h('ul', { role: 'status' }, issue.sendResult.targets.map(item => h('li', { key: item.id }, label(item.id), ' — ', t(item.status === 'accepted' ? 'sessionSendAccepted' : item.status === 'unknown' ? 'sessionSendUnknown' : item.status === 'inflight' ? 'sessionSendInflight' : 'sessionSendNotSent'))))),
-                h('ul', { className: 'dsh-board-tracker-list' }, issue.comments.map((comment) => h('li', { className: 'dsh-board-tracker-comment', key: comment.id }, h('div', { className: 'dsh-board-tracker-comment-meta' }, h('span', { className: 'dsh-board-comment-avatar', 'aria-hidden': true }, commentInitials(comment.createdBy.display)), h('strong', null, comment.createdBy.display), h('time', { dateTime: comment.createdAt, title: comment.createdAt }, commentTime(comment.createdAt))), renderTrackerText(comment.text),
-                issue.editComment?.id === comment.id ? commentEditor(issue) :
-                  Number.isSafeInteger(comment.version) && comment.version >= 0 ? h('button', { type: 'button', disabled: issue.pending || Boolean(issue.editComment), 'aria-label': t('issueEditComment') + ': ' + comment.id, onClick: () => { const current = memory.issue; if (issueScope(current) && current.available && !current.pending && !current.editComment) issuePatch({ editComment: { id: comment.id, version: comment.version, original: comment.text, text: comment.text }, dirty: true, notice: '' }); } }, t('issueEditComment')) : h('p', { className: 'dsh-board-muted' }, t('issueCommentVersionUnavailable'))))),
-                issue.editComment && !issue.comments.some(comment => comment.id === issue.editComment.id) && h('div', null, h('p', { role: 'status' }, t('issueEditedCommentMissing')), commentEditor(issue)),
-                ['partial', 'error'].includes(issue.commentsState) && h('button', { type: 'button', disabled: issue.pending, onClick: loadMoreComments }, t('issueCommentsMore'))))));
-      }
-      useEffect(() => {
-        const issue = memory.issue;
-        if (issue && !issue.available && !issue.loading && !issue.pending && issueScope(issue) && tracker.board && !tracker.busy && (!issue.error || issue.unknown)) void loadIssue();
-      }, [tracker.board, tracker.busy, tracker.settings, connection, memory.issue?.pending]);
+      // The adapter keeps the issue controller's mutable state and authorization
+      // policy separate from its view and operation logic.
+      const issueEditor = createIssueEditor({ memory, updateMemory, connectionSource, trackerActive, currentWorkspace,
+        transport, workspacesSource, sessionsSource, setForm, issueOrigin, setSessionMenu, updateTracker,
+        invalidateTracker, loadTracker, loadBoardLinks, t, openSession, sessionService, workspaces, sessions,
+        workspace, workspaceId, boardId, overview, showContext, connection, tracker, trackerLive, availableSessions,
+        issueSessionLabel, statusSelection, statusPopover, setStatusPopover, statusButton, statusFirstOption,
+        issueHeading, issueEditButton, issueTitleInput, issueFocusRequest, drawerWidth, resizeHandle,
+        shouldRender() { return memory.provider === 'tracker' && !overview && !showContext; },
+        invalidateIssueAccess() {
+          discardTrackerIssue();
+          invalidateTracker(true, false);
+          updateTracker({ error: 'trackerReselect' });
+          if (trackerActive() && connectionSource.getSnapshot()) void loadTracker();
+        },
+        issueScope(issue, requireAccess = true) {
+          const settings = memory.tracker.settings;
+          return Boolean(issue && memory.issue?.token === issue.token && connectionSource.getSnapshot()?.id === issue.connectionId && trackerActive() &&
+            memory.provider === 'tracker' && !memory.overview && !memory.showContext && memory.workspaceId === issue.workspaceId && memory.boardId === issue.boardId &&
+            currentWorkspace(issue.workspaceId, issue.incarnation) && (!requireAccess || (settings && settings.revision === issue.settingsRevision && !settings.needsReselect.includes(issue.workspaceId) && settings.workspaces[issue.workspaceId]?.includes(issue.boardId))));
+        },
+        get privacyEpoch() { return privacyEpoch; },
+        get issueMutationPending() { return issueMutationPending; }, set issueMutationPending(value) { issueMutationPending = value; },
+        get boardLinksGeneration() { return boardLinksGeneration; }, set boardLinksGeneration(value) { boardLinksGeneration = value; },
+      });
+      const { closeIssue, openIssue, issueView, issueScope, invalidateIssueAccess } = issueEditor;
       function openTrackerSession(issue, sessionId, event) {
         const tr = memory.tracker, ws = workspacesSource.getSnapshot(), sess = sessionsSource.getSnapshot();
         const board = tr.board, owner = ws.items.find(item => item.workspaceId === memory.workspaceId);
@@ -2309,6 +2516,12 @@ function createSessionSender({ sessions, validateSession }) {
         const transport = makeTransport();
         const connectionSource = ctx.connection.generation;
         ctx.effect(() => {
+          sessionStoreSources = { connection: connectionSource, workspaces: ctx.workspaces.list, sessions: ctx.sessions.list };
+          const stops = Object.values(sessionStoreSources).map(source => source.subscribe(purgeInvalidSessionStores));
+          purgeInvalidSessionStores();
+          return () => { stops.forEach(stop => stop()); sessionIssueStores.clear(); sessionStoreSources = null; updateUnload(); };
+        }, 'dsh-board: session draft scope');
+        ctx.effect(() => {
           let id = connectionSource.getSnapshot()?.id;
           const dispose = connectionSource.subscribe(() => {
             const next = connectionSource.getSnapshot()?.id;
@@ -2328,7 +2541,8 @@ function createSessionSender({ sessions, validateSession }) {
         };
         const { Header: SessionCardHeader, Body: SessionCardBody } = createSessionCard(React, {
           transport, ws: ctx.workspaces.list, sessions: ctx.sessions.list, connection: connectionSource,
-          sidebarRight: ctx.sidebarRight, renderTrackerText, t, openBoardForSession,
+          sidebarRight: ctx.sidebarRight, renderTrackerText, t, openBoardForSession, onSettings: discardReselectedIssue,
+          renderIssueEditor: props => h(SessionIssueEditor, { ...props, transport, workspacesSource: ctx.workspaces.list, sessionsSource: ctx.sessions.list, connectionSource, sessionService: ctx.sessions, openSession: id => ctx.uiWorkspace.openSession(id), t }),
           openSession: id => ctx.uiWorkspace.openSession(id),
           openSessionInNewTab: id => { const workspace = ctx.workspaces.list.getSnapshot().items?.find(item => item.sessionIds?.includes(id)); if (workspace) newTabSession(workspace.workspaceId, id); },
         });

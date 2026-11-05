@@ -913,8 +913,13 @@ test('link writes require selected board, live issue ID, workspace member and CA
   f.registry.archivedSessionIds = [];
   assert.deepEqual(await linkSet(f), { revision: 1 });
   await rejected(linkSet(f), 'conflict');
+  f.registry.archivedSessionIds.push('session-1');
+  assert.deepEqual(await linkSet(f, { linked: false, expectedRevision: 1 }), { revision: 2 });
+  assert.deepEqual((await linkRead(f)).links, [], 'an existing archived session link is removed');
+  f.registry.archivedSessionIds = [];
+  assert.deepEqual(await linkSet(f, { expectedRevision: 2 }), { revision: 3 });
   f.registry.get('ws').sessionIds = [];
-  await rejected(linkSet(f, { linked: false, expectedRevision: 1 }), 'session_not_in_workspace');
+  await rejected(linkSet(f, { linked: false, expectedRevision: 3 }), 'session_not_in_workspace');
 });
 
 test('link authorization races reject before local CAS', async () => {

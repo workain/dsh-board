@@ -1,4 +1,4 @@
-// A session-scoped, read-only view. Nothing in this module mutates Tracker or a board.
+// Session-scoped discovery and authorization for the shared Tracker editor.
 export function createSessionCard(React, deps) {
   const h = React.createElement;
   const { useEffect, useRef, useState, useSyncExternalStore } = React;
@@ -43,9 +43,10 @@ export function createSessionCard(React, deps) {
   function Body({ sessionId, useTabInfo }) {
     const { tab } = useTabInfo();
     const workspaces = useSource(wsSource), catalog = useSource(sessionSource), connected = useSource(connectionSource), mounted = useSource(mountedSource);
-    const [state, setState] = useState(null), [choice, setChoice] = useState(''), [refresh, setRefresh] = useState(0);
-    const liveRef = useRef(null), epoch = useRef(0), selectedRef = useRef('');
-    const visible = Boolean(tab?.visible && tab.signal && !tab.signal.aborted);
+    const [state, setState] = useState(null), [choice, setChoice] = useState(''), [closed, setClosed] = useState(false), [refresh, setRefresh] = useState(0);
+    const liveRef = useRef(null), epoch = useRef(0), selectedRef = useRef(''), selectionEpoch = useRef(0), revisionRef = useRef(null);
+    const documentVisible = () => typeof document === 'undefined' || document.visibilityState !== 'hidden';
+    const visible = Boolean(tab?.visible && tab.signal && !tab.signal.aborted && documentVisible());
     const currentScope = scope(sessionId);
     // This ref changes during render, before effects/cleanup. Old async work and old
     // render state must not survive a hidden tab or a changed session incarnation.
@@ -55,7 +56,7 @@ export function createSessionCard(React, deps) {
       epoch.current++;
     }
     const generation = epoch.current;
-    const valid = () => epoch.current === generation && liveRef.current?.visible && !liveRef.current.signal?.aborted && liveRef.current.sessionId === sessionId && sameScope(liveRef.current.scope, scope(sessionId));
+    const valid = () => epoch.current === generation && liveRef.current?.visible && documentVisible() && !liveRef.current.signal?.aborted && liveRef.current.sessionId === sessionId && sameScope(liveRef.current.scope, scope(sessionId));
     const readCommand = async (command, accepts) => {
       for (let attempt = 0; ; attempt++) {
         if (!accepts()) return null;
@@ -79,16 +80,16 @@ export function createSessionCard(React, deps) {
       return () => { disposers.forEach(dispose => dispose()); };
     }, [sessionId]);
     useEffect(() => {
-      if (!visible || !currentScope) return;
-      const invalidate = () => { epoch.current++; setState(null); setChoice(''); setRefresh(value => value + 1); };
-      const foreground = () => { if (typeof document !== 'undefined' && document.visibilityState === 'visible') invalidate(); };
+      if (!currentScope) return;
+      const invalidate = () => { epoch.current++; setState(null); setRefresh(value => value + 1); };
+      const foreground = () => invalidate();
       if (typeof document !== 'undefined') document.addEventListener('visibilitychange', foreground);
       return () => { if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', foreground); };
     }, [stamp, tab?.signal]);
     useEffect(() => {
       let active = true;
       const accepts = () => active && valid();
-      setState(null); setChoice('');
+      setState(null);
       if (!visible || !currentScope) return () => { active = false; };
       const run = async () => {
         let locals = [], localError = false;
@@ -127,6 +128,7 @@ export function createSessionCard(React, deps) {
           if (!accepts()) return;
           if (!settingsValid(settings)) throw Error('invalid settings');
           const boards = selectedBoards(settings, currentScope.workspaceId);
+          deps.onSettings?.(settings);
           if (!settings.configured || settings.needsReselect.includes(currentScope.workspaceId)) {
             await publish({ links: [], settings, message: settings.needsReselect.includes(currentScope.workspaceId) ? 'reselect' : 'unconfigured' }); return;
           }
@@ -146,6 +148,7 @@ export function createSessionCard(React, deps) {
           // A settings read after traversal detects changes that occurred while scanning.
           const after = await transport.trackerRead();
           if (!accepts()) return;
+          if (settingsValid(after)) deps.onSettings?.(after);
           if (!settingsValid(after) || after.revision !== settings.revision || !after.configured || after.needsReselect.includes(currentScope.workspaceId) || JSON.stringify(selectedBoards(after, currentScope.workspaceId)) !== JSON.stringify(boards)) throw Error('settings changed');
           await publish({ links, settings: after, partialError });
         } catch { if (accepts()) await publish({ links: [], message: 'unavailable' }); }
@@ -156,81 +159,54 @@ export function createSessionCard(React, deps) {
       return () => { active = false; tab.signal.removeEventListener('abort', onAbort); };
     }, [stamp, tab?.signal]);
     const data = visible && currentScope && state?.stamp === stamp && state.generation === generation ? state : null;
-    const chosen = data?.links?.find(link => identity(link) === choice) || (data?.links?.length === 1 ? data.links[0] : null);
+    const chosen = !closed && (data?.links?.find(link => identity(link) === choice) || (data?.links?.length === 1 ? data.links[0] : null));
     selectedRef.current = chosen ? identity(chosen) : '';
-    const [detail, setDetail] = useState(null);
-    const detailRef = useRef(null), batchBusy = useRef(null);
-    detailRef.current = detail;
-    useEffect(() => {
-      let active = true;
-      setDetail(null);
-      if (!data?.settings || !chosen || !valid()) return () => { active = false; };
-      const id = identity(chosen), revision = data.settings.revision;
-      const accepts = () => active && valid() && selectedRef.current === id;
-      const command = op => ({ op, workspaceId: currentScope.workspaceId, boardId: chosen.boardId, issueKey: chosen.issueKey, issueId: chosen.issueId });
-      const checkSettings = async () => {
+    const selectedId = chosen ? identity(chosen) : '', selectionGeneration = selectionEpoch.current;
+    const revisionIdentity = JSON.stringify([sessionId, currentScope?.workspaceId, currentScope?.incarnation, currentScope?.connectionId, data?.settings?.revision, selectedId, generation]);
+    if (chosen && revisionRef.current?.identity !== revisionIdentity) revisionRef.current = { identity: revisionIdentity, revision: chosen.linkRevision };
+    const editorValid = () => valid() && selectionEpoch.current === selectionGeneration && selectedRef.current === selectedId && Boolean(data?.settings && chosen);
+    const authorization = {
+      valid: editorValid,
+      async reconcileLink(command, receipt, accepts) {
+        const allowed = () => editorValid() && accepts() && revisionRef.current?.identity === revisionIdentity && command.expectedRevision === revisionRef.current.revision;
+        if (!allowed() || !Number.isSafeInteger(receipt.revision) || receipt.revision !== command.expectedRevision + 1) return false;
+        if (!command.linked && command.sessionId === sessionId) {
+          epoch.current++; setState(null); setChoice(''); setRefresh(value => value + 1);
+          return false;
+        }
         const settings = await transport.trackerRead();
-        if (!accepts()) return false;
-        if (!settingsValid(settings) || settings.revision !== revision || !settings.configured || settings.needsReselect.includes(currentScope.workspaceId) || !selectedBoards(settings, currentScope.workspaceId).includes(chosen.boardId)) throw Error('settings changed');
+        if (allowed() && settingsValid(settings)) deps.onSettings?.(settings);
+        if (!allowed() || !settingsValid(settings) || settings.revision !== data.settings.revision || !settings.configured || settings.needsReselect.includes(currentScope.workspaceId) || !selectedBoards(settings, currentScope.workspaceId).includes(chosen.boardId)) return false;
+        const result = await readCommand({ op: 'links.issue.read', workspaceId: currentScope.workspaceId, boardId: chosen.boardId, issueKey: chosen.issueKey, issueId: chosen.issueId }, allowed);
+        if (!allowed() || !result || result.incomplete !== false || result.revision !== receipt.revision || !Array.isArray(result.links) || result.links.length > 10000) return false;
+        const seen = new Set();
+        if (result.links.some(link => !link || typeof link.sessionId !== 'string' || !link.sessionId || link.issueKey !== chosen.issueKey || link.issueId !== chosen.issueId || seen.has(link.sessionId) || (seen.add(link.sessionId), false)) || !seen.has(sessionId) || seen.has(command.sessionId) !== command.linked) return false;
+        const after = await transport.trackerRead();
+        if (allowed() && settingsValid(after)) deps.onSettings?.(after);
+        if (!allowed() || !settingsValid(after) || after.revision !== settings.revision || !after.configured || after.needsReselect.includes(currentScope.workspaceId) || !selectedBoards(after, currentScope.workspaceId).includes(chosen.boardId)) return false;
+        revisionRef.current.revision = receipt.revision;
         return true;
-      };
-      const checkLink = async () => {
-        const result = await readCommand(command('links.issue.read'), accepts);
-        if (!accepts()) return false;
-        if (!result || result.incomplete !== false || !Number.isSafeInteger(result.revision) || result.revision !== chosen.linkRevision || !Array.isArray(result.links) || result.links.length > 10000 || result.links.some(link => !link || typeof link.sessionId !== 'string' || link.issueKey !== chosen.issueKey || link.issueId !== chosen.issueId) || !result.links.some(link => link.sessionId === sessionId)) throw Error('link changed');
-        return true;
-      };
-      const checkIssue = async () => {
-        const issue = await transport.trackerCommand(command('issue.read'));
-        if (!accepts()) return null;
-        if (!issue || issue.key !== chosen.issueKey || issue.id !== chosen.issueId || typeof issue.summary !== 'string' || !(issue.description === null || typeof issue.description === 'string') || typeof issue.status?.display !== 'string') throw Error('issue changed');
-        return issue;
-      };
-      const run = async previous => {
-        const owner = {}; batchBusy.current = owner;
+      },
+      async authorize(issue, accepts, expectedRevision) {
+        const revision = revisionRef.current?.revision;
+        const allowed = () => editorValid() && accepts() && revisionRef.current?.revision === revision && issue.workspaceId === currentScope.workspaceId && issue.boardId === chosen.boardId && issue.key === chosen.issueKey && issue.issueId === chosen.issueId;
+        const checkSettings = async () => {
+          const settings = await transport.trackerRead();
+          if (!allowed()) return false;
+          if (settingsValid(settings)) deps.onSettings?.(settings);
+          if (!settingsValid(settings) || settings.revision !== data.settings.revision || !settings.configured || settings.needsReselect.includes(currentScope.workspaceId) || !selectedBoards(settings, currentScope.workspaceId).includes(chosen.boardId)) throw Error('settings changed');
+          return true;
+        };
         try {
-          if (!await checkSettings() || !accepts() || !await checkLink() || !accepts()) return;
-          if (!await checkIssue() || !accepts()) return;
-          const comments = previous ? [...previous.comments] : [], ids = new Set(comments.map(comment => comment.id));
-          const cursors = new Set(previous?.cursors || []); let cursor = previous?.cursor ?? null, bytes = previous?.bytes || 0, commentState = 'partial', resumable = false;
-          for (let page = 0; page < 10; page++) {
-            if (!accepts()) return;
-            resumable = false;
-            let result;
-            try { result = await transport.trackerCommand({ ...command('issue.comments'), ...(cursor === null ? {} : { cursor }) }); }
-            catch (error) { if (!accepts()) return; if (authError(error)) throw error; commentState = 'error'; resumable = cursor !== null; break; }
-            if (!accepts()) return;
-            if (!result || !Array.isArray(result.comments) || result.comments.length > 100 || typeof result.complete !== 'boolean' || !(result.nextCursor === null || typeof result.nextCursor === 'string')) { commentState = 'partial'; break; }
-            const pageIds = new Set();
-            if (result.comments.some(comment => !comment || typeof comment.id !== 'string' || !comment.id || ids.has(comment.id) || pageIds.has(comment.id) || (pageIds.add(comment.id), false) || typeof comment.text !== 'string' || typeof comment.createdBy?.display !== 'string' || typeof comment.createdAt !== 'string')) { commentState = 'partial'; break; }
-            const pageBytes = new TextEncoder().encode(JSON.stringify(result.comments)).byteLength;
-            if (comments.length + result.comments.length > 1000 || bytes + pageBytes > 2 * 1024 * 1024) { commentState = 'limit'; break; }
-            comments.push(...result.comments); for (const comment of result.comments) ids.add(comment.id); bytes += pageBytes;
-            if (result.complete && result.nextCursor === null) { commentState = 'complete'; break; }
-            if (result.complete || result.nextCursor === null || !/^(?:0|[1-9][0-9]{0,15})$/.test(result.nextCursor) || !Number.isSafeInteger(Number(result.nextCursor)) || cursors.has(result.nextCursor) || (cursor !== null && Number(result.nextCursor) <= Number(cursor))) { commentState = 'partial'; break; }
-            if (comments.length >= 1000 || bytes >= 2 * 1024 * 1024) { commentState = 'limit'; break; }
-            cursor = result.nextCursor; cursors.add(cursor); resumable = true;
-          }
-          if (!accepts() || !await checkSettings() || !accepts()) return;
-          const fresh = await checkIssue();
-          if (!fresh || !accepts() || !await checkLink() || !accepts() || !await checkSettings() || !accepts()) return;
-          const next = { stamp, generation, id, issue: fresh, comments, commentState, revision, cursor, cursors: [...cursors], bytes, resumable, loading: false, loadMore };
-          detailRef.current = next; setDetail(next);
-        } catch { if (accepts()) { const next = { stamp, generation, id, error: true, revision }; detailRef.current = next; setDetail(next); } }
-        finally { if (batchBusy.current === owner) batchBusy.current = null; }
-      };
-      const loadMore = () => {
-        const previous = detailRef.current;
-        if (!accepts() || batchBusy.current || !previous?.resumable || previous.stamp !== stamp || previous.generation !== generation || previous.id !== id || previous.revision !== revision) return;
-        const loading = { ...previous, loading: true, loadMore };
-        detailRef.current = loading; setDetail(loading); void run(previous);
-      };
-      // Keep the action scoped to this effect, not to a stale button closure.
-      void run(null);
-      return () => { active = false; if (batchBusy.current) batchBusy.current = null; };
-    }, [data, chosen ? identity(chosen) : '', stamp]);
-    // Render checks the sources again, not only the effect's captured state.
-    const safeDetail = data && chosen && valid() && detail?.stamp === stamp && detail.generation === generation && detail.id === identity(chosen) && detail.revision === data.settings?.revision ? detail : null;
+          if (!allowed() || !await checkSettings() || !allowed()) return false;
+          const result = await readCommand({ op: 'links.issue.read', workspaceId: currentScope.workspaceId, boardId: chosen.boardId, issueKey: chosen.issueKey, issueId: chosen.issueId }, allowed);
+          if (!allowed()) return false;
+          const seen = new Set();
+          if (!result || result.incomplete !== false || !Number.isSafeInteger(result.revision) || result.revision !== revisionRef.current?.revision || (expectedRevision !== undefined && result.revision !== expectedRevision) || !Array.isArray(result.links) || result.links.length > 10000 || result.links.some(link => !link || typeof link.sessionId !== 'string' || !link.sessionId || link.issueKey !== chosen.issueKey || link.issueId !== chosen.issueId || seen.has(link.sessionId) || (seen.add(link.sessionId), false)) || !result.links.some(link => link.sessionId === sessionId)) throw Error('link changed');
+          return await checkSettings() && allowed();
+        } catch (error) { if (allowed()) { error.sessionAuthorization = true; throw error; } return false; }
+      },
+    };
     if (!visible || mounted !== sessionId || !connected) return null;
     const openBoard = () => { if (valid()) openBoardForSession(sessionId); };
     const openCurrentSession = event => {
@@ -241,17 +217,16 @@ export function createSessionCard(React, deps) {
       } else if (typeof deps.openSession === 'function') deps.openSession(sessionId);
     };
     const sessionTitle = catalog?.byId?.[sessionId]?.displayTitle || catalog?.byId?.[sessionId]?.title;
-    const sessionButton = h('button', { type: 'button', style: styles.button, onClick: openCurrentSession, onAuxClick: event => { if (event.button === 1) openCurrentSession(event); }, disabled: typeof deps.openSession !== 'function' }, text('sessionCardCurrentSession', 'Open current session'), ' · ', typeof sessionTitle === 'string' && sessionTitle.trim() ? sessionTitle : sessionId);
+    const sessionButton = h('button', { type: 'button', style: styles.button, onClick: openCurrentSession, onAuxClick: event => { if (event.button === 1) openCurrentSession(event); }, disabled: typeof deps.openSession !== 'function' }, text('sessionCardCurrentSession', 'Open current session'), ' · ', typeof sessionTitle === 'string' && sessionTitle.trim() && sessionTitle.trim() !== sessionId ? sessionTitle : text('untitled', 'Untitled session'));
     const boardButton = h('button', { type: 'button', style: styles.button, onClick: openBoard }, text('sessionCardBoard', 'Open full board to edit'));
     if (!currentScope) {
       const ambiguous = workspaces?.phase === 'ready' && Array.isArray(workspaces.items) && workspaces.items.filter(item => item?.sessionIds?.includes(sessionId)).length > 1;
       return h('section', { style: styles.card }, h('p', { style: styles.muted, role: 'status' }, ambiguous ? text('chooseSessionWorkspace', 'This session belongs to multiple workspaces. Open the board and choose a workspace explicitly.') : text('linkUnavailable', 'This session is unavailable, archived, or not registered in a workspace.')),
         h('button', { type: 'button', style: styles.button, onClick: () => { if (mountedSource.getSnapshot() === sessionId && connectionSource.getSnapshot()) openBoardForSession(sessionId); } }, text('sessionCardBoard', 'Open full board to edit')));
     }
-    const renderText = value => typeof renderTrackerText === 'function' ? renderTrackerText(value) : value;
-    return h('section', { style: styles.card, 'aria-label': text('sessionCardTitle', 'Linked tasks') },
-      h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' } }, h('strong', null, text('sessionCardTitle', 'Linked tasks')), h('span', { style: styles.badge }, text('trackerReadOnly', 'Read only'))),
-      h('p', { style: styles.muted }, text('sessionCardReadOnly', 'This view is read-only. Open the full board to edit. Access changes may not appear immediately.')), sessionButton, boardButton,
+        return h('section', { style: styles.card, 'aria-label': text('sessionCardTitle', 'Linked tasks') },
+      h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' } }, h('strong', null, text('sessionCardTitle', 'Linked tasks'))),
+      sessionButton, boardButton,
       !data ? h('p', { style: styles.muted, role: 'status' }, text('loading', 'Loading…')) : h(React.Fragment, null,
         h('section', { style: styles.panel }, h('strong', null, text('trackerLocal', 'Local tasks')),
           h('p', { style: styles.muted }, text('sessionCardLocalHistory', 'Local links are historical and do not record workspace incarnation; verify them on the full board.')),
@@ -260,13 +235,12 @@ export function createSessionCard(React, deps) {
           data.message && h('p', { role: 'status', style: styles.muted }, data.message === 'reselect' ? text('trackerReselect', 'Tracker board selection needs confirmation.') : data.message === 'unconfigured' ? text('trackerNotConfigured', 'Tracker is not configured.') : data.message === 'no_boards' ? text('trackerNoBoardsSelected', 'No Tracker boards are selected.') : text('trackerError', 'Tracker is unavailable; issue details are hidden.')),
           data.partialError && h('p', { role: 'status', style: styles.muted }, text('sessionCardPartial', 'Linked issues are a partial result; other links may exist.')),
           !data.message && data.links.length === 0 && h('p', { style: styles.muted }, data.partialError ? text('sessionCardNoLinksPartial', 'No linked issues found in this partial result.') : text('sessionCardNoLinks', 'No linked issues found.')),
-          data.links.length > 1 && h('label', null, text('sessionCardChoose', 'Choose a linked issue'), h('select', { style: styles.select, value: choice, onChange: event => { if (valid()) { selectedRef.current = event.target.value; setDetail(null); setChoice(event.target.value); } } }, h('option', { value: '' }, text('sessionCardSelect', 'Select an issue')), data.links.map(link => h('option', { key: identity(link), value: identity(link) }, link.issueKey + ' · ' + text('board', 'Board') + ' ' + link.boardId)))),
-          chosen && !safeDetail && h('p', { style: styles.muted, role: 'status' }, text('loading', 'Loading…')),
-          safeDetail?.error && h('p', { role: 'alert', style: styles.muted }, text('issueUnavailable', 'Issue details are hidden until access is revalidated.')),
-          safeDetail?.issue && h('article', { style: { marginTop: '12px', minWidth: 0 } }, h('div', { style: styles.muted }, chosen.issueKey, ' · ', safeDetail.issue.status.display), h('h3', { style: { margin: '5px 0 10px', fontSize: '16px', overflowWrap: 'anywhere' } }, safeDetail.issue.summary), safeDetail.issue.description && h('div', null, renderText(safeDetail.issue.description)),
-            h('h4', { style: { marginBottom: '6px' } }, text('issueComments', 'Comments & activity')), h('p', { style: styles.muted, role: 'status' }, safeDetail.loading ? text('issueCommentsLoading', 'Loading comments…') : safeDetail.commentState === 'complete' ? text('issueCommentsComplete', 'Traversal complete; comments may have changed while loading.') : safeDetail.commentState === 'error' ? text('issueCommentsError', 'Comments could not be loaded; earlier comments are retained.') : safeDetail.commentState === 'limit' ? text('issueCommentsLimit', 'Loading stopped at the comment or size limit.') : safeDetail.resumable ? text('issueCommentsPartial', 'More comments may be available.') : text('issueCommentsTerminalPartial', 'Traversal stopped without a usable continuation cursor; more comments may exist.')),
-            safeDetail.comments.map(comment => h('div', { key: comment.id, style: { borderTop: '1px solid var(--border, #8885)', padding: '10px 0', overflowWrap: 'anywhere' } }, h('strong', null, comment.createdBy.display), ' ', h('time', { dateTime: comment.createdAt, style: styles.muted }, comment.createdAt), h('div', null, renderText(comment.text)))),
-            safeDetail.resumable && h('button', { type: 'button', style: styles.button, disabled: safeDetail.loading, onClick: safeDetail.loadMore }, safeDetail.commentState === 'error' ? text('retry', 'Retry') : text('issueCommentsMore', 'Load more'))))));
+          data.links.length > 1 && h('label', null, text('sessionCardChoose', 'Choose a linked issue'), h('select', { style: styles.select, value: choice, onChange: event => { if (valid()) { selectionEpoch.current++; selectedRef.current = event.target.value; setClosed(false); setChoice(event.target.value); } } }, h('option', { value: '' }, text('sessionCardSelect', 'Select an issue')), data.links.map(link => h('option', { key: identity(link), value: identity(link) }, link.issueKey + ' · ' + text('board', 'Board') + ' ' + link.boardId)))),
+          closed && data.links.length === 1 && h('button', { type: 'button', style: styles.button, onClick: () => { if (valid()) { selectionEpoch.current++; setClosed(false); } } }, data.links[0].issueKey),
+          chosen && editorValid() && typeof deps.renderIssueEditor === 'function' && deps.renderIssueEditor({
+            target: { sessionId, ...currentScope, settings: data.settings, boardId: chosen.boardId, key: chosen.issueKey, issueId: chosen.issueId, linkRevision: chosen.linkRevision },
+            authorization, onClose: () => { selectionEpoch.current++; selectedRef.current = ''; setChoice(''); setClosed(true); },
+          }))));
   }
   return { Header, Body };
 }
