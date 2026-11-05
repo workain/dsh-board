@@ -8,6 +8,7 @@ window.__ModuleLoader__.load({
     const NS = 'dshBoard';
     const en = {
       issueMissingId: 'Issue details are unavailable because its immutable ID is missing.', issueDetails: 'Issue details', issueSaveFields: 'Save fields', issueChangeStatus: 'Change status', issueAddComment: 'Add comment', issueComments: 'Comments (partial)', issueNewComment: 'New comment', issueAssigneeId: 'Assignee ID (empty to unassign)', issueTransitions: 'Available transitions', issueNoTransition: 'Choose a transition', issueConfirmTransition: 'Apply this status transition?', issueSessionsPending: 'Tracker session linking is not available yet.', issueUnknown: 'The operation outcome is unknown. Do not retry until you independently check Tracker; it may still commit.', issueConflict: 'The issue changed or this transition is no longer available. Reload and review your draft.', issueRejected: 'The operation was rejected. Review the values.', issueSaved: 'Operation saved.', issueReload: 'Reload issue', issueDiscardConflict: 'Discard field draft and reload', issueReview: 'I checked Tracker and accept the uncertainty', issueUnavailable: 'Issue details are hidden until access is revalidated.', issueInvalid: 'Enter valid, nonempty values within the limits.', issueVersionUnavailable: 'Editing fields is unavailable because the issue version is unknown.', issueSessionPartial: 'Session links are incomplete; unavailable links may be omitted.', issueLinkSave: 'Save session link', issueChooseSession: 'Choose a workspace session', issueLinkAction: 'Link session', issueUnlinkAction: 'Unlink session', issueLinkUnavailable: 'Session links could not be loaded.',
+      issueSeparateOperations: 'Fields, status, comments and session links are saved separately; changes are not atomic.', issueKeepDraft: 'Cancel editing (draft retained)',
       issueEditComment: 'Edit comment', issueSaveCommentEdit: 'Save comment edit', issueEditCommentText: 'Comment text', issueDiscardCommentConflict: 'Discard edited comment and reload', issueCommentVersionUnavailable: 'Editing is unavailable because the comment version is unknown.', issueCommentRaceWarning: 'The version check before the remote request is best-effort, not atomic. This edit can overwrite a concurrent change.', issueEditedCommentMissing: 'The comment being edited is not in this partial result; the draft is retained.',
       trackerReviewDraft: 'I reviewed the refreshed board list and my selection.', trackerUpdatedAt: 'Last successful partial update:',
       panel: 'Board', workspace: 'Workspace', chooseWorkspace: 'Choose a workspace', board: 'Board',
@@ -17,6 +18,7 @@ window.__ModuleLoader__.load({
       loadError: 'Could not load the board. Check the connection and try again.',
       conflict: 'The board changed elsewhere. Reload it and review your changes.',
       unknown: 'The save result is unknown. Reload and check the board before trying again.',
+      trackerStatusView: 'Grouped by actual Tracker status; this is not the Tracker board-column layout.', trackerStatusPartial: 'Configured status mapping is too large or inconsistent; showing statuses from loaded issues only.',
       boardView: 'Board', listView: 'List', view: 'View', search: 'Search tasks', allStatuses: 'All statuses',
       status: 'Status', addStatus: 'Add status', editStatus: 'Edit status', statusName: 'Status name',
       addTask: 'Add task', editTask: 'Edit task', title: 'Title', description: 'Description',
@@ -38,6 +40,7 @@ window.__ModuleLoader__.load({
     };
     const ru = {
       issueMissingId: 'Карточка недоступна: отсутствует неизменяемый ID задачи.', issueDetails: 'Карточка задачи', issueSaveFields: 'Сохранить поля', issueChangeStatus: 'Изменить статус', issueAddComment: 'Добавить комментарий', issueComments: 'Комментарии (неполный список)', issueNewComment: 'Новый комментарий', issueAssigneeId: 'ID исполнителя (пусто — снять назначение)', issueTransitions: 'Доступные переходы', issueNoTransition: 'Выберите переход', issueConfirmTransition: 'Выполнить этот переход статуса?', issueSessionsPending: 'Связывание сессий с задачами Трекера пока недоступно.', issueUnknown: 'Результат операции неизвестен. Не повторяйте её до самостоятельной проверки в Трекере: она ещё может выполниться.', issueConflict: 'Задача изменилась или переход больше недоступен. Обновите данные и проверьте черновик.', issueRejected: 'Операция отклонена. Проверьте значения.', issueSaved: 'Операция сохранена.', issueReload: 'Обновить задачу', issueDiscardConflict: 'Отменить черновик полей и обновить', issueReview: 'Я проверил Трекер и принимаю неопределённость', issueUnavailable: 'Данные задачи скрыты до повторной проверки доступа.', issueInvalid: 'Введите допустимые непустые значения в пределах ограничений.', issueVersionUnavailable: 'Изменение полей недоступно: версия задачи неизвестна.', issueSessionPartial: 'Список связей неполный; недоступные связи могут отсутствовать.', issueLinkSave: 'Сохранить связь с сессией', issueChooseSession: 'Выберите сессию рабочего пространства', issueLinkAction: 'Связать сессию', issueUnlinkAction: 'Отвязать сессию', issueLinkUnavailable: 'Не удалось загрузить связи сессий.',
+      issueSeparateOperations: 'Поля, статус, комментарии и связи с сессиями сохраняются отдельно; изменения не атомарны.', issueKeepDraft: 'Закрыть редактирование (черновик сохранён)',
       issueEditComment: 'Изменить комментарий', issueSaveCommentEdit: 'Сохранить изменение комментария', issueEditCommentText: 'Текст комментария', issueDiscardCommentConflict: 'Отменить изменение комментария и обновить', issueCommentVersionUnavailable: 'Редактирование недоступно: версия комментария неизвестна.', issueCommentRaceWarning: 'Проверка версии перед удалённым запросом выполняется по возможности и не атомарна. Изменение может перезаписать параллельную правку.', issueEditedCommentMissing: 'Редактируемый комментарий отсутствует в частичном списке; черновик сохранён.',
       trackerReviewDraft: 'Я проверил обновлённый список досок и свой выбор.', trackerUpdatedAt: 'Последнее успешное частичное обновление:',
       panel: 'Доска', workspace: 'Рабочее пространство', chooseWorkspace: 'Выберите рабочее пространство', board: 'Доска',
@@ -47,6 +50,7 @@ window.__ModuleLoader__.load({
       loadError: 'Не удалось загрузить доску. Проверьте соединение и повторите попытку.',
       conflict: 'Доска изменилась в другом месте. Обновите её и проверьте изменения.',
       unknown: 'Результат сохранения неизвестен. Обновите доску и проверьте её перед повтором.',
+      trackerStatusView: 'Задачи сгруппированы по фактическому статусу Tracker; расположение столбцов может отличаться от доски Tracker.', trackerStatusPartial: 'Настройка статусов слишком велика или противоречива; показаны только статусы загруженных задач.',
       boardView: 'Доска', listView: 'Список', view: 'Вид', search: 'Поиск задач', allStatuses: 'Все статусы',
       status: 'Статус', addStatus: 'Добавить статус', editStatus: 'Изменить статус', statusName: 'Название статуса',
       addTask: 'Добавить задачу', editTask: 'Изменить задачу', title: 'Название', description: 'Описание',
@@ -181,11 +185,11 @@ window.__ModuleLoader__.load({
     }
     function trackerBoard(value, id) {
       if (!value || !value.board || value.board.id !== id || typeof value.board.name !== 'string' || value.issuesComplete !== false || !Array.isArray(value.columns) || !Array.isArray(value.issues)) throw new Error('invalid response');
-      if (value.columns.some((c) => !c || typeof c.id !== 'string' || typeof c.name !== 'string' || !Array.isArray(c.statuses) || c.statuses.some((s) => !s || typeof s.key !== 'string')) || new Set(value.columns.map((c) => c.id)).size !== value.columns.length || value.issues.some((i) => !i || typeof i.key !== 'string' || typeof i.summary !== 'string' || !i.status || typeof i.status.key !== 'string' || typeof i.status.display !== 'string') || new Set(value.issues.map((i) => i.key)).size !== value.issues.length) throw new Error('invalid response');
-      return { board: { id, name: value.board.name }, columns: value.columns.map((c) => ({ id: c.id, name: c.name, statuses: c.statuses.map((s) => ({ key: s.key })) })), issues: value.issues.map((i) => {
+      if (value.columns.some((c) => !c || typeof c.id !== 'string' || typeof c.name !== 'string' || !Array.isArray(c.statuses) || c.statuses.some((s) => !s || typeof s.id !== 'string' || typeof s.key !== 'string' || typeof s.display !== 'string')) || new Set(value.columns.map((c) => c.id)).size !== value.columns.length || value.issues.some((i) => !i || typeof i.key !== 'string' || typeof i.summary !== 'string' || !i.status || typeof i.status.id !== 'string' || typeof i.status.key !== 'string' || typeof i.status.display !== 'string') || new Set(value.issues.map((i) => i.key)).size !== value.issues.length) throw new Error('invalid response');
+      return { board: { id, name: value.board.name }, columns: value.columns.map((c) => ({ id: c.id, name: c.name, statuses: c.statuses.map((s) => ({ id: s.id, key: s.key, display: s.display })) })), issues: value.issues.map((i) => {
         const validAssignee = i.assignee && typeof i.assignee === 'object' && typeof i.assignee.id === 'string' && i.assignee.id.length > 0 && typeof i.assignee.display === 'string' && i.assignee.display.length > 0;
         const known = i.assigneeKnown === true && (i.assignee === null || validAssignee);
-        return { key: i.key, ...(typeof i.id === 'string' && i.id ? { id: i.id } : {}), summary: i.summary, status: { key: i.status.key, display: i.status.display }, assigneeKnown: known, assignee: known && validAssignee ? { id: i.assignee.id, display: i.assignee.display } : null };
+        return { key: i.key, ...(typeof i.id === 'string' && i.id ? { id: i.id } : {}), summary: i.summary, status: { id: i.status.id, key: i.status.key, display: i.status.display }, assigneeKnown: known, assignee: known && validAssignee ? { id: i.assignee.id, display: i.assignee.display } : null };
       }) };
     }
     function trackerError(error) {
@@ -275,6 +279,361 @@ window.__ModuleLoader__.load({
       check();
       return stop;
     }
+    /* BEGIN GENERATED TRACKER HELPERS */
+const { parseTrackerMarkup, safeTrackerHref, groupTrackerStatuses } = {
+  // tracker-markup.mjs sha256:57c60106a9c2fd8380725309c06fd09b018114bff7b7b884d5f7ae4468d76ea4
+  ...(() => {
+// A deliberately small, pure, non-DOM parser for untrusted Tracker content.
+// Consumers MUST render text as text nodes, never as HTML. See parseTrackerMarkup.
+const TRACKER_MARKUP_LIMITS = Object.freeze({ input: 200_000, nodes: 8_000, depth: 24, work: 1_000_000 });
+
+const LIMIT = Symbol('limit');
+const text = value => ({ type: 'text', value });
+const element = (type, children = [], extra = {}) => ({ type, ...extra, children });
+const fallback = value => ({ type: 'root', children: value ? [text(value)] : [] });
+const allowed = new Set(['p', 'div', 'br', 'ul', 'ol', 'li', 'b', 'strong', 'em', 'i', 'code', 'pre', 'a', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6']);
+const dangerous = new Set(['script', 'style', 'iframe', 'svg', 'math', 'img', 'object', 'embed', 'video', 'audio', 'source', 'link', 'meta', 'base', 'form', 'input', 'template', 'noscript', 'canvas', 'head']);
+const voidTags = new Set(['img', 'source', 'link', 'meta', 'base', 'input', 'embed', 'br']);
+const entities = Object.freeze({ amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: '\u00a0' });
+
+function decodeEntities(value) {
+  // Bound each candidate to avoid rescanning a long run after repeated '&'.
+  return value.replace(/&(#(?:x[0-9a-f]{1,8}|[0-9]{1,10})|[a-z][a-z0-9]{1,31});/gi, (whole, entity) => {
+    if (entity[0] !== '#') return Object.hasOwn(entities, entity.toLowerCase()) ? entities[entity.toLowerCase()] : whole;
+    const hex = entity[1]?.toLowerCase() === 'x';
+    const number = Number.parseInt(entity.slice(hex ? 2 : 1), hex ? 16 : 10);
+    return number > 0 && number <= 0x10ffff && !(number >= 0xd800 && number <= 0xdfff) ? String.fromCodePoint(number) : '\ufffd';
+  });
+}
+
+// No relative, protocol-relative, backslash, whitespace/control, credentials or
+// encoded protocol/host. URL canonicalization is only applied after strict checks.
+function safeTrackerHref(value) {
+  if (typeof value !== 'string' || value.length > 4096 || /[\u0000-\u0020\u007f-\u009f\\]/u.test(value) || !/^https?:\/\//i.test(value)) return null;
+  const authority = /^https?:\/\/([^/?#]*)/i.exec(value)?.[1];
+  if (!authority || authority.includes('%')) return null;
+  try {
+    const url = new URL(value);
+    if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || url.username || url.password) return null;
+    return url.href;
+  } catch { return null; }
+}
+
+function context() {
+  let count = 0, work = 0;
+  return {
+    // Charge the entire potentially scanned region *before* invoking indexOf or
+    // a regex on it. An attacker cannot force repeated unbounded lookaheads.
+    scan(size) { work += size; if (work > TRACKER_MARKUP_LIMITS.work) throw LIMIT; },
+    add(type, children, extra) { if (++count > TRACKER_MARKUP_LIMITS.nodes) throw LIMIT; return element(type, children, extra); },
+    text(value) { if (++count > TRACKER_MARKUP_LIMITS.nodes) throw LIMIT; return text(value); },
+  };
+}
+function pushText(out, value, ctx) {
+  if (!value) return;
+  const last = out[out.length - 1];
+  if (last?.type === 'text') last.value += value;
+  else out.push(ctx.text(value));
+}
+
+// Balanced minimal inline syntax. Ambiguous or incomplete syntax stays literal.
+function inline(s, ctx, depth = 0) {
+  if (depth >= TRACKER_MARKUP_LIMITS.depth) throw LIMIT;
+  const out = [];
+  let i = 0;
+  ctx.scan(s.length);
+  while (i < s.length) {
+    if (s[i] === '\\' && i + 1 < s.length && /[\\`*_[\]()!]/.test(s[i + 1])) { pushText(out, s[i + 1], ctx); i += 2; continue; }
+    if (s[i] === '\n') { out.push(ctx.add('br', [])); i++; continue; }
+    if (s[i] === '`') {
+      ctx.scan(s.length - i);
+      const end = s.indexOf('`', i + 1);
+      if (end > i + 1) { out.push(ctx.add('code', [ctx.text(s.slice(i + 1, end))])); i = end + 1; continue; }
+    }
+    // Images are always literal: neither a link nor an image element.
+    if (s.startsWith('![', i)) {
+      ctx.scan(s.length - i);
+      const match = /^!\[[^\]\n]*\]\([^\n)]*\)/.exec(s.slice(i));
+      if (match) { pushText(out, match[0], ctx); i += match[0].length; continue; }
+      pushText(out, '![', ctx); i += 2; continue;
+    }
+    if (s[i] === '[') {
+      ctx.scan(s.length - i);
+      const match = /^\[([^\]\n]+)\]\(([^\s()]+)\)/.exec(s.slice(i));
+      if (match) {
+        const href = safeTrackerHref(match[2]);
+        if (href) out.push(ctx.add('a', inline(match[1], ctx, depth + 1), { href }));
+        else pushText(out, match[0], ctx);
+        i += match[0].length; continue;
+      }
+    }
+    const marker = s.startsWith('**', i) ? '**' : s.startsWith('__', i) ? '__' : s[i] === '*' ? '*' : s[i] === '_' ? '_' : null;
+    if (marker && !(marker[0] === '_' && i > 0 && /[\p{L}\p{N}_]/u.test(s[i - 1]))) {
+      ctx.scan(s.length - i);
+      const end = s.indexOf(marker, i + marker.length);
+      if (end > i + marker.length && !/\s/.test(s[i + marker.length]) && !/\s/.test(s[end - 1]) && !(marker[0] === '_' && /[\p{L}\p{N}_]/u.test(s[end + marker.length] || ''))) {
+        out.push(ctx.add(marker.length === 2 ? 'strong' : 'em', inline(s.slice(i + marker.length, end), ctx, depth + 1)));
+        i = end + marker.length; continue;
+      }
+    }
+    pushText(out, s[i], ctx); i++;
+  }
+  return out;
+}
+
+function markdown(source, ctx) {
+  const lines = source.replace(/\r\n?/g, '\n').split('\n');
+  ctx.scan(source.length * 4);
+  const blocks = [];
+  // Unsupported YFM directives delimit constructs we cannot safely interpret.
+  // Keep the whole source verbatim instead of rendering their bodies as Markdown.
+  if (lines.some(line => /^[ \t]*\{%/.test(line) || /^[ \t]+(?:[-+*]|\d+[.)])[ \t]+/.test(line))) return { type: 'root', children: [ctx.add('p', [ctx.text(source)])] };
+  let i = 0;
+  const heading = line => /^(#{1,6})[ \t]+(.+)$/.exec(line);
+  const item = line => /^([-+*]|\d+[.)])[ \t]+(.+)$/.exec(line);
+  const fence = line => /^ {0,3}```[ \t]*([a-zA-Z0-9_-]*)[ \t]*$/.exec(line);
+  const special = line => !!(heading(line) || item(line) || fence(line));
+  while (i < lines.length) {
+    if (!lines[i].trim()) { i++; continue; }
+    const f = fence(lines[i]);
+    if (f) {
+      let end = i + 1;
+      while (end < lines.length && !/^ {0,3}```[ \t]*$/.test(lines[end])) end++;
+      if (end < lines.length) {
+        blocks.push(ctx.add('pre', [ctx.add('code', [ctx.text(lines.slice(i + 1, end).join('\n'))])])); i = end + 1; continue;
+      }
+      // Preserve unclosed fences including their subsequent lines verbatim.
+      blocks.push(ctx.add('p', [ctx.text(lines.slice(i).join('\n'))])); break;
+    }
+    const h = heading(lines[i]);
+    if (h) { blocks.push(ctx.add(`h${h[1].length}`, inline(h[2], ctx))); i++; continue; }
+    const first = item(lines[i]);
+    if (first) {
+      const ordered = /^\d/.test(first[1]);
+      const items = [];
+      while (i < lines.length) {
+        const m = item(lines[i]);
+        if (!m || /^\d/.test(m[1]) !== ordered) break;
+        items.push(ctx.add('li', inline(m[2], ctx))); i++;
+      }
+      blocks.push(ctx.add(ordered ? 'ol' : 'ul', items)); continue;
+    }
+    const para = [lines[i++]];
+    while (i < lines.length && lines[i].trim() && !special(lines[i])) para.push(lines[i++]);
+    blocks.push(ctx.add('p', inline(para.join('\n'), ctx)));
+  }
+  return { type: 'root', children: blocks };
+}
+
+// Tokenize attributes, rejecting malformed syntax and duplicate href. Nothing but
+// a validated href is emitted; event handlers, styles, src etc. are ignored.
+function attributes(s, ctx) {
+  let i = 0, href = null, alt = null, seenHref = false, seenAlt = false;
+  while (i < s.length) {
+    while (i < s.length && /\s/.test(s[i])) i++;
+    if (i === s.length) break;
+    ctx.scan(s.length - i);
+    const name = /^[a-zA-Z_:][a-zA-Z0-9_:.-]*/.exec(s.slice(i));
+    if (!name) return null;
+    i += name[0].length;
+    while (i < s.length && /\s/.test(s[i])) i++;
+    let value = '';
+    if (s[i] === '=') {
+      i++; while (i < s.length && /\s/.test(s[i])) i++;
+      if (s[i] === '"' || s[i] === "'") {
+        const quote = s[i++];
+        ctx.scan(s.length - i);
+        const end = s.indexOf(quote, i);
+        if (end < 0) return null;
+        value = s.slice(i, end); i = end + 1;
+      } else {
+        ctx.scan(s.length - i);
+        const m = /^[^\s"'`=<>]+/.exec(s.slice(i));
+        if (!m) return null;
+        value = m[0]; i += value.length;
+      }
+    }
+    const lower = name[0].toLowerCase();
+    if (lower === 'href') {
+      if (seenHref) return null;
+      seenHref = true; href = decodeEntities(value);
+    }
+    if (lower === 'alt') {
+      if (seenAlt) return null;
+      seenAlt = true; alt = decodeEntities(value);
+    }
+  }
+  return { href, alt };
+}
+
+function html(source, ctx) {
+  const root = { type: 'root', children: [] }, stack = [{ name: '', node: root }];
+  ctx.scan(source.length * 4);
+  let i = 0, skipped = null, skipDepth = 0;
+  const current = () => stack[stack.length - 1].node.children;
+  while (i < source.length) {
+    if (source.startsWith('<!--', i)) {
+      const end = source.indexOf('-->', i + 4); if (end < 0) return null;
+      i = end + 3; continue;
+    }
+    if (source[i] !== '<') {
+      let end = source.indexOf('<', i); if (end < 0) end = source.length;
+      if (!skipped) pushText(current(), decodeEntities(source.slice(i, end)), ctx);
+      i = end; continue;
+    }
+    // Find the next > without interpreting quoted attribute values.
+    let end = i + 1, quote = null;
+    for (; end < source.length; end++) {
+      const c = source[end];
+      if (quote) { if (c === quote) quote = null; }
+      else if (c === '"' || c === "'") quote = c;
+      else if (c === '>') break;
+      else if (c === '<') return null;
+    }
+    if (end === source.length || quote) return null;
+    const raw = source.slice(i + 1, end);
+    i = end + 1;
+    if (/^!doctype\s+html\s*$/i.test(raw)) continue;
+    const token = /^(\/)?([a-zA-Z][a-zA-Z0-9-]*)([\s\S]*)$/.exec(raw);
+    if (!token) return null;
+    const closing = !!token[1], name = token[2].toLowerCase();
+    let rest = token[3], selfClosing = false;
+    if (closing && rest.trim()) return null;
+    if (!closing && rest.trimEnd().endsWith('/')) { selfClosing = true; rest = rest.trimEnd().slice(0, -1); }
+    if (!closing && rest && !/^\s/.test(rest)) return null;
+    const attrs = closing ? null : attributes(rest, ctx);
+    if (!closing && !attrs) return null;
+    if (skipped) {
+      if (name === skipped && !voidTags.has(name)) {
+        if (closing) { if (--skipDepth === 0) skipped = null; }
+        else if (!selfClosing) skipDepth++;
+      }
+      continue;
+    }
+    if (dangerous.has(name)) {
+      if (name === 'img' && !closing && attrs.alt) pushText(current(), attrs.alt, ctx);
+      if (!closing && !voidTags.has(name) && !selfClosing) { skipped = name; skipDepth = 1; }
+      continue;
+    }
+    if (name === 'html' || name === 'body') continue;
+    if (!allowed.has(name)) {
+      // Unknown syntax remains visible, never interpreted as HTML.
+      pushText(current(), source.slice(i - raw.length - 2, i), ctx); continue;
+    }
+    if (closing) {
+      if (name === 'br' || stack.length === 1 || stack[stack.length - 1].name !== name) return null;
+      stack.pop(); continue;
+    }
+    if (stack.length >= TRACKER_MARKUP_LIMITS.depth) throw LIMIT;
+    const href = name === 'a' ? safeTrackerHref(attrs.href) : null;
+    // A rejected link becomes a span-like div-less node, not an active link.
+    const type = name === 'a' && !href ? 'span' : name === 'b' ? 'strong' : name === 'i' ? 'em' : name;
+    const node = ctx.add(type, [], href ? { href } : {});
+    current().push(node);
+    if (name !== 'br' && !selfClosing) stack.push({ name, node });
+  }
+  if (stack.length !== 1 || skipped) return null;
+  return root;
+}
+
+/**
+ * parseTrackerMarkup(string) -> {type:'root', children:[node,...]}.
+ * Nodes are {type:'text', value:string}, or {type, children}, with an optional
+ * href ONLY on type 'a'. Element types: p, div, span, br, ul, ol, li, strong,
+ * em, code, pre, h1..h6, a. For 'a' the caller MUST set target='_blank' and
+ * rel='noopener noreferrer'. Do not spread AST fields into DOM props; map the
+ * allowlisted types explicitly and render text as React children, never innerHTML.
+ * No image nodes, fetching, DOM APIs, effects, or markup execution occur here.
+ * Input over 200k UTF-16 code units is truncated with a visible marker. Excessive
+ * nodes/depth/work and malformed legacy HTML fall back to literal, safely rendered
+ * text. The conservative work budget may also fall back on long valid constructs.
+ * This is a conservative YFM/Markdown subset, not a CommonMark or HTML parser.
+ */
+function parseTrackerMarkup(input) {
+  if (typeof input !== 'string') return fallback('');
+  const source = input.length > TRACKER_MARKUP_LIMITS.input ? input.slice(0, TRACKER_MARKUP_LIMITS.input) + '\n[… truncated …]' : input;
+  // Legacy wrapper is recognized only around the whole content. Parsing failure
+  // shows the original literal rather than guessing browser error recovery.
+  const trimmed = source.trim();
+  const wrapper = trimmed.startsWith('<#') && trimmed.endsWith('#>') ? trimmed.slice(2, -2) : null;
+  try {
+    const ctx = context();
+    return wrapper !== null && /^\s*(?:<!doctype\s+html\s*>\s*)?<html(?:\s|>)/i.test(wrapper) ? (html(wrapper, ctx) || fallback(source)) : markdown(source, ctx);
+  } catch (error) {
+    if (error === LIMIT) return fallback(source);
+    throw error;
+  }
+}
+
+    return { TRACKER_MARKUP_LIMITS, safeTrackerHref, parseTrackerMarkup };
+  })(),
+  // tracker-statuses.mjs sha256:8220ed56da8ed5b95fbcf7a0beb76d754e38e75a404880a6a77b4843d01a59d7
+  ...(() => {
+// Derive a status-oriented view from Tracker data, without changing Tracker's
+// board configuration or any issue. Both configured and observed statuses are
+// real Tracker objects. Inconsistent identities fail closed, never guess.
+function groupTrackerStatuses({ columns, issues }) {
+  const fail = () => { throw new TypeError('Invalid Tracker status data'); };
+  if (!Array.isArray(columns) || columns.length > 500 || !Array.isArray(issues) || issues.length > 500) fail();
+  const byId = new Map(), idByKey = new Map(), groups = [], observedOnly = [], issueKeys = new Set();
+  let associations = 0;
+  const text = (value, max) => typeof value === 'string' && value.length > 0 && value.length <= max && Boolean(value.trim()) && !/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(value);
+  function add(status, columnIndex) {
+    if (!status || typeof status !== 'object' || !text(status.id, 128) || !text(status.key, 128) || !text(status.display, 256)) fail();
+    const knownId = idByKey.get(status.key), existing = byId.get(status.id);
+    if ((knownId !== undefined && knownId !== status.id) || (existing && existing.status.key !== status.key)) fail();
+    let group = existing;
+    if (!group) {
+      if (byId.size >= 500) fail();
+      group = { status: { id: status.id, key: status.key, display: status.display }, columnIndexes: [], issues: [] };
+      (columnIndex === null ? observedOnly : groups).push(group);
+      byId.set(status.id, group); idByKey.set(status.key, status.id);
+    }
+    // A display label can change or be localized; the observed issue's label
+    // is not reinterpreted or used as identity. Preserve the first source label.
+    if (columnIndex !== null && !group.columnIndexes.includes(columnIndex)) group.columnIndexes.push(columnIndex);
+    return group;
+  }
+  columns.forEach((column, index) => {
+    if (!column || !Array.isArray(column.statuses) || column.statuses.length > 500) fail();
+    associations += column.statuses.length;
+    if (associations > 5000) fail();
+    column.statuses.forEach(status => add(status, index));
+  });
+  for (const issue of issues) {
+    if (!issue || typeof issue !== 'object' || !text(issue.key, 128) || issueKeys.has(issue.key)) fail();
+    issueKeys.add(issue.key);
+    add(issue.status, null).issues.push(issue);
+  }
+  // Stable across search order and environments: no locale-dependent collation.
+  observedOnly.sort((a, b) => a.status.key < b.status.key ? -1 : a.status.key > b.status.key ? 1 : 0);
+  return [...groups, ...observedOnly];
+}
+
+    return { groupTrackerStatuses };
+  })(),
+};
+/* END GENERATED TRACKER HELPERS */
+    // Tracker content is untrusted. Render only a fixed AST vocabulary as React
+    // elements; never interpret HTML, spread attributes, or fetch remote media.
+    function renderTrackerText(text) {
+      const allowed = new Set(['p', 'div', 'span', 'br', 'ul', 'ol', 'li', 'strong', 'em', 'code', 'pre', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'a']);
+      try {
+        function node(item, key) {
+          if (item?.type === 'text' && typeof item.value === 'string') return item.value;
+          if (!item || !allowed.has(item.type) || !Array.isArray(item.children)) return null;
+          const props = { key };
+          if (item.type === 'a') {
+            const href = safeTrackerHref(item.href);
+            if (!href) return h('span', props, ...item.children.map((child, index) => node(child, index)));
+            Object.assign(props, { href, target: '_blank', rel: 'noopener noreferrer' });
+          }
+          return h(item.type, props, ...item.children.map((child, index) => node(child, index)));
+        }
+        const ast = parseTrackerMarkup(text);
+        return h('div', { className: 'dsh-board-richtext' }, ...ast.children.map((child, index) => node(child, index)));
+      } catch { return h('div', { className: 'dsh-board-richtext' }, text); }
+    }
     function BoardIcon({ size = 20 }) {
       return h('svg', { width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.7, 'aria-hidden': true },
         h('rect', { x: 3, y: 4, width: 18, height: 16, rx: 2 }),
@@ -296,6 +655,14 @@ window.__ModuleLoader__.load({
       .dsh-board-alert{padding:12px 14px;margin:12px 0;border:1px solid var(--dsw-alias-state-warn-primary,var(--line));border-radius:9px;font-size:12px;line-height:1.5}.dsh-board-empty{padding:22px 0;color:var(--muted);font-size:12px}.dsh-board-welcome{display:grid;justify-items:center;gap:9px;margin:30px 0;padding:64px 20px;border:1px dashed var(--line);border-radius:12px;text-align:center}.dsh-board-welcome-icon{display:grid;place-items:center;width:44px;height:44px;margin-bottom:6px;border-radius:12px;background:var(--layer);color:var(--accent)}.dsh-board-welcome h2{font-size:15px}.dsh-board-welcome p{max-width:380px;color:var(--muted);font-size:12px;line-height:1.6}
       .dsh-board-overview{margin-top:30px}.dsh-board-overview-count{display:grid;place-items:center;width:25px;height:25px;border-radius:8px;background:var(--accent-soft);color:var(--ink);font-size:11px;font-weight:700}.dsh-board-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,230px),1fr));gap:12px;margin-top:16px}.dsh-board button.dsh-board-tile{position:relative;display:flex;align-items:flex-start;justify-content:flex-start;gap:12px;min-height:98px;padding:16px;text-align:left;border-color:var(--line);background:var(--base)}.dsh-board button.dsh-board-tile:not(:disabled):hover{border-color:var(--accent);background:var(--accent-soft)}.dsh-board-tile-icon{display:grid;place-items:center;flex:none;width:34px;height:34px;border-radius:10px;background:var(--accent-soft);color:var(--accent)}.dsh-board-tile-content{display:grid;gap:5px;min-width:0}.dsh-board-tile-content strong{color:var(--ink);font-size:13px;overflow-wrap:anywhere}.dsh-board-tile-content>span,.dsh-board-tile-content small{color:var(--muted);font-size:11px;font-weight:500;overflow-wrap:anywhere}.dsh-board-tile-arrow{margin-left:auto;color:var(--accent);font-size:15px}.dsh-board-session-banner{display:flex;align-items:center;justify-content:space-between;gap:14px;margin:16px 0;padding:12px 14px;border:1px solid var(--accent);border-radius:10px;background:var(--accent-soft);font-size:12px}.dsh-board-session-banner strong,.dsh-board-session-banner span{display:block;overflow-wrap:anywhere}.dsh-board-session-banner strong{margin-bottom:4px}.dsh-board-session-banner p{margin-top:5px;color:var(--muted)}.dsh-board button.dsh-board-back{justify-content:flex-start;min-height:0;margin:0 0 10px;padding:0;border:0;background:transparent;color:var(--accent);font-size:12px}.dsh-board .dsh-board-card{gap:6px;padding:8px 10px;border-radius:8px}.dsh-board .dsh-board-card-header{align-items:flex-start}.dsh-board button.dsh-board-card-title{display:block;min-height:28px;padding:4px 2px;border:0;background:transparent;color:var(--ink);font-size:12px;font-weight:600}.dsh-board button.dsh-board-card-action-links{display:inline-flex;gap:4px;min-width:30px;min-height:28px;padding:4px 6px;border:0;background:var(--accent-soft);color:var(--ink)}.dsh-board-card-action-links .dsh-board-icon{width:13px;height:13px}.dsh-board button.dsh-board-card-current{justify-self:start;min-height:28px;padding:5px 8px;border-color:var(--accent-soft);background:var(--accent-soft);color:var(--ink);font-size:11px}.dsh-board button.dsh-board-card-current.is-linked{border-color:var(--dsw-alias-state-success-primary,#22c55e);background:var(--dsw-alias-state-success-tertiary,#e6faed)}.dsh-board-session-row{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}.dsh-board-session-row label{min-width:0}.dsh-board-session-row button{flex:none}
       .dsh-board-drawer{position:fixed;z-index:100;top:0;right:0;bottom:0;width:min(520px,100vw);overflow:auto;padding:22px;background:var(--base);border-left:1px solid var(--line);box-shadow:-12px 0 32px #172b4d30}.dsh-board-drawer .dsh-board-form{margin:0;max-width:none;padding:0;border:0;box-shadow:none}.dsh-board-drawer-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}.dsh-board-drawer section{display:grid;gap:10px;margin:20px 0}.dsh-board-drawer label{display:grid;gap:7px;color:var(--muted);font-size:11px;font-weight:650}.dsh-board-drawer p,.dsh-board-drawer li{white-space:pre-wrap;overflow-wrap:anywhere}.dsh-board-drawer ul{padding-left:20px}
+      .dsh-board .dsh-board-tracker-drawer{width:min(580px,100vw);padding:0;overflow-x:hidden;overscroll-behavior:contain;box-shadow:-12px 0 36px #0003}.dsh-board-tracker-drawer,.dsh-board-tracker-drawer *{min-width:0}.dsh-board-tracker-drawer button{white-space:normal;overflow-wrap:anywhere}.dsh-board-tracker-drawer select{max-width:100%}
+      .dsh-board-tracker-drawer .dsh-board-tracker-head{position:sticky;top:0;z-index:2;display:flex;align-items:center;justify-content:space-between;gap:12px;min-width:0;padding:12px 24px;border-bottom:1px solid var(--line);background:var(--base)}
+      .dsh-board-tracker-head h2{min-width:0;color:var(--muted);font-size:12px;font-weight:650;overflow-wrap:anywhere}.dsh-board-tracker-head h2:focus-visible{outline:2px solid var(--accent);outline-offset:3px}.dsh-board-tracker-head a{color:var(--accent);text-decoration:none}.dsh-board-tracker-head a:hover{text-decoration:underline}.dsh-board-tracker-head-actions{display:flex;align-items:center;gap:8px;flex:none}.dsh-board .dsh-board-tracker-close{min-width:36px;padding:8px;font-size:18px;line-height:1}
+      .dsh-board-tracker-body{display:grid;gap:0;min-width:0;padding:24px}.dsh-board-tracker-body>*{min-width:0}.dsh-board-tracker-body .dsh-board-tracker-hero{display:grid;gap:14px;margin:0 0 22px}.dsh-board-tracker-hero h3{font-size:20px;line-height:1.3;letter-spacing:-.025em;overflow-wrap:anywhere}.dsh-board-tracker-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.dsh-board-tracker-meta p{display:flex;align-items:center;gap:6px;min-width:0;color:var(--muted);font-size:12px}.dsh-board-tracker-meta strong{color:var(--ink);font-weight:600;overflow-wrap:anywhere}.dsh-board-tracker-status{padding:5px 9px;border-radius:7px;background:var(--accent-soft);color:var(--ink);font-size:12px;font-weight:650;overflow-wrap:anywhere}
+      .dsh-board-tracker-drawer section.dsh-board-tracker-section{display:grid;gap:12px;min-width:0;margin:0;padding:22px 0;border-top:1px solid var(--line)}.dsh-board-tracker-section h3{font-size:14px;font-weight:700;letter-spacing:-.01em}.dsh-board-tracker-section label{font-size:12px}.dsh-board-tracker-section .dsh-board-richtext{font-size:14px;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere}.dsh-board-tracker-section button{justify-self:start;max-width:100%;overflow-wrap:anywhere;text-align:left}.dsh-board-tracker-section .dsh-board-row{align-items:flex-end}.dsh-board-tracker-section .dsh-board-row label{flex:1 1 180px;min-width:0}
+      .dsh-board-tracker-drawer ul.dsh-board-tracker-list{display:grid;gap:12px;margin:0;padding:0;list-style:none}.dsh-board-tracker-list li{min-width:0;overflow-wrap:anywhere}.dsh-board-tracker-session{padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:var(--layer);font-size:13px}.dsh-board-tracker-comment{display:grid;gap:8px;padding:14px;border:1px solid var(--line);border-radius:10px;background:var(--layer)}.dsh-board-tracker-comment-meta{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;color:var(--muted);font-size:11px}.dsh-board-tracker-comment-meta strong{color:var(--ink);font-size:12px}.dsh-board-tracker-comment p{font-size:13px;line-height:1.55}.dsh-board-tracker-notices{display:grid;gap:8px;margin-bottom:16px}.dsh-board-tracker-notices p{font-size:12px;line-height:1.5;overflow-wrap:anywhere}.dsh-board-tracker-separate{color:var(--muted);font-size:12px;line-height:1.5}.dsh-board-tracker-draft{justify-self:start;margin-top:12px!important;padding:6px 9px;border:1px solid var(--line);border-radius:7px;background:var(--layer);color:var(--ink);font-size:12px;line-height:1.4}.dsh-board-tracker-footer{padding:4px 0 12px}
+      @media(max-width:600px){.dsh-board-tracker-drawer .dsh-board-tracker-head{padding:10px 16px}.dsh-board-tracker-body{padding:20px 16px}.dsh-board .dsh-board-tracker-drawer button,.dsh-board .dsh-board-tracker-drawer input,.dsh-board .dsh-board-tracker-drawer select{min-height:44px}.dsh-board .dsh-board-tracker-close{min-width:44px}.dsh-board-tracker-head-actions{gap:6px}.dsh-board-tracker-head-actions button{padding:8px}}
+      .dsh-board-tracker-drawer .dsh-board-richtext{font-size:14px;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere}.dsh-board-richtext p,.dsh-board-richtext ul,.dsh-board-richtext ol,.dsh-board-richtext pre{margin:0 0 .75em}.dsh-board-richtext ul,.dsh-board-richtext ol{padding-left:1.5em}.dsh-board-richtext pre{max-width:100%;overflow:auto;padding:12px;border-radius:8px;background:var(--layer);white-space:pre}.dsh-board-richtext code{font-family:monospace}.dsh-board-richtext a{color:var(--accent);text-decoration:underline}.dsh-board-richtext h1,.dsh-board-richtext h2,.dsh-board-richtext h3,.dsh-board-richtext h4,.dsh-board-richtext h5,.dsh-board-richtext h6{margin:.75em 0 .4em;line-height:1.3}.dsh-board-richtext> :last-child{margin-bottom:0}
       .dsh-board,.dsh-board-shell,.dsh-board-content{min-width:0;max-width:100%}.dsh-board-kanban:focus-visible{outline:2px solid var(--accent);outline-offset:2px}.dsh-board-whale{display:block;width:16px;height:16px;flex:none}.dsh-board button.dsh-board-whale-button{min-height:26px;padding:4px;border:0;background:transparent;color:var(--muted)}.dsh-board button.dsh-board-whale-button[aria-pressed=true]{background:var(--accent-soft);color:var(--accent)}.dsh-board-session-menu{display:grid;gap:3px;padding:6px;border:1px solid var(--line);border-radius:8px;background:var(--base)}.dsh-board .dsh-board-session-menu button{justify-content:flex-start;min-width:0;min-height:28px;padding:5px 7px;border:0;text-align:left;overflow-wrap:anywhere}.dsh-board-session-menu button[aria-disabled=true]{color:var(--muted);cursor:not-allowed}.dsh-board-card-id[href]{color:var(--accent);text-decoration:none}.dsh-board-card-id[href]:hover{text-decoration:underline}
       @media(max-width:900px){.dsh-board-shell{padding:28px 24px}.dsh-board-context-action{margin-left:0}.dsh-board-header h1{font-size:26px}}@media(max-width:600px){.dsh-board-shell{padding:22px 16px}.dsh-board-header{gap:14px;margin-bottom:22px}.dsh-board-header h1{font-size:24px}.dsh-board-context{padding:14px;align-items:stretch}.dsh-board-context .dsh-board-field,.dsh-board-context .dsh-board-field:first-child{flex:1 1 100%}.dsh-board-context-action{width:100%}.dsh-board-context-action button{width:100%}.dsh-board-section-head{gap:12px}.dsh-board-toolbar-spacer{display:none}.dsh-board-search{flex:1 1 160px}.dsh-board-filter{flex:1 1 130px}.dsh-board-column{flex-basis:min(290px,85vw)}}@media(prefers-reduced-motion:reduce){.dsh-board button{transition:none}}
     `;
@@ -333,11 +700,20 @@ window.__ModuleLoader__.load({
       const setStatusFilter = (value) => updateMemory({ statusFilter: value });
       const setShowContext = (value) => updateMemory({ showContext: value });
       const formHeading = useRef(null), issueHeading = useRef(null), issueOrigin = useRef(null);
+      const issueEditButton = useRef(null), issueTitleInput = useRef(null), issueFocusRequest = useRef(null);
       useEffect(() => {
         if (!memory.issue) return;
         issueHeading.current?.focus();
         return () => { if (issueOrigin.current?.isConnected) issueOrigin.current.focus(); issueOrigin.current = null; };
       }, [Boolean(memory.issue)]);
+      useEffect(() => {
+        const request = issueFocusRequest.current;
+        if (!request) return;
+        if (memory.issue?.token === request.token && memory.issue.available && memory.issue.editingFields === request.editing && issueScope(memory.issue)) {
+          const target = request.editing ? issueTitleInput.current : issueEditButton.current;
+          if (target) { issueFocusRequest.current = null; target.focus(); }
+        } else if (memory.issue?.token !== request.token) issueFocusRequest.current = null;
+      });
       const boards = useMemo(() => (snapshot ? snapshot.boards.filter((item) => item.workspaceId === workspaceId) : []), [snapshot, workspaceId]);
       const workspaceReady = workspaces.phase === 'ready' && workspaces.state !== 'error' && (!workspaceId || workspaces.items.some((item) => item.workspaceId === workspaceId));
       const selected = memory.provider === 'local' && !overview && workspaceReady ? boards.find((item) => item.id === boardId) : undefined;
@@ -842,7 +1218,7 @@ window.__ModuleLoader__.load({
         if (!/^[A-Z][A-Z0-9_]{0,31}-[1-9][0-9]{0,14}$/.test(issue.key) || typeof issue.id !== 'string' || !issue.id || memory.tracker.busy || !setForm(null)) return;
         const connectionId = connectionSource.getSnapshot()?.id, incarnation = memory.tracker.incarnations[workspaceId];
         if (connectionId === undefined || !currentWorkspace(workspaceId, incarnation) || !memory.tracker.settings || memory.tracker.settings.needsReselect.includes(workspaceId) || !memory.tracker.settings.workspaces[workspaceId]?.includes(boardId)) return;
-        const draft = { token: {}, generation: 0, workspaceId, boardId, key: issue.key, issueId: issue.id || '', connectionId, incarnation, settingsRevision: memory.tracker.settings.revision, draft: null, comment: '', editComment: null, transitionId: '', linkSessionId: '', linkAction: 'link', dirty: false, pending: false, unknown: false, loading: false, available: false, error: '', notice: '' };
+        const draft = { token: {}, generation: 0, workspaceId, boardId, key: issue.key, issueId: issue.id || '', connectionId, incarnation, settingsRevision: memory.tracker.settings.revision, draft: null, comment: '', editComment: null, transitionId: '', linkSessionId: '', linkAction: 'link', editingFields: false, dirty: false, pending: false, unknown: false, loading: false, available: false, error: '', notice: '' };
         draft.unknown = unknownIssues.has(issueUnknownKey(draft));
         issueOrigin.current = document.activeElement;
         setSessionMenu(null);
@@ -942,33 +1318,45 @@ window.__ModuleLoader__.load({
         if (!issue || memory.provider !== 'tracker' || overview || showContext) return null;
         const visible = issue.available && issueScope(issue) && connection && trackerLive(workspaceId);
         const retryAvailable = issueScope(issue) && !issue.loading && !issue.pending;
-        return h('aside', { className: 'dsh-board-drawer', 'aria-label': t('issueDetails'), onKeyDown: (event) => { if (event.key === 'Escape') { event.preventDefault(); closeIssue(); } } },
-          h('div', { className: 'dsh-board-drawer-head' }, h('h2', { ref: issueHeading, tabIndex: -1 }, t('issueDetails')), h('button', { type: 'button', disabled: issue.pending, onClick: closeIssue }, t('close'))),
-          !visible ? h('p', { role: 'status' }, t(issue.loading ? 'loading' : issue.error || 'issueUnavailable')) : h(React.Fragment, null,
-            h('p', null, issue.key), issue.error && h('p', { role: 'alert' }, t(issue.error)), issue.notice && h('p', { role: 'status' }, t(issue.notice)),
-            issue.unknown && h('button', { type: 'button', onClick: () => { if (window.confirm(t('issueUnknown'))) { unknownIssues.delete(issueUnknownKey(issue)); issuePatch({ unknown: false, error: '' }); } } }, t('issueReview')),
-            issue.conflict && h('button', { type: 'button', onClick: () => { if (window.confirm(t('discardDraft'))) { issuePatch({ conflict: false, conflictKind: '', available: false, draft: null, original: null, dirty: Boolean(issue.comment || issue.editComment || issue.transitionId || issue.linkSessionId), assigneeEdited: false }); void loadIssue(); } } }, t('issueDiscardConflict')),
-            issue.conflict && issue.conflictKind === 'editComment' && issue.editComment && h('button', { type: 'button', onClick: () => discardCommentEdit(true) }, t('issueDiscardCommentConflict')),
-            h('section', null,
-              h('label', null, t('title'), h('input', { value: issue.draft.summary, maxLength: 4096, readOnly: issue.pending, onChange: (e) => editIssue('summary', e.target.value) })),
-              h('label', null, t('description'), h('textarea', { value: issue.draft.description, maxLength: 48 * 1024, readOnly: issue.pending, onChange: (e) => editIssue('description', e.target.value) })),
-              h('p', { className: 'dsh-board-muted' }, t('assignee'), ': ', issue.issue.assigneeKnown ? (issue.issue.assignee?.display || t('unassigned')) : t('assigneeUnknown')),
-              h('label', null, t('issueAssigneeId'), h('input', { value: issue.draft.assignee, maxLength: 128, readOnly: issue.pending, onChange: (e) => editIssue('assignee', e.target.value) })),
-              !issue.issue.assigneeKnown && h('p', null, t('assigneeUnknown')), issue.issue.version === null && h('p', null, t('issueVersionUnavailable')),
-              h('button', { type: 'button', disabled: issue.pending || issue.unknown || issue.conflict || issue.issue.version === null, onClick: () => saveIssue('fields') }, t('issueSaveFields'))),
-            h('section', null, h('p', null, t('status'), ': ', issue.issue.status.display), h('label', null, t('issueTransitions'), h('select', { value: issue.transitionId, disabled: issue.pending, onChange: (e) => editIssue('transitionId', e.target.value) }, h('option', { value: '' }, t('issueNoTransition')), issue.transitions.map((transition) => h('option', { key: transition.id, value: transition.id }, transition.display, ' → ', transition.to.display)))), h('button', { type: 'button', disabled: issue.pending || issue.unknown || issue.conflict || !issue.transitionId, onClick: () => saveIssue('transition') }, t('issueChangeStatus'))),
-            h('section', null, h('h3', null, t('issueComments')), h('ul', null, issue.comments.map((comment) => h('li', { key: comment.id }, h('strong', null, comment.createdBy.display), ' · ', comment.createdAt, h('p', null, comment.text),
-              issue.editComment?.id === comment.id ? commentEditor(issue) :
-                Number.isSafeInteger(comment.version) && comment.version >= 0 ? h('button', { type: 'button', disabled: issue.pending || Boolean(issue.editComment), 'aria-label': t('issueEditComment') + ': ' + comment.id, onClick: () => { const current = memory.issue; if (issueScope(current) && current.available && !current.pending && !current.editComment) issuePatch({ editComment: { id: comment.id, version: comment.version, original: comment.text, text: comment.text }, dirty: true, notice: '' }); } }, t('issueEditComment')) : h('p', { className: 'dsh-board-muted' }, t('issueCommentVersionUnavailable'))))),
-              issue.editComment && !issue.comments.some(comment => comment.id === issue.editComment.id) && h('div', null, h('p', { role: 'status' }, t('issueEditedCommentMissing')), commentEditor(issue)),
-              h('label', null, t('issueNewComment'), h('textarea', { value: issue.comment, maxLength: 48 * 1024, readOnly: issue.pending, onChange: (e) => editIssue('comment', e.target.value) })), h('button', { type: 'button', disabled: issue.pending || issue.unknown || issue.conflict || !issue.comment.trim(), onClick: () => saveIssue('comment') }, t('issueAddComment'))),
-            h('section', null, h('h3', null, t('sessions')), issue.links ? h(React.Fragment, null,
-              h('p', null, t('issueSessionPartial')),
-              h('ul', null, issue.links.links.filter(link => issue.issueId && issue.issue?.id === issue.issueId && link.issueId === issue.issueId && link.issueKey === issue.key && workspace?.sessionIds?.includes(link.sessionId)).map(link => h('li', { key: link.sessionId }, label(link.sessionId)))),
-              h('label', null, t('issueChooseSession'), h('select', { value: issue.linkSessionId, disabled: issue.pending, onChange: e => editIssue('linkSessionId', e.target.value) }, h('option', { value: '' }, t('issueChooseSession')), availableSessions.filter(id => sessionState(id, sessions, workspaces) === 'available').map(id => h('option', { key: id, value: id }, label(id))))),
-              h('label', null, t('issueLinkAction'), h('select', { value: issue.linkAction, disabled: issue.pending, onChange: e => editIssue('linkAction', e.target.value) }, h('option', { value: 'link' }, t('issueLinkAction')), h('option', { value: 'unlink' }, t('issueUnlinkAction')))),
-              h('button', { type: 'button', disabled: issue.pending || issue.unknown || issue.conflict || !issue.issueId || issue.issue?.id !== issue.issueId || !issue.linkSessionId, onClick: () => saveIssue('link') }, t('issueLinkSave'))) : h('p', null, t('issueLinkUnavailable')))),
-          retryAvailable && h('button', { type: 'button', onClick: loadIssue }, t('issueReload')));
+        return h('aside', { className: 'dsh-board-drawer dsh-board-tracker-drawer', 'aria-label': t('issueDetails'), onKeyDown: (event) => { if (event.key === 'Escape') { event.preventDefault(); closeIssue(); } } },
+          h('div', { className: 'dsh-board-tracker-head' },
+            h('h2', { ref: issueHeading, tabIndex: -1 }, visible ? h('a', { href: 'https://tracker.yandex.ru/' + encodeURIComponent(issue.key), target: '_blank', rel: 'noopener noreferrer' }, issue.key, ' ↗') : t('issueDetails')),
+            h('div', { className: 'dsh-board-tracker-head-actions' },
+              visible && !issue.editingFields && h('button', { ref: issueEditButton, type: 'button', disabled: issue.pending, onClick: () => { issueFocusRequest.current = { token: issue.token, editing: true }; issuePatch({ editingFields: true }); } }, t('edit')),
+              h('button', { className: 'dsh-board-tracker-close', type: 'button', disabled: issue.pending, 'aria-label': t('close'), title: t('close'), onClick: closeIssue }, '×'))),
+          h('div', { className: 'dsh-board-tracker-body' },
+            !visible ? h('p', { role: 'status' }, t(issue.loading ? 'loading' : issue.error || 'issueUnavailable')) : h(React.Fragment, null,
+              h('div', { className: 'dsh-board-tracker-hero' }, h('h3', null, issue.issue.summary),
+                h('div', { className: 'dsh-board-tracker-meta' }, h('span', { className: 'dsh-board-tracker-status' }, issue.issue.status.display), h('p', null, t('assignee'), ': ', h('strong', null, issue.issue.assigneeKnown ? (issue.issue.assignee?.display || t('unassigned')) : t('assigneeUnknown'))))),
+              h('div', { className: 'dsh-board-tracker-notices' },
+                issue.error && h('p', { role: 'alert' }, t(issue.error)), issue.notice && h('p', { role: 'status' }, t(issue.notice)),
+                issue.unknown && h('button', { type: 'button', onClick: () => { if (window.confirm(t('issueUnknown'))) { unknownIssues.delete(issueUnknownKey(issue)); issuePatch({ unknown: false, error: '' }); } } }, t('issueReview')),
+                issue.conflict && h('button', { type: 'button', onClick: () => { if (window.confirm(t('discardDraft'))) { issuePatch({ conflict: false, conflictKind: '', available: false, draft: null, original: null, dirty: Boolean(issue.comment || issue.editComment || issue.transitionId || issue.linkSessionId), assigneeEdited: false }); void loadIssue(); } } }, t('issueDiscardConflict')),
+                issue.conflict && issue.conflictKind === 'editComment' && issue.editComment && h('button', { type: 'button', onClick: () => discardCommentEdit(true) }, t('issueDiscardCommentConflict'))),
+              h('p', { className: 'dsh-board-tracker-separate' }, t('issueSeparateOperations')),
+              !issue.editingFields && issue.draft && issue.original && (JSON.stringify(issue.draft) !== JSON.stringify(issue.original) || (issue.assigneeEdited && !issue.issue.assigneeKnown)) && h('p', { className: 'dsh-board-tracker-draft', role: 'status' }, t('unsaved')),
+              h('section', { className: 'dsh-board-tracker-section' },
+                h('h3', null, t('description')),
+                issue.editingFields ? h(React.Fragment, null,
+                  h('label', null, t('title'), h('input', { ref: issueTitleInput, value: issue.draft.summary, maxLength: 4096, readOnly: issue.pending, onChange: (e) => editIssue('summary', e.target.value) })),
+                  h('label', null, t('description'), h('textarea', { value: issue.draft.description, maxLength: 48 * 1024, readOnly: issue.pending, onChange: (e) => editIssue('description', e.target.value) })),
+                  h('label', null, t('issueAssigneeId'), h('input', { value: issue.draft.assignee, maxLength: 128, readOnly: issue.pending, onChange: (e) => editIssue('assignee', e.target.value) })),
+                  !issue.issue.assigneeKnown && h('p', null, t('assigneeUnknown')), issue.issue.version === null && h('p', null, t('issueVersionUnavailable')),
+                  h('div', { className: 'dsh-board-row' }, h('button', { className: 'dsh-board-primary', type: 'button', disabled: issue.pending || issue.unknown || issue.conflict || issue.issue.version === null, onClick: () => saveIssue('fields') }, t('issueSaveFields')), h('button', { type: 'button', disabled: issue.pending, onClick: () => { issueFocusRequest.current = { token: issue.token, editing: false }; issuePatch({ editingFields: false }); } }, t('issueKeepDraft')))) :
+                  renderTrackerText(issue.issue.description || t('emptyDescription'))),
+              h('section', { className: 'dsh-board-tracker-section' }, h('h3', null, t('sessions')), issue.links ? h(React.Fragment, null,
+                h('p', { className: 'dsh-board-muted' }, t('issueSessionPartial')),
+                h('ul', { className: 'dsh-board-tracker-list' }, issue.links.links.filter(link => issue.issueId && issue.issue?.id === issue.issueId && link.issueId === issue.issueId && link.issueKey === issue.key && workspace?.sessionIds?.includes(link.sessionId)).map(link => h('li', { className: 'dsh-board-tracker-session', key: link.sessionId }, label(link.sessionId)))),
+                h('div', { className: 'dsh-board-row' }, h('label', null, t('issueChooseSession'), h('select', { value: issue.linkSessionId, disabled: issue.pending, onChange: e => editIssue('linkSessionId', e.target.value) }, h('option', { value: '' }, t('issueChooseSession')), availableSessions.filter(id => sessionState(id, sessions, workspaces) === 'available').map(id => h('option', { key: id, value: id }, label(id))))),
+                  h('label', null, t('issueLinkAction'), h('select', { value: issue.linkAction, disabled: issue.pending, onChange: e => editIssue('linkAction', e.target.value) }, h('option', { value: 'link' }, t('issueLinkAction')), h('option', { value: 'unlink' }, t('issueUnlinkAction'))))),
+                h('button', { type: 'button', disabled: issue.pending || issue.unknown || issue.conflict || !issue.issueId || issue.issue?.id !== issue.issueId || !issue.linkSessionId, onClick: () => saveIssue('link') }, t('issueLinkSave'))) : h('p', null, t('issueLinkUnavailable'))),
+              h('section', { className: 'dsh-board-tracker-section' }, h('h3', null, t('issueChangeStatus')), h('label', null, t('issueTransitions'), h('select', { value: issue.transitionId, disabled: issue.pending, onChange: (e) => editIssue('transitionId', e.target.value) }, h('option', { value: '' }, t('issueNoTransition')), issue.transitions.map((transition) => h('option', { key: transition.id, value: transition.id }, transition.display, ' → ', transition.to.display)))), h('button', { type: 'button', disabled: issue.pending || issue.unknown || issue.conflict || !issue.transitionId, onClick: () => saveIssue('transition') }, t('issueChangeStatus'))),
+              h('section', { className: 'dsh-board-tracker-section' }, h('h3', null, t('issueComments')), h('ul', { className: 'dsh-board-tracker-list' }, issue.comments.map((comment) => h('li', { className: 'dsh-board-tracker-comment', key: comment.id }, h('div', { className: 'dsh-board-tracker-comment-meta' }, h('strong', null, comment.createdBy.display), h('time', null, comment.createdAt)), renderTrackerText(comment.text),
+                issue.editComment?.id === comment.id ? commentEditor(issue) :
+                  Number.isSafeInteger(comment.version) && comment.version >= 0 ? h('button', { type: 'button', disabled: issue.pending || Boolean(issue.editComment), 'aria-label': t('issueEditComment') + ': ' + comment.id, onClick: () => { const current = memory.issue; if (issueScope(current) && current.available && !current.pending && !current.editComment) issuePatch({ editComment: { id: comment.id, version: comment.version, original: comment.text, text: comment.text }, dirty: true, notice: '' }); } }, t('issueEditComment')) : h('p', { className: 'dsh-board-muted' }, t('issueCommentVersionUnavailable'))))),
+                issue.editComment && !issue.comments.some(comment => comment.id === issue.editComment.id) && h('div', null, h('p', { role: 'status' }, t('issueEditedCommentMissing')), commentEditor(issue)),
+                h('label', null, t('issueNewComment'), h('textarea', { value: issue.comment, maxLength: 48 * 1024, readOnly: issue.pending, onChange: (e) => editIssue('comment', e.target.value) })), h('button', { type: 'button', disabled: issue.pending || issue.unknown || issue.conflict || !issue.comment.trim(), onClick: () => saveIssue('comment') }, t('issueAddComment')))),
+            retryAvailable && h('div', { className: 'dsh-board-tracker-footer' }, h('button', { type: 'button', onClick: loadIssue }, t('issueReload')))));
       }
       useEffect(() => {
         const issue = memory.issue;
@@ -992,18 +1380,31 @@ window.__ModuleLoader__.load({
       function trackerView() {
         if (memory.provider !== 'tracker' || overview || showContext) return null;
         const value = connection && workspaceReady && trackerLive(workspaceId) && tracker.settings.workspaces[workspaceId]?.includes(boardId) ? tracker.board : null;
-        const statusOwners = new Map();
-        for (const column of value?.columns || []) for (const key of new Set(column.statuses.map((s) => s.key))) {
-          const owners = statusOwners.get(key) || []; owners.push(column.id); statusOwners.set(key, owners);
-        }
         const assignees = new Map();
         for (const issue of value?.issues || []) if (issue.assigneeKnown && issue.assignee && !assignees.has(issue.assignee.id)) assignees.set(issue.assignee.id, issue.assignee.display);
         const boardLinks = value && tracker.boardLinks && sessionMembershipReady ? tracker.boardLinks.links.filter(link => workspace.sessionIds.includes(link.sessionId)) : null;
         const issueLinks = (issue) => issue.id ? (boardLinks || []).filter(link => link.issueKey === issue.key && link.issueId === issue.id) : [];
         const issues = (value?.issues || []).filter((issue) => assigneeMatches(assigneeFilter, issue.assigneeKnown, issue.assignee?.id ?? null) && (sessionFilter === 'all' || (boardLinks && sessionFilter === 'linked' && issueLinks(issue).length > 0)));
-        const grouped = (value?.columns || []).map((column) => ({ id: column.id, name: column.name, issues: issues.filter((issue) => { const owners = statusOwners.get(issue.status.key) || []; return owners.length === 1 && owners[0] === column.id; }), allIssues: (value?.issues || []).filter((issue) => { const owners = statusOwners.get(issue.status.key) || []; return owners.length === 1 && owners[0] === column.id && assigneeMatches(assigneeFilter, issue.assigneeKnown, issue.assignee?.id ?? null); }) }));
-        const unmapped = issues.filter((issue) => (statusOwners.get(issue.status.key) || []).length !== 1);
-        if (unmapped.length) grouped.push({ id: null, name: t('trackerUnmapped'), issues: unmapped, allIssues: (value?.issues || []).filter(issue => (statusOwners.get(issue.status.key) || []).length !== 1) });
+        let groups = [], groupError = false;
+        if (value) {
+          try { groups = groupTrackerStatuses({ columns: value.columns, issues: value.issues }); }
+          catch {
+            groupError = true;
+            // Fall back only to actual loaded issue statuses; never guess if their
+            // own identities conflict. Empty configured statuses may be omitted.
+            try { groups = groupTrackerStatuses({ columns: [], issues: value.issues }); } catch { groups = []; }
+          }
+        }
+        const labelCounts = new Map();
+        for (const group of groups) labelCounts.set(group.status.display, (labelCounts.get(group.status.display) || 0) + 1);
+        const tentativeNames = groups.map(group => labelCounts.get(group.status.display) > 1 ? `${group.status.display} (${group.status.key})` : group.status.display);
+        const finalCounts = new Map();
+        for (const name of tentativeNames) finalCounts.set(name, (finalCounts.get(name) || 0) + 1);
+        const allowedIssues = new Set(issues.map(issue => issue.key));
+        const grouped = groups.map((group, index) => ({ id: group.status.id,
+          name: finalCounts.get(tentativeNames[index]) > 1 ? `${tentativeNames[index]} [${group.status.id}]` : tentativeNames[index],
+          issues: group.issues.filter(issue => allowedIssues.has(issue.key)),
+          allIssues: group.issues.filter(issue => assigneeMatches(assigneeFilter, issue.assigneeKnown, issue.assignee?.id ?? null)) }));
         return h('section', { 'aria-label': t('tracker') },
           h('div', { className: 'dsh-board-section-head' }, h('div', null,
             h('button', { className: 'dsh-board-back', type: 'button', disabled: busy || uncertain, onClick: showBoards }, '← ', t('returnToBoards')),
@@ -1011,11 +1412,14 @@ window.__ModuleLoader__.load({
             h('p', { className: 'dsh-board-muted' }, t('tracker'), ' · ', t('trackerPartialBadge'))),
             h('button', { type: 'button', disabled: tracker.busy || !trackerLive(workspaceId), onClick: () => readTrackerBoard(workspaceId, boardId) }, t('trackerRefreshBoard'))),
           h('p', { className: 'dsh-board-alert', role: 'status' }, t('trackerPartial')),
+          value && h('p', { className: 'dsh-board-muted' }, t('trackerStatusView')),
+          groupError && h('p', { className: 'dsh-board-alert', role: 'alert' }, t(groups.length ? 'trackerStatusPartial' : 'trackerError')),
           tracker.busy && h('p', { role: 'status' }, t('loading')),
           value && tracker.boardUpdatedAt !== null && h('p', { className: 'dsh-board-muted', role: 'status' }, t('trackerUpdatedAt'), ' ', new Date(tracker.boardUpdatedAt).toLocaleString()),
           value && h('label', { className: 'dsh-board-filter' }, h('select', { 'aria-label': t('assignee'), value: assigneeFilter, onChange: (event) => updateMemory({ assigneeFilter: event.target.value }) }, h('option', { value: allAssigneesValue }, t('allAssignees')), h('option', { value: unassignedValue }, t('unassigned')), h('option', { value: unknownValue }, t('assigneeUnknown')), !specialAssigneeFilter && ![...assignees.keys()].some((id) => filterValue('assignee', id) === assigneeFilter) && h('option', { value: assigneeFilter }, t('assigneeUnavailable')), [...assignees].sort((a, b) => a[1].localeCompare(b[1]) || a[0].localeCompare(b[0])).map(([id, display]) => h('option', { key: id, value: filterValue('assignee', id) }, display, ' (', id, ')')))),
           value && !value.issues.length && h('p', { className: 'dsh-board-muted' }, t('trackerEmpty')),
-          value && value.issues.length > 0 && !issues.length && h('p', { className: 'dsh-board-muted' }, t('noResults')),
+          value && sessionFilter === 'linked' && h('p', { className: 'dsh-board-muted', role: 'status' }, !boardLinks ? t('sessionFilterUnavailable') : t('withSession'), ' ', h('button', { type: 'button', onClick: () => updateMemory({ sessionFilter: 'all' }) }, t('clearSessionFilter'))),
+          value && value.issues.length > 0 && !issues.length && !(sessionFilter === 'linked' && !boardLinks) && h('p', { className: 'dsh-board-muted' }, t('noResults')),
           value && h('div', { className: 'dsh-board-kanban', role: 'region', tabIndex: 0, 'aria-label': t('scrollBoard') }, grouped.map((column) => h('section', { className: 'dsh-board-column', key: column.id || '__unmapped', 'aria-label': column.name },
             h('div', { className: 'dsh-board-column-head' }, h('div', { className: 'dsh-board-column-label' }, h('h2', null, column.name), h('span', { className: 'dsh-board-count' }, column.issues.length)), boardLinks && h('button', { className: 'dsh-board-whale-button', type: 'button', 'aria-label': t('columnSessions') + ': ' + column.name + ' — ' + new Set(column.allIssues.flatMap(issue => issueLinks(issue).map(link => link.sessionId))).size, title: t('issueSessionPartial'), 'aria-pressed': sessionFilter === 'linked', onClick: () => updateMemory({ sessionFilter: sessionFilter === 'linked' ? 'all' : 'linked' }) }, h('img', { className: 'dsh-board-whale', src: './favicon.svg', alt: '' }), String(new Set(column.allIssues.flatMap(issue => issueLinks(issue).map(link => link.sessionId))).size))),
             column.issues.map((issue) => h('article', { className: 'dsh-board-card', key: issue.key }, /^[A-Z][A-Z0-9_]{0,31}-[1-9][0-9]{0,14}$/.test(issue.key) ? h('a', { className: 'dsh-board-card-id', href: 'https://tracker.yandex.ru/' + encodeURIComponent(issue.key), target: '_blank', rel: 'noopener noreferrer' }, issue.key) : h('span', { className: 'dsh-board-card-id' }, issue.key), h('button', { className: 'dsh-board-card-title', type: 'button', disabled: !issue.id, title: !issue.id ? t('issueMissingId') : undefined, onClick: () => openIssue(issue), 'aria-label': t('issueDetails') + ': ' + issue.summary }, issue.summary), h('span', { className: 'dsh-board-card-status' }, issue.status.display), h('span', { className: 'dsh-board-muted' }, t('assignee'), ': ', issue.assigneeKnown ? (issue.assignee?.display || t('unassigned')) : t('assigneeUnknown')), boardLinks && issueLinks(issue).length > 0 && trackerSessionShortcut(issue, issueLinks(issue))))))));

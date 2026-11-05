@@ -15,7 +15,8 @@ const prelude = declarations.replace(/^const client = .*?;\n/m, '');
 const { harness, settle } = vm.runInNewContext(`(function () { ${prelude}\n return { harness, settle }; })()`, { client, vm, TextEncoder, URL, AbortController, assert, baseUrl: import.meta.url });
 const base = { revision: 1, boards: [], links: [] };
 const settings = { revision: 1, configured: true, orgType: 'cloud', workspaces: { w: ['1'] }, needsReselect: [] };
-const board = { board: { id: '1', name: 'Private board' }, columns: [{ id: 'c', name: 'Open', statuses: [{ key: 'open' }] }], issues: [{ key: 'X-1', summary: 'Private issue', status: { key: 'open', display: 'Open' } }], issuesComplete: false };
+const status = { id: '1', key: 'open', display: 'Open' };
+const board = { board: { id: '1', name: 'Private board' }, columns: [{ id: 'c', name: 'Open', statuses: [status] }], issues: [{ key: 'X-1', summary: 'Private issue', status }], issuesComplete: false };
 const listing = { boards: [{ id: '1', name: 'Private board' }, { id: '2', name: 'Private other' }], complete: true };
 
 async function mounted() {

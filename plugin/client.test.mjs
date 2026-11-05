@@ -32,7 +32,7 @@ function harness(sessionFixture, initialCommands = []) {
     },
   };
   const timers = new Set(), timeouts = new Set(), documentEvents = new Map();
-  const document = { baseURI: sessionFixture?.baseURI || currentUrl.href, visibilityState: 'visible', addEventListener(type, fn) { documentEvents.set(type, fn); }, removeEventListener(type, fn) { if (documentEvents.get(type) === fn) documentEvents.delete(type); } };
+  const document = { baseURI: sessionFixture?.baseURI || currentUrl.href, visibilityState: 'visible', activeElement: null, addEventListener(type, fn) { documentEvents.set(type, fn); }, removeEventListener(type, fn) { if (documentEvents.get(type) === fn) documentEvents.delete(type); } };
   const window = {
     setInterval(fn) { timers.add(fn); return fn; }, clearInterval(fn) { timers.delete(fn); },
     setTimeout(fn) { timeouts.add(fn); return fn; }, clearTimeout(fn) { timeouts.delete(fn); },
@@ -70,7 +70,18 @@ function harness(sessionFixture, initialCommands = []) {
   const props = { t: key => key, ...slot.spec.inject() };
   function render() {
     assert.ok(active, 'page must be mounted');
-    do { needsRender = false; cursor = 0; effects = []; tree = slot.component(props); const pending = effects; effects = []; pending.forEach(fn => fn()); } while (needsRender);
+    do {
+      needsRender = false; cursor = 0; effects = []; tree = slot.component(props);
+      if (sessionFixture?.domRefs) {
+        function attach(node) {
+          if (!node || typeof node !== 'object') return;
+          if (node.props?.ref) node.props.ref.current = { isConnected: true, focus() { document.activeElement = { type: node.type, props: node.props }; } };
+          node.children?.forEach(attach);
+        }
+        attach(tree);
+      }
+      const pending = effects; effects = []; pending.forEach(fn => fn());
+    } while (needsRender);
     return tree;
   }
   function nodes(type) {
@@ -79,7 +90,7 @@ function harness(sessionFixture, initialCommands = []) {
     walk(tree); return result;
   }
   function text(node) { return node.children.map(child => typeof child === 'object' && child ? text(child) : String(child ?? '')).join(''); }
-  function button(label) { const found = nodes('button').filter(n => text(n) === label); assert.equal(found.length, 1, `button ${label}`); return found[0]; }
+  function button(label) { const found = nodes('button').filter(n => text(n) === label || n.props['aria-label'] === label); assert.equal(found.length, 1, `button ${label}`); return found[0]; }
   function click(label) { const n = button(label); assert.ok(!n.props.disabled, `${label} is disabled`); n.props.onClick(); }
   function change(node, value) { node.props.onChange({ target: { value } }); }
   function mount() { active = true; hooks = []; render(); }
@@ -290,24 +301,139 @@ const issueFixture = { id: 'issue-1', key: 'A-1', summary: '<script>unsafe</scri
 const issueComments = { comments: [{ id: 'c1', text: '<img>comment', version: 1, createdBy: { id: 'u', display: 'Author' }, createdAt: '2026-01-01' }], complete: false };
 const issueTransitions = [{ id: 'start', display: 'Start', to: { id: '2', key: 'doing', display: 'Doing' } }];
 const issueLinks = { revision: 1, links: [{ issueKey: 'A-1', issueId: 'issue-1', sessionId: 'session-1' }], incomplete: true };
+const trackerStatuses = {
+  open: { id: '1', key: 'open', display: 'Open' },
+  shared: { id: '3', key: 'shared', display: 'Shared' },
+  doing: { id: '2', key: 'doing', display: 'Doing' },
+  unknown: { id: '4', key: 'unknown', display: 'Unknown' },
+};
 const trackerBoard = { board: { id: '1', name: '<img src=x onerror=alert(1)>' }, columns: [
-  { id: '10', name: 'Open', statuses: [{ key: 'open' }, { key: 'shared' }] },
-  { id: '11', name: 'Doing', statuses: [{ key: 'doing' }, { key: 'shared' }] },
+  { id: '10', name: 'Open', statuses: [trackerStatuses.open, trackerStatuses.shared] },
+  { id: '11', name: 'Doing', statuses: [trackerStatuses.doing, trackerStatuses.shared] },
 ], issues: [
-  { id: 'issue-1', key: 'A-1', summary: '<script>unsafe</script>', status: { key: 'open', display: 'Open' } },
-  { key: 'A-2', summary: 'Ambiguous', status: { key: 'shared', display: 'Shared' } },
-  { key: 'A-3', summary: 'Unknown', status: { key: 'unknown', display: 'Unknown' } },
+  { id: 'issue-1', key: 'A-1', summary: '<script>unsafe</script>', status: trackerStatuses.open },
+  { key: 'A-2', summary: 'Ambiguous', status: trackerStatuses.shared },
+  { key: 'A-3', summary: 'Unknown', status: trackerStatuses.unknown },
 ], issuesComplete: false, issuesReason: 'approximate_board_filter' };
 
-async function trackerIssueReady() {
-  const h = harness({ manualTracker: true, ids: ['session-1'], byId: { 'session-1': { title: 'Session' } } });
+async function trackerIssueReady({ editing = true, origin = null, domRefs = false, issue = issueFixture, comments = issueComments } = {}) {
+  const h = harness({ manualTracker: true, domRefs, ids: ['session-1'], byId: { 'session-1': { title: 'Session' } } });
   h.mount(); await h.resolve(0, base()); await h.resolve(1, trackerSettings(1, true, { w: ['1'] }));
   h.tile('tracker #1 — Workspace — tracker').props.onClick(); await h.resolve(2, trackerSettings(1, true, { w: ['1'] })); await h.resolve(3, trackerBoard);
+  h.document.activeElement = origin;
   h.nodes('button').find(n => n.props['aria-label'] === 'issueDetails: <script>unsafe</script>').props.onClick();
+  if (domRefs) h.nodes('aside');
   assert.deepEqual(h.requests.slice(4).map(r => JSON.parse(r.options.body).op), ['issue.read']);
-  await h.resolve(4, issueFixture); await h.resolve(5, issueComments); await h.resolve(6, issueTransitions); await h.resolve(7, issueLinks); await h.resolve(8, issueFixture);
+  await h.resolve(4, issue); await h.resolve(5, comments); await h.resolve(6, issueTransitions); await h.resolve(7, issueLinks); await h.resolve(8, issue);
+  if (editing) h.click('edit');
   return h;
 }
+
+test('Tracker drawer preview shows issue metadata and safe text before explicit field editing', async () => {
+  const h = await trackerIssueReady({ editing: false });
+  const aside = h.nodes('aside')[0];
+  assert.equal(aside.props.role, undefined); assert.equal(aside.props['aria-modal'], undefined);
+  assert.ok(h.nodes('h3').some(n => h.text(n) === issueFixture.summary));
+  assert.ok(h.nodes('span').some(n => n.props.className === 'dsh-board-tracker-status' && h.text(n) === 'Open'));
+  assert.ok(h.nodes('p').some(n => h.text(n) === 'assignee: User'));
+  assert.ok(h.nodes('div').some(n => n.props.className === 'dsh-board-richtext' && h.text(n) === 'original'));
+  const external = h.nodes('a').find(n => h.text(n) === 'A-1 ↗');
+  assert.equal(external.props.href, 'https://tracker.yandex.ru/A-1'); assert.equal(external.props.target, '_blank'); assert.equal(external.props.rel, 'noopener noreferrer');
+  assert.ok(!h.nodes('input').some(n => n.props.value === issueFixture.summary || n.props.value === 'user-1'));
+  assert.ok(!h.nodes('textarea').some(n => n.props.value === 'original'));
+  assert.ok(h.nodes('p').some(n => h.text(n) === 'issueSeparateOperations'));
+  const sections = h.nodes('section').filter(n => n.props.className === 'dsh-board-tracker-section');
+  assert.ok(sections.findIndex(n => h.text(n).startsWith('sessions')) < sections.findIndex(n => h.text(n).startsWith('issueComments')));
+  h.click('edit'); assert.ok(h.nodes('input').some(n => n.props.value === issueFixture.summary));
+  assert.ok(h.nodes('textarea').some(n => n.props.value === 'original'));
+  assert.ok(h.nodes('textarea').some(n => n.props.value === ''), 'new comment remains available while editing fields');
+  assert.equal(h.requests.length, 9); h.unmount();
+});
+
+test('Tracker description and comments render safe markup while editors preserve the raw source', async () => {
+  const description = '<#<html><body><p onclick="alert(1)">Description <strong>bold</strong> <a href="https://example.com/path" onmouseover="alert(1)">safe</a><a href="javascript:alert(1)">bad link</a><img src="https://evil.example/x" onerror="alert(1)"><script>alert(1)</script></p></body></html>#>';
+  const comment = '<#<html><body><p>Comment <em>emphasis</em> <a href="https://example.org/comment" target="_self">external</a><iframe src="https://evil.example/"></iframe><a href="javascript:alert(2)">unsafe</a></p></body></html>#>';
+  const h = await trackerIssueReady({ editing: false, issue: { ...issueFixture, description }, comments: { ...issueComments, comments: [{ ...issueComments.comments[0], text: comment }] } });
+  try {
+    const rich = h.nodes('div').filter(n => n.props.className === 'dsh-board-richtext');
+    assert.equal(rich.length, 2);
+    assert.ok(h.text(rich[0]).includes('Description bold safebad link'));
+    assert.ok(h.text(rich[1]).includes('Comment emphasis externalunsafe'));
+    assert.ok(h.nodes('strong').some(n => h.text(n) === 'bold'));
+    assert.ok(h.nodes('em').some(n => h.text(n) === 'emphasis'));
+    const allowed = new Set(['div', 'p', 'span', 'br', 'ul', 'ol', 'li', 'strong', 'em', 'code', 'pre', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'a']);
+    const inspect = node => {
+      if (!node || typeof node !== 'object') return;
+      assert.ok(allowed.has(node.type), `unexpected rich text element ${node.type}`);
+      for (const key of Object.keys(node.props)) assert.ok(['className', 'key', 'href', 'target', 'rel'].includes(key), `unexpected rich text prop ${key}`);
+      if (node.type === 'a') {
+        assert.ok(['https://example.com/path', 'https://example.org/comment'].includes(node.props.href));
+        assert.equal(node.props.target, '_blank'); assert.equal(node.props.rel, 'noopener noreferrer');
+      }
+      node.children.forEach(inspect);
+    };
+    rich.forEach(inspect);
+    assert.equal(h.nodes('a').filter(n => ['https://example.com/path', 'https://example.org/comment'].includes(n.props.href)).length, 2);
+    assert.ok(!h.text(rich[0]).includes('alert(1)'));
+    h.click('edit'); assert.ok(h.nodes('textarea').some(n => n.props.value === description));
+    h.click('issueEditComment'); assert.ok(h.nodes('textarea').some(n => n.props.value === comment));
+    assert.equal(h.requests.length, 9, 'rendering and entering editors do not write');
+  } finally { h.unmount(); }
+});
+
+test('Tracker edit toggle moves keyboard focus and marks retained field drafts', async () => {
+  const h = await trackerIssueReady({ editing: false, domRefs: true });
+  assert.equal(h.document.activeElement.type, 'h2', 'opening focuses the drawer heading');
+  assert.ok(!h.nodes('p').some(n => n.props.className === 'dsh-board-tracker-draft'));
+  h.click('edit'); h.nodes('input');
+  assert.equal(h.document.activeElement.type, 'input'); assert.equal(h.document.activeElement.props.value, issueFixture.summary);
+  assert.equal(h.text(h.button('issueKeepDraft')), 'issueKeepDraft');
+  h.change(h.nodes('input').find(n => n.props.value === issueFixture.summary), 'retained');
+  h.click('issueKeepDraft'); h.nodes('button');
+  assert.equal(h.document.activeElement.type, 'button'); assert.equal(h.text(h.button('edit')), 'edit');
+  assert.equal(h.document.activeElement.props.ref, h.button('edit').props.ref);
+  assert.ok(h.nodes('p').some(n => n.props.className === 'dsh-board-tracker-draft' && h.text(n) === 'unsaved'));
+  h.click('edit'); h.nodes('input'); assert.equal(h.document.activeElement.type, 'input');
+  h.change(h.nodes('input').find(n => n.props.value === 'retained'), issueFixture.summary);
+  h.click('issueKeepDraft'); assert.ok(!h.nodes('p').some(n => n.props.className === 'dsh-board-tracker-draft'));
+  assert.equal(h.requests.length, 9); h.unmount();
+});
+
+test('Tracker field mode preserves all drafts through cancel, refresh and resumed editing', async () => {
+  const h = await trackerIssueReady();
+  h.change(h.nodes('input').find(n => n.props.value === issueFixture.summary), 'draft title');
+  h.change(h.nodes('textarea').find(n => n.props.value === 'original'), 'draft description');
+  h.change(h.nodes('input').find(n => n.props.value === 'user-1'), 'draft-user');
+  h.change(h.nodes('textarea').find(n => n.props.value === ''), 'draft comment');
+  h.click('issueEditComment'); h.change(h.nodes('textarea').find(n => n.props.value === '<img>comment'), 'comment edit');
+  h.click('issueKeepDraft'); assert.ok(!h.nodes('input').some(n => n.props.value === 'draft title'));
+  assert.ok(h.nodes('p').some(n => n.props.className === 'dsh-board-tracker-draft' && h.text(n) === 'unsaved'));
+  assert.ok(h.nodes('textarea').some(n => n.props.value === 'draft comment'));
+  assert.ok(h.nodes('textarea').some(n => n.props.value === 'comment edit'));
+  h.click('issueReload');
+  const fresh = { ...issueFixture, summary: 'new server title', description: 'new server description', version: 6 };
+  await h.resolve(9, fresh); await h.resolve(10, issueComments); await h.resolve(11, issueTransitions); await h.resolve(12, issueLinks); await h.resolve(13, fresh);
+  assert.ok(h.nodes('h3').some(n => h.text(n) === 'new server title'));
+  assert.ok(h.nodes('p').some(n => n.props.className === 'dsh-board-tracker-draft' && h.text(n) === 'unsaved'));
+  assert.ok(h.nodes('textarea').some(n => n.props.value === 'comment edit'));
+  h.click('edit'); assert.ok(h.nodes('input').some(n => n.props.value === 'draft title'));
+  assert.ok(h.nodes('input').some(n => n.props.value === 'draft-user'));
+  assert.ok(h.nodes('textarea').some(n => n.props.value === 'draft description'));
+  assert.ok(h.nodes('textarea').some(n => n.props.value === 'draft comment'));
+  h.click('issueSaveFields');
+  assert.deepEqual(JSON.parse(h.requests[14].options.body).changes, { expectedVersion: 5, summary: 'draft title', description: 'draft description', assignee: 'draft-user' });
+  h.unmount();
+});
+
+test('Tracker drawer Escape closes only after confirmation and restores origin focus', async () => {
+  let focused = 0; const origin = { isConnected: true, focus() { focused++; } };
+  const h = await trackerIssueReady({ origin });
+  const heading = h.nodes('h2').find(n => n.props.ref && n.props.tabIndex === -1); let headingFocus = 0; heading.props.ref.current = { focus() { headingFocus++; } };
+  h.change(h.nodes('input').find(n => n.props.value === issueFixture.summary), 'draft');
+  let prevented = 0; const escape = () => h.nodes('aside')[0].props.onKeyDown({ key: 'Escape', preventDefault() { prevented++; } });
+  h.window.confirmResult = false; escape(); assert.equal(h.nodes('aside').length, 1); assert.equal(h.confirms.at(-1), 'discardDraft');
+  h.window.confirmResult = true; escape(); assert.equal(h.nodes('aside').length, 0); assert.equal(prevented, 2); assert.equal(focused, 1); h.unmount();
+});
 
 test('Tracker drawer opens lazily without writes, validates and saves only changed fields', async () => {
   const h = await trackerIssueReady();
@@ -461,7 +587,7 @@ for (const op of ['issue.read', 'issue.update', 'board.read']) test(`${op} needs
     h.click('trackerClose'); h.click('trackerRefreshBoard'); await h.resolve(index + 6, trackerSettings(3, true, { w: ['1'] })); await h.resolve(index + 7, trackerBoard);
     h.nodes('button').find(n => n.props['aria-label'] === 'issueDetails: <script>unsafe</script>').props.onClick();
     await h.resolve(index + 8, issueFixture); await h.resolve(index + 9, issueComments); await h.resolve(index + 10, issueTransitions); await h.resolve(index + 11, issueLinks); await h.resolve(index + 12, issueFixture);
-    assert.ok(h.nodes('p').some(n => h.text(n) === 'issueUnknown')); assert.equal(h.button('issueSaveFields').props.disabled, true);
+    assert.ok(h.nodes('p').some(n => h.text(n) === 'issueUnknown')); h.click('edit'); assert.equal(h.button('issueSaveFields').props.disabled, true);
   }
   h.unmount();
 });
@@ -491,7 +617,7 @@ test('Tracker reselect discards old principal draft and fences old reads', async
   await h.resolve(17, fresh); await h.resolve(18, { comments: [], complete: false }); await h.resolve(19, issueTransitions); await h.resolve(20, issueLinks); await h.resolve(21, fresh);
   assert.ok(!h.nodes('input').some(n => n.props.value === 'old principal private draft'));
   assert.ok(!h.text(h.nodes('main')[0]).includes('<img>comment'));
-  h.click('issueSaveFields'); assert.equal(h.requests.length, 22, 'discarded draft cannot be saved');
+  h.click('edit'); h.click('issueSaveFields'); assert.equal(h.requests.length, 22, 'discarded draft cannot be saved');
   h.unmount();
 });
 
@@ -509,7 +635,7 @@ test('Tracker reselect retains unknown guard for in-flight issue mutation', asyn
   h.nodes('button').find(n => n.props['aria-label'] === 'issueDetails: <script>unsafe</script>').props.onClick();
   await h.resolve(17, issueFixture); await h.resolve(18, issueComments); await h.resolve(19, issueTransitions); await h.resolve(20, issueLinks); await h.resolve(21, issueFixture);
   assert.ok(h.nodes('p').some(n => h.text(n) === 'issueUnknown'));
-  assert.equal(h.button('issueSaveFields').props.disabled, true);
+  h.click('edit'); assert.equal(h.button('issueSaveFields').props.disabled, true);
   assert.equal(h.nodes('textarea')[1].props.value, '');
   h.unmount();
 });
@@ -559,7 +685,7 @@ test('Tracker unknown result remains blocked after drawer close and reopen', asy
   h.requests[9].reject(new Error('offline')); await settle(); h.click('close');
   h.nodes('button').find(n => n.props['aria-label'] === 'issueDetails: <script>unsafe</script>').props.onClick();
   await h.resolve(10, issueFixture); await h.resolve(11, issueComments); await h.resolve(12, issueTransitions); await h.resolve(13, issueLinks); await h.resolve(14, issueFixture);
-  assert.ok(h.nodes('p').some(n => h.text(n) === 'issueUnknown')); assert.equal(h.button('issueSaveFields').props.disabled, true); h.unmount();
+  assert.ok(h.nodes('p').some(n => h.text(n) === 'issueUnknown')); h.click('edit'); assert.equal(h.button('issueSaveFields').props.disabled, true); h.unmount();
 });
 
 test('Tracker configuration, explicit workspace selection, and read-only partial board', async () => {
@@ -584,9 +710,11 @@ test('Tracker configuration, explicit workspace selection, and read-only partial
   assert.deepEqual(JSON.parse(h.requests[7].options.body), { op: 'board.read', workspaceId: 'w', boardId: '1', issueKeys: [] });
   await h.resolve(7, trackerBoard);
   const columns = h.nodes('section').filter(n => n.props.className === 'dsh-board-column');
-  assert.deepEqual(columns.map(n => n.props['aria-label']), ['Open', 'Doing', 'trackerUnmapped']);
+  assert.deepEqual(columns.map(n => n.props['aria-label']), ['Open', 'Shared', 'Doing', 'Unknown']);
   assert.ok(h.text(columns[0]).includes('<script>unsafe</script>'));
-  assert.ok(h.text(columns[2]).includes('Ambiguous') && h.text(columns[2]).includes('Unknown'));
+  assert.ok(h.text(columns[1]).includes('Ambiguous'), 'shared status appears once even in multiple source columns');
+  assert.ok(!h.text(columns[2]).includes('Ambiguous') && !h.text(columns[2]).includes('Unknown'), 'configured Doing status remains empty');
+  assert.ok(h.text(columns[3]).includes('Unknown'), 'status absent from configuration uses its actual identity');
   assert.equal(h.nodes('article').length, 3, 'ambiguous statuses never duplicate issues');
   assert.ok(h.nodes('p').some(n => h.text(n).includes('trackerPartial')));
   assert.ok(!h.nodes('button').some(n => ['addTask', 'addStatus', 'linkCurrent'].includes(h.text(n))));
@@ -597,6 +725,133 @@ test('Tracker configuration, explicit workspace selection, and read-only partial
   assert.ok(!h.nodes('script').length); assert.ok(!h.nodes('img').length);
   assert.ok(h.requests.slice(1).every(r => !JSON.stringify(r.options).includes('orgId') && !JSON.stringify(r.options).includes('token')));
   h.unmount();
+});
+
+test('Tracker groups by status identity even when labels collide or issue display changes', async () => {
+  const h = harness({ manualTracker: true });
+  const first = { id: 'first', key: 'first', display: 'Same' };
+  const second = { id: 'second', key: 'second', display: 'Same' };
+  const missing = { id: 'missing', key: 'missing', display: 'Same' };
+  const board = { ...trackerBoard, columns: [{ id: 'source', name: 'Not a status', statuses: [first, second] }], issues: [
+    { key: 'X-1', summary: 'First item', status: { ...first, display: 'Changed on issue' } },
+    { key: 'X-2', summary: 'Second item', status: second },
+    { key: 'X-3', summary: 'Absent item', status: missing },
+  ] };
+  try {
+    h.mount(); await h.resolve(0, base()); await h.resolve(1, trackerSettings(1, true, { w: ['1'] }));
+    h.tile('tracker #1 — Workspace — tracker').props.onClick(); await h.resolve(2, trackerSettings(1, true, { w: ['1'] })); await h.resolve(3, board);
+    const columns = h.nodes('section').filter(n => n.props.className === 'dsh-board-column');
+    assert.deepEqual(columns.map(n => n.props['aria-label']), ['Same (first)', 'Same (second)', 'Same (missing)']);
+    assert.deepEqual(columns.map(n => n.props.key), ['first', 'second', 'missing']);
+    for (const [index, title] of ['First item', 'Second item', 'Absent item'].entries()) {
+      assert.ok(h.text(columns[index]).includes(title));
+      assert.equal(columns.filter(column => h.text(column).includes(title)).length, 1);
+    }
+    assert.equal(h.nodes('article').length, 3);
+  } finally { h.unmount(); }
+});
+
+test('Tracker renders configured and issue-only statuses rather than source columns', async () => {
+  const h = harness({ manualTracker: true });
+  const first = { id: 'one', key: 'one', display: 'First' };
+  const second = { id: 'two', key: 'two', display: 'Second' };
+  const empty = { id: 'empty', key: 'empty', display: 'Empty' };
+  const observed = { id: 'observed', key: 'observed', display: 'Observed' };
+  const board = { ...trackerBoard, columns: [
+    { id: 'c1', name: 'Source column', statuses: [first, second] },
+    { id: 'c2', name: 'Other column', statuses: [empty] },
+  ], issues: [
+    { key: 'X-1', summary: 'First issue', status: first },
+    { key: 'X-2', summary: 'Second issue', status: second },
+    { key: 'X-3', summary: 'Observed issue', status: observed },
+  ] };
+  try {
+    h.mount(); await h.resolve(0, base()); await h.resolve(1, trackerSettings(1, true, { w: ['1'] }));
+    h.tile('tracker #1 — Workspace — tracker').props.onClick(); await h.resolve(2, trackerSettings(1, true, { w: ['1'] })); await h.resolve(3, board);
+    const lanes = h.nodes('section').filter(n => n.props.className === 'dsh-board-column');
+    assert.deepEqual(lanes.map(n => n.props['aria-label']), ['First', 'Second', 'Empty', 'Observed']);
+    assert.deepEqual(lanes.map(n => n.props.key), ['one', 'two', 'empty', 'observed']);
+    for (const [index, title] of [[0, 'First issue'], [1, 'Second issue'], [3, 'Observed issue']]) {
+      assert.ok(h.text(lanes[index]).includes(title));
+      assert.equal(lanes.filter(lane => h.text(lane).includes(title)).length, 1);
+    }
+    assert.ok(!h.text(lanes[2]).includes('issue'));
+    assert.equal(h.nodes('article').length, 3);
+    assert.ok(!h.nodes('p').some(n => ['trackerStatusPartial', 'trackerError'].includes(h.text(n))));
+  } finally { h.unmount(); }
+});
+
+test('Tracker disambiguates labels that collide after key suffixes are added', async () => {
+  const h = harness({ manualTracker: true });
+  const a = { id: 'id-a', key: 'a', display: 'Same' };
+  const b = { id: 'id-b', key: 'b', display: 'Same' };
+  const variant = { id: 'id-c', key: 'c', display: 'Same (a)' };
+  const board = { ...trackerBoard, columns: [{ id: 'source', name: 'Source', statuses: [a, b, variant] }], issues: [
+    { key: 'X-1', summary: 'Issue A', status: a },
+    { key: 'X-2', summary: 'Issue B', status: b },
+    { key: 'X-3', summary: 'Issue C', status: variant },
+  ] };
+  try {
+    h.mount(); await h.resolve(0, base()); await h.resolve(1, trackerSettings(1, true, { w: ['1'] }));
+    h.tile('tracker #1 — Workspace — tracker').props.onClick(); await h.resolve(2, trackerSettings(1, true, { w: ['1'] })); await h.resolve(3, board);
+    const lanes = h.nodes('section').filter(n => n.props.className === 'dsh-board-column');
+    const labels = lanes.map(n => n.props['aria-label']);
+    assert.deepEqual(labels, ['Same (a) [id-a]', 'Same (b)', 'Same (a) [id-c]']);
+    assert.equal(new Set(labels).size, 3);
+    assert.deepEqual(lanes.map(n => n.props.key), ['id-a', 'id-b', 'id-c']);
+    for (const [index, title] of ['Issue A', 'Issue B', 'Issue C'].entries()) assert.ok(h.text(lanes[index]).includes(title));
+  } finally { h.unmount(); }
+});
+
+test('Tracker oversized configured associations fall back to actual issue statuses and fail closed on conflicting issue identities', async () => {
+  const configured = { id: 'configured', key: 'configured', display: 'Configured' };
+  const observed = { id: 'observed', key: 'observed', display: 'Observed' };
+  // Each column stays within schema limits while the 5,500 associations exceed the grouping cap.
+  const columns = Array.from({ length: 11 }, (_, index) => ({ id: `c${index}`, name: `Column ${index}`, statuses: Array(500).fill(configured) }));
+  for (const conflicting of [false, true]) {
+    const h = harness({ manualTracker: true });
+    const issues = [{ key: 'X-1', summary: 'Observed issue', status: observed }];
+    if (conflicting) issues.push({ key: 'X-2', summary: 'Conflicting issue', status: { ...observed, id: 'other' } });
+    try {
+      h.mount(); await h.resolve(0, base()); await h.resolve(1, trackerSettings(1, true, { w: ['1'] }));
+      h.tile('tracker #1 — Workspace — tracker').props.onClick(); await h.resolve(2, trackerSettings(1, true, { w: ['1'] })); await h.resolve(3, { ...trackerBoard, columns, issues });
+      const lanes = h.nodes('section').filter(n => n.props.className === 'dsh-board-column');
+      const alerts = h.nodes('p').filter(n => n.props.role === 'alert').map(n => h.text(n));
+      if (conflicting) {
+        assert.deepEqual(lanes, []); assert.equal(h.nodes('article').length, 0);
+        assert.ok(alerts.includes('trackerError')); assert.ok(!alerts.includes('trackerStatusPartial'));
+      } else {
+        assert.deepEqual(lanes.map(n => n.props['aria-label']), ['Observed']);
+        assert.equal(lanes[0].props.key, 'observed'); assert.ok(h.text(lanes[0]).includes('Observed issue'));
+        assert.equal(h.nodes('article').length, 1); assert.ok(alerts.includes('trackerStatusPartial'));
+      }
+    } finally { h.unmount(); }
+  }
+});
+
+test('Tracker linked filter stays clearable when board links become unavailable', async () => {
+  const h = harness({ manualTracker: true, ids: ['session-1'] });
+  try {
+    h.mount(); await h.resolve(0, base()); await h.resolve(1, trackerSettings(1, true, { w: ['1'] }));
+    h.tile('tracker #1 — Workspace — tracker').props.onClick(); await h.resolve(2, trackerSettings(1, true, { w: ['1'] })); await h.resolve(3, trackerBoard);
+    h.nodes('main'); const loadLinks = [...h.timeouts][0]; assert.ok(loadLinks); loadLinks(); await settle();
+    assert.equal(JSON.parse(h.requests[4].options.body).op, 'links.read'); await h.resolve(4, issueLinks);
+    h.button('columnSessions: Open — 1').props.onClick();
+    assert.equal(h.button('columnSessions: Open — 1').props['aria-pressed'], true);
+    assert.ok(h.nodes('p').some(n => h.text(n).includes('withSession')));
+    h.click('trackerRefreshBoard'); await h.resolve(5, trackerSettings(1, true, { w: ['1'] })); await h.resolve(6, trackerBoard);
+    h.nodes('main'); const reloadLinks = [...h.timeouts][0]; assert.ok(reloadLinks); reloadLinks(); await settle();
+    assert.equal(JSON.parse(h.requests[7].options.body).op, 'links.read'); await h.resolve(7, { error: { code: 'unavailable' } }, 503);
+    assert.ok(h.nodes('p').some(n => n.props.role === 'status' && h.text(n).includes('sessionFilterUnavailable')));
+    assert.ok(!h.nodes('p').some(n => h.text(n) === 'noResults'));
+    assert.equal(h.nodes('article').length, 0);
+    assert.equal(h.button('clearSessionFilter').props.disabled, undefined);
+    h.nodes('main'); assert.ok(h.button('clearSessionFilter'), 'clear control persists across renders');
+    h.click('clearSessionFilter');
+    assert.equal(h.nodes('article').length, 3);
+    assert.ok(!h.nodes('button').some(n => h.text(n) === 'clearSessionFilter'));
+    assert.ok(!h.nodes('p').some(n => h.text(n) === 'noResults'));
+  } finally { h.unmount(); }
 });
 
 test('restart requires fresh list and explicit reselection; stale listing never authorizes view', async () => {

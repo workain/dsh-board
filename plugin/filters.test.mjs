@@ -158,10 +158,10 @@ test('selected local assignee remains visible when the last matching task change
 test('partial Tracker board filters known identities, explicit unassigned and unknown independently', async () => {
   const h = harness({ manualTracker: true });
   const settings = { revision: 1, configured: true, orgType: 'cloud', workspaces: { w: ['1'] }, needsReselect: [] };
-  const status = { key: 'open', display: 'Open' };
+  const status = { id: '1', key: 'open', display: 'Open' };
   const board = {
     board: { id: '1', name: 'Synthetic Tracker' },
-    columns: [{ id: 'c', name: 'Open', statuses: [{ key: 'open' }] }],
+    columns: [{ id: 'c', name: 'Open', statuses: [status] }],
     issues: [
       { key: 'S-1', summary: 'First identity', status, assigneeKnown: true, assignee: { id: 'id-1', display: 'Same name' } },
       { key: 'S-2', summary: 'Second identity', status, assigneeKnown: true, assignee: { id: 'id-2', display: 'Same name' } },
