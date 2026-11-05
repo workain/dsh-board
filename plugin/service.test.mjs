@@ -43,13 +43,21 @@ async function setup(service) {
   return { b, c, t: result.boards[0].tasks[0].id };
 }
 function context(workspaceRegistry = registry()) {
-  const routes = [], cleanup = [], children = []; let tool, approvalRequest, approvalOutcome = 'allowed-once';
-  const ctx = { workspaceRegistry, effect(fn) { const dispose = fn(); cleanup.push(dispose); return dispose; },
+  const routes = [], tools = [], cleanup = [], children = []; let approvalRequest, approvalOutcome = 'allowed-once';
+  function own(dispose) {
+    let active = true;
+    const once = () => { if (!active) return; active = false; return dispose?.(); };
+    cleanup.push(once); return once;
+  }
+  const ctx = { workspaceRegistry, effect(fn) { return own(fn()); },
     plugin(value) { children.push(value); },
     approval: { async request(req) { approvalRequest = req; return approvalOutcome; } },
-    tools: { register(value) { tool = value; } },
+    tools: { register(value) {
+      tools.push(value);
+      return own(() => { const index = tools.indexOf(value); if (index >= 0) tools.splice(index, 1); });
+    } },
     connection: { fetch: { register(value) { routes.push(value); return () => {}; } } } };
-  return { ctx, routes, cleanup, children, get tool() { return tool; }, get approvalRequest() { return approvalRequest; }, reject() { approvalOutcome = 'rejected'; } };
+  return { ctx, routes, tools, cleanup, children, get tool() { return tools.find(tool => tool.name === 'board_link_session'); }, get approvalRequest() { return approvalRequest; }, reject() { approvalOutcome = 'rejected'; } };
 }
 function trackerContext(dir, options = {}) {
   const f = context(options.workspaceRegistry ?? registry());
@@ -128,7 +136,7 @@ test('real SQLite: exact routes, direct approval and tool/API race across instan
     const a = context(), b = context(); await apply(a.ctx); await apply(b.ctx);
     assert.deepEqual(inject, ['connection', 'workspaceRegistry', 'tools', 'approval']);
     assert.deepEqual(a.children, [trackerPlugin]);
-    assert.deepEqual(trackerPlugin.inject, ['connection', 'workspaceRegistry', 'profileContext', 'credentials']);
+    assert.deepEqual(trackerPlugin.inject, ['connection', 'workspaceRegistry', 'profileContext', 'credentials', 'tools', 'approval']);
     assert.deepEqual(a.routes.map(r => [r.path, r.methods, r.requestBody]), [
       ['/api/dsh-board', ['GET'], 'buffered'], ['/api/dsh-board.mutate', ['POST'], 'streaming'],
     ]);
@@ -165,6 +173,9 @@ test('Tracker routes bootstrap lazily per launcher profile and fail soft', async
   assert.deepEqual(web.routes.map(r => [r.path, r.methods, r.requestBody]), [
     ['/api/dsh-board.tracker', ['GET'], 'buffered'], ['/api/dsh-board.tracker.mutate', ['POST'], 'streaming'],
   ]);
+  assert.deepEqual(web.tools.map(tool => tool.name), [
+    'tracker_list_boards', 'tracker_list_issues', 'tracker_get_issue', 'tracker_list_transitions', 'tracker_add_comment', 'tracker_transition_issue',
+  ]);
   const db = path.join(storage, 'tracker-web.sqlite');
   assert.equal(existsSync(db), false);
   const [one, two] = await Promise.all([trackerGet(web), trackerGet(web)]);
@@ -176,6 +187,7 @@ test('Tracker routes bootstrap lazily per launcher profile and fail soft', async
   assert.equal((await (await trackerGet(other)).json()).configured, false);
   assert.equal(existsSync(path.join(storage, 'tracker-other.sqlite')), true);
   await dispose(web); await dispose(other);
+  assert.equal(web.tools.length, 0);
   assert.equal((await trackerGet(web)).status, 503);
   const reopened = trackerContext(dir);
   assert.equal((await (await trackerGet(reopened)).json()).orgType, 'cloud'); await dispose(reopened);
@@ -185,6 +197,67 @@ test('Tracker routes bootstrap lazily per launcher profile and fail soft', async
   const missing = trackerContext(dir, { home: path.join(dir, 'missing') });
   assert.equal((await trackerGet(missing)).status, 503);
   assert.equal(existsSync(path.join(dir, 'missing')), false); await dispose(missing);
+});
+
+test('Tracker tools share lazy startup, reject unauthorized callers and stay closed after unload', async t => {
+  const { dir } = fixture(t), storage = trackerDirectory(dir), db = path.join(storage, 'tracker-web.sqlite');
+  mkdirSync(storage, { recursive: true, mode: 0o700 });
+  let calls = 0;
+  const f = trackerContext(dir, { credentials: { resolve() { calls++; throw Error('unexpected secret resolution'); } } });
+  const list = f.tools.find(tool => tool.name === 'tracker_list_boards');
+  const signal = new AbortController().signal;
+  const caller = { agent: { id: 's', session: { id: 's' } }, signal };
+  assert.equal(existsSync(db), false);
+  await assert.rejects(list.execute({ workspaceId: 'w' }, { signal }), /invalid_caller/);
+  assert.equal(existsSync(db), false); assert.equal(calls, 0);
+  const [unauthorized, response] = await Promise.allSettled([
+    list.execute({ workspaceId: 'w' }, caller), trackerGet(f),
+  ]);
+  assert.equal(unauthorized.status, 'rejected');
+  assert.doesNotMatch(String(unauthorized.reason), /secret|YANDEX_TRACKER/);
+  assert.equal(response.status, 'fulfilled'); assert.equal(response.value.status, 200);
+  assert.equal(existsSync(db), true); assert.equal(calls, 0);
+  await dispose(f);
+  await assert.rejects(list.execute({ workspaceId: 'w' }, caller), /unavailable/);
+  assert.equal(calls, 0);
+});
+
+test('Tracker shutdown unregisters tools and routes before draining the service', async t => {
+  const { dir } = fixture(t), storage = trackerDirectory(dir); mkdirSync(storage, { recursive: true, mode: 0o700 });
+  const f = context(); let release, entered, released = false;
+  const waiting = new Promise(resolve => { release = () => { released = true; resolve(); }; });
+  const unregistered = new Promise(resolve => { entered = resolve; });
+  f.ctx.profileContext = { name: 'web', home: dir }; f.ctx.credentials = { resolve() {} };
+  f.ctx.connection.fetch.register = route => {
+    f.routes.push(route);
+    return () => { if (route.methods[0] === 'POST') { entered(); return waiting; } };
+  };
+  trackerPlugin.apply(f.ctx);
+  const list = f.tools.find(tool => tool.name === 'tracker_list_boards');
+  const caller = { agent: { id: 's', session: { id: 's' } }, signal: new AbortController().signal };
+  assert.equal((await trackerGet(f)).status, 200);
+  let finished = false;
+  const closing = dispose(f).then(() => { finished = true; });
+  await unregistered;
+  assert.equal(f.tools.length, 0);
+  await assert.rejects(list.execute({ workspaceId: 'w' }, caller), /unavailable/);
+  assert.equal((await trackerGet(f)).status, 503);
+  assert.equal(finished, false); assert.equal(released, false);
+  release(); await closing; assert.equal(finished, true);
+  await dispose(f);
+});
+
+test('Tracker bootstrap failures can be retried by tools and routes', async t => {
+  const { dir } = fixture(t), storage = trackerDirectory(dir), db = path.join(storage, 'tracker-web.sqlite');
+  const f = trackerContext(dir);
+  const list = f.tools.find(tool => tool.name === 'tracker_list_boards');
+  const caller = { agent: { id: 's', session: { id: 's' } }, signal: new AbortController().signal };
+  await assert.rejects(list.execute({ workspaceId: 'w' }, caller), /unavailable/);
+  assert.equal(existsSync(db), false);
+  mkdirSync(storage, { recursive: true, mode: 0o700 });
+  const response = await trackerGet(f);
+  assert.equal(response.status, 200); assert.equal(existsSync(db), true);
+  await dispose(f);
 });
 
 test('Tracker resolves only fixed refs, fails closed on revision change and sanitizes errors', async t => {
@@ -285,7 +358,20 @@ test('Tracker startup failures do not break local board or leak registered route
   };
   assert.throws(() => trackerPlugin.apply(f.ctx), /route conflict/);
   assert.equal(unregisters, 1);
-  await f.cleanup[0]();
+  await dispose(f);
+
+  const partial = context(), activeRoutes = new Set(); let registrations = 0;
+  partial.ctx.profileContext = { name: 'web', home: dir }; partial.ctx.credentials = { resolve() {} };
+  partial.ctx.connection.fetch.register = route => { activeRoutes.add(route.path); return () => activeRoutes.delete(route.path); };
+  const register = partial.ctx.tools.register;
+  partial.ctx.tools.register = definition => {
+    if (++registrations === 3) throw Error('tool conflict');
+    return register(definition);
+  };
+  assert.throws(() => trackerPlugin.apply(partial.ctx), /tool conflict/);
+  assert.equal(activeRoutes.size, 0); assert.equal(partial.tools.length, 0);
+  await dispose(partial); await dispose(partial);
+  assert.equal(activeRoutes.size, 0); assert.equal(partial.tools.length, 0);
 });
 
 test('independent processes race through API and tool on a shared SQLite database', async t => {

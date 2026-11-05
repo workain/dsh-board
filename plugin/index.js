@@ -2,6 +2,7 @@ import { lstatSync, mkdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { createBoardService } from './service.mjs';
+import { registerTrackerTools } from './tracker-tools.mjs';
 
 export const name = 'dsh-board';
 export const inject = ['connection', 'workspaceRegistry', 'tools', 'approval'];
@@ -10,7 +11,7 @@ export const inject = ['connection', 'workspaceRegistry', 'tools', 'approval'];
 // disabling the local board. Bootstrap modules and storage only on first use.
 export const trackerPlugin = {
   name: 'dsh-board-tracker',
-  inject: ['connection', 'workspaceRegistry', 'profileContext', 'credentials'],
+  inject: ['connection', 'workspaceRegistry', 'profileContext', 'credentials', 'tools', 'approval'],
   apply(ctx) {
     let disposed = false, initializing, settings, service, credentialFlight;
     const stop = new AbortController();
@@ -70,15 +71,24 @@ export const trackerPlugin = {
         throw error;
       }
     }
+    function getService() {
+      if (disposed) return Promise.reject(new Error('Tracker stopped'));
+      if (!initializing) {
+        const attempt = bootstrap();
+        initializing = attempt;
+        // Permit transient initialization failures to be retried, without an old
+        // attempt ever clearing a newer one.
+        attempt.catch(() => { if (initializing === attempt) initializing = undefined; });
+      }
+      return initializing.then(ready => {
+        if (disposed) throw new Error('Tracker stopped');
+        return ready;
+      });
+    }
     async function fetch(request) {
       if (disposed) return unavailable(request);
-      if (!initializing) {
-        initializing = bootstrap();
-        // Permit a transient initialization error to be retried by a later request.
-        initializing.catch(() => { initializing = undefined; });
-      }
       try {
-        const ready = await initializing;
+        const ready = await getService();
         if (disposed || request.signal.aborted) return unavailable(request);
         const signal = AbortSignal.any([request.signal, stop.signal]);
         return await ready.fetch(new Request(request, { signal }));
@@ -100,21 +110,41 @@ export const trackerPlugin = {
       }
       return closing;
     };
-    // Register cleanup before both routes so unload unregisters routes first.
-    const disposeStore = ctx.effect(() => close, 'dsh-board-tracker: close');
-    let disposeRead;
-    try {
-      disposeRead = ctx.effect(() => ctx.connection.fetch.register({
-        path: '/api/dsh-board.tracker', methods: ['GET'], requestBody: 'buffered', fetch,
-      }), 'dsh-board-tracker: owner read route');
-      ctx.effect(() => ctx.connection.fetch.register({
-        path: '/api/dsh-board.tracker.mutate', methods: ['POST'], requestBody: 'streaming', fetch,
-      }), 'dsh-board-tracker: owner write route');
-    } catch (error) {
-      try { Promise.resolve(disposeRead?.()).catch(() => {}); } catch {}
-      try { Promise.resolve(disposeStore()).catch(() => {}); } catch {}
-      throw error;
-    }
+    // One owning effect groups the registration effects and drains the service
+    // only after unregistering them. Cordis otherwise runs sibling cleanup in
+    // parallel, even though it starts those effects in reverse order.
+    ctx.effect(() => {
+      let disposeRead, disposeWrite, disposeTools, disposal;
+      const dispose = () => {
+        if (!disposal) {
+          // Reject new work as soon as unload begins, including while an
+          // asynchronous route disposer is still settling.
+          disposed = true;
+          const pending = [];
+          for (const unregister of [disposeTools, disposeWrite, disposeRead]) {
+            try { pending.push(Promise.resolve(unregister?.())); } catch {}
+          }
+          // Disposers normally run synchronously, but wait for asynchronous
+          // unregister operations before draining and closing the store.
+          disposal = Promise.allSettled(pending).then(close);
+        }
+        return disposal;
+      };
+      try {
+        disposeRead = ctx.connection.fetch.register({
+          path: '/api/dsh-board.tracker', methods: ['GET'], requestBody: 'buffered', fetch,
+        });
+        disposeWrite = ctx.connection.fetch.register({
+          path: '/api/dsh-board.tracker.mutate', methods: ['POST'], requestBody: 'streaming', fetch,
+        });
+        disposeTools = registerTrackerTools(ctx, { getService });
+      } catch (error) {
+        // The tools module rolls back its own partial registrations.
+        void dispose().catch(() => {});
+        throw error;
+      }
+      return dispose;
+    }, 'dsh-board-tracker: routes, tools and service');
   },
 };
 

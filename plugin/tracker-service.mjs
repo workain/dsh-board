@@ -9,6 +9,9 @@ const MAX_PENDING = 64;
 const ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 const BOARD = /^[1-9][0-9]{0,14}$/;
 const ISSUE = /^[A-Z][A-Z0-9_]{0,31}-[1-9][0-9]{0,14}$/;
+const TRANSITION = /^[A-Za-z0-9_-]{1,128}$/;
+const TOOL_SCOPE_TTL_MS = 60_000;
+const MAX_COMMENT = 48 * 1024;
 
 class ServiceError extends Error {
   constructor(code, status) { super(code); this.code = code; this.status = status; }
@@ -275,5 +278,209 @@ export function createTrackerService({ settings, tracker, workspaceRegistry } = 
       return response({ error: { code: result.code } }, result.status);
     } finally { pending--; }
   }
-  return Object.freeze({ read, command, fetch, close });
+  // Internal only: sessionId comes from the host's exec.agent, never from JSON.
+  // The scope is tied to a single binding/revision/incarnation and expires quickly.
+  function toolScope(options) {
+    try { return makeToolScope(options); }
+    catch (error) { const safe = safeError(error, lifecycle.signal); throw new ServiceError(safe.code, safe.status); }
+  }
+  function makeToolScope(options) {
+    shape(options, ['workspaceId', 'sessionId', 'signal']);
+    const { workspaceId: wid, sessionId: sid, signal: callerSignal } = options;
+    workspaceId(wid); workspaceId(sid);
+    if (callerSignal !== undefined && !(callerSignal instanceof AbortSignal)) invalid();
+    const initial = current(), incarnation = workspace(wid), binding = bindings.get(wid);
+    configured(initial);
+    const ids = initial.settings.workspaces[wid];
+    if (!Array.isArray(ids) || !ids.length) fail('board_not_selected', 403);
+    boardIds(ids);
+    if (!binding || binding.incarnation !== incarnation || binding.revision !== initial.revision) fail('needs_reselect', 409);
+    const selected = Object.freeze([...ids]);
+    const selectedIdentity = binding.identity;
+    const expires = Date.now() + TOOL_SCOPE_TTL_MS;
+
+    function check(signal) {
+      signal.throwIfAborted();
+      if (Date.now() >= expires) fail('scope_expired', 409);
+      const item = workspaceRegistry.get(wid);
+      if (!item || item.createdAt !== incarnation) fail('needs_reselect', 409);
+      if (!Array.isArray(item.sessionIds) || !item.sessionIds.includes(sid) ||
+          (workspaceRegistry.archivedSessionIds != null && !Array.isArray(workspaceRegistry.archivedSessionIds)) ||
+          workspaceRegistry.archivedSessionIds?.includes(sid) ||
+          (item.archivedSessionIds != null && (!Array.isArray(item.archivedSessionIds) || item.archivedSessionIds.includes(sid)))) fail('session_not_in_workspace', 403);
+      const state = current();
+      if (state.revision !== initial.revision || !state.settings.connection || bindings.get(wid) !== binding ||
+          binding.revision !== initial.revision || binding.incarnation !== incarnation || binding.identity !== selectedIdentity ||
+          !Array.isArray(state.settings.workspaces[wid]) || state.settings.workspaces[wid].length !== selected.length ||
+          selected.some((id, index) => state.settings.workspaces[wid][index] !== id)) fail('needs_reselect', 409);
+    }
+    check(callerSignal ?? lifecycle.signal);
+    async function account(signal) {
+      check(signal);
+      let result;
+      try { result = await session(signal); }
+      catch (error) { check(signal); throw error; }
+      check(signal);
+      if (result.identity !== selectedIdentity) { bindings.clear(); invalidate(); fail('needs_reselect', 409); }
+      return result;
+    }
+    async function checkedAwait(work, signal) {
+      check(signal);
+      try {
+        const value = await raceAbort(work, signal);
+        check(signal);
+        await account(signal);
+        check(signal);
+        return value;
+      } catch (error) {
+        check(signal);
+        // Credentials may rotate during a failed operation too.
+        await account(signal);
+        check(signal);
+        throw error;
+      }
+    }
+    function resultText(value, max, nullable = false) {
+      if (nullable && value === null) return null;
+      if (typeof value !== 'string' || value.length > max || (!nullable && !value.trim()) || (nullable ? /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u : /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u).test(value)) fail('invalid_tracker_response', 502);
+      return value;
+    }
+    function safeStatus(value) {
+      if (!value || typeof value !== 'object') fail('invalid_tracker_response', 502);
+      return { id: resultText(value.id, 128), key: resultText(value.key, 128), display: resultText(value.display, 256) };
+    }
+    function safeIssue(value, key, includeDescription = true) {
+      if (!value || typeof value !== 'object' || value.key !== key || !Array.isArray(value.boards) || value.boards.length > 500) fail('issue_not_in_selected_boards', 403);
+      let member = false;
+      for (const board of value.boards) {
+        if (!board || typeof board !== 'object' || typeof board.id !== 'string' || !BOARD.test(board.id) || !Number.isSafeInteger(Number(board.id))) fail('issue_not_in_selected_boards', 403);
+        if (selected.includes(board.id)) member = true;
+      }
+      if (!member) fail('issue_not_in_selected_boards', 403);
+      if (typeof value.assigneeKnown !== 'boolean' || (value.assigneeKnown && value.assignee !== null && (!value.assignee || typeof value.assignee !== 'object'))) fail('invalid_tracker_response', 502);
+      const assignee = value.assigneeKnown && value.assignee !== null ? { id: resultText(value.assignee.id, 128), display: resultText(value.assignee.display, 256) } : null;
+      const result = { key, summary: resultText(value.summary, 4096), status: safeStatus(value.status), assigneeKnown: value.assigneeKnown, assignee };
+      if (includeDescription) {
+        result.description = resultText(value.description, 48 * 1024, true);
+        if (!(value.version === null || (Number.isSafeInteger(value.version) && value.version >= 0))) fail('invalid_tracker_response', 502);
+        result.version = value.version;
+      }
+      return result;
+    }
+    function keyArg(value) { if (typeof value !== 'string' || !ISSUE.test(value)) invalid(); }
+    async function issue(key, signal) {
+      const a = await account(signal);
+      if (typeof a.getIssue !== 'function') fail('invalid_tracker_response', 502);
+      return safeIssue(await checkedAwait(() => a.getIssue(key, { signal }), signal), key);
+    }
+    function safeTransitions(value) {
+      if (!Array.isArray(value) || value.length > 500) fail('invalid_tracker_response', 502);
+      const seen = new Set();
+      return value.map(item => {
+        if (!item || typeof item !== 'object' || typeof item.id !== 'string' || !TRANSITION.test(item.id) || seen.has(item.id)) fail('invalid_tracker_response', 502);
+        seen.add(item.id);
+        return { id: item.id, display: resultText(item.display, 256), to: safeStatus(item.to) };
+      });
+    }
+    async function transitions(key, signal) {
+      await issue(key, signal);
+      const a = await account(signal);
+      if (typeof a.listTransitions !== 'function') fail('invalid_tracker_response', 502);
+      const result = safeTransitions(await checkedAwait(() => a.listTransitions(key, { signal }), signal));
+      await issue(key, signal);
+      return result;
+    }
+    function execute(work) {
+      return run(async signal => {
+        try { return await work(signal); }
+        catch (error) {
+          if (error instanceof ServiceError && error.code === 'outcome_unknown') throw error;
+          const safe = safeError(error, signal); throw new ServiceError(safe.code, safe.status);
+        }
+      }, callerSignal).catch(error => {
+        if (error instanceof ServiceError && error.code === 'outcome_unknown') throw error;
+        const safe = safeError(error, callerSignal ?? lifecycle.signal);
+        throw new ServiceError(safe.code, safe.status);
+      });
+    }
+    async function write(signal, key, kind, value, expectedTo) {
+      await issue(key, signal);
+      if (kind === 'executeTransition') {
+        const available = await transitions(key, signal);
+        if (!available.some(item => item.id === value && item.to.id === expectedTo.id && item.to.key === expectedTo.key && item.to.display === expectedTo.display)) fail('transition_not_available', 409);
+      }
+      const a = await account(signal);
+      if (typeof a[kind] !== 'function') fail('invalid_tracker_response', 502);
+      // Last synchronous check before dispatch. Revocation and the remote send cannot
+      // be atomic; after dispatch any uncertain result is reported without retry.
+      check(signal);
+      let result, dispatched = false, returned = false;
+      const operation = a[kind];
+      try {
+        result = await raceAbort(() => { check(signal); dispatched = true; return operation(key, value, { signal }); }, signal);
+        returned = true;
+        check(signal);
+        await account(signal);
+        check(signal);
+      } catch (error) {
+        if (dispatched) {
+          if (!returned && !signal.aborted && error?.name === 'TrackerError' && ['unauthorized', 'forbidden', 'not_found', 'conflict', 'precondition_failed', 'unprocessable', 'rate_limited', 'invalid_input'].includes(error.code)) {
+            try { check(signal); await account(signal); check(signal); }
+            catch { fail('outcome_unknown', 502); }
+            const statuses = { unauthorized: 401, forbidden: 403, not_found: 404, conflict: 409, precondition_failed: 412, unprocessable: 422, rate_limited: 429, invalid_input: 400 };
+            fail(error.code, statuses[error.code]);
+          }
+          fail('outcome_unknown', 502);
+        }
+        throw error;
+      }
+      if (kind === 'addComment') {
+        if (!result || typeof result.id !== 'string' || !TRANSITION.test(result.id)) fail('outcome_unknown', 502);
+        return { id: result.id };
+      }
+      return { ok: true };
+    }
+    return Object.freeze({
+      selectedBoards: () => execute(async signal => { await account(signal); return [...selected]; }),
+      boardRead: input => execute(async signal => {
+        shape(input, ['boardId', 'issueKeys']); boardId(input.boardId); issueKeys(input.issueKeys);
+        if (!selected.includes(input.boardId)) fail('board_not_selected', 403);
+        await account(signal);
+        const raw = await checkedAwait(() => commandImpl({ op: 'board.read', workspaceId: wid, boardId: input.boardId, issueKeys: [...input.issueKeys] }, signal), signal);
+        if (!raw.board || raw.board.id !== input.boardId || !Array.isArray(raw.columns) || raw.columns.length > 500 || !Array.isArray(raw.issues) || raw.issues.length > 500) fail('invalid_tracker_response', 502);
+        const columns = raw.columns.map(column => {
+          if (!column || typeof column !== 'object' || !Array.isArray(column.statuses) || column.statuses.length > 500) fail('invalid_tracker_response', 502);
+          boardId(column.id);
+          return { id: column.id, name: resultText(column.name, 256), statuses: column.statuses.map(safeStatus) };
+        });
+        // getBoardOverview already validates membership against its search response.
+        const issues = raw.issues.map(entry => {
+          keyArg(entry?.key);
+          if (typeof entry.assigneeKnown !== 'boolean' || (entry.assigneeKnown && entry.assignee !== null && (!entry.assignee || typeof entry.assignee !== 'object'))) fail('invalid_tracker_response', 502);
+          const assignee = entry.assigneeKnown && entry.assignee !== null ? { id: resultText(entry.assignee.id, 128), display: resultText(entry.assignee.display, 256) } : null;
+          return { key: entry.key, summary: resultText(entry.summary, 4096), status: safeStatus(entry.status), assigneeKnown: entry.assigneeKnown, assignee };
+        });
+        check(signal);
+        return { board: { id: input.boardId, name: resultText(raw.board.name, 256) }, columns, issues, issuesComplete: false,
+          issuesReason: ['approximate_board_filter', 'explicit_keys_only', 'board_search_unsupported', 'page_limit', 'membership_mismatch'].includes(raw.issuesReason) ? raw.issuesReason : 'unknown' };
+      }),
+      getIssue: input => execute(async signal => { shape(input, ['issueKey']); keyArg(input.issueKey); return issue(input.issueKey, signal); }),
+      listTransitions: input => execute(async signal => { shape(input, ['issueKey']); keyArg(input.issueKey); return transitions(input.issueKey, signal); }),
+      addComment: input => execute(async signal => {
+        shape(input, ['issueKey', 'text']); keyArg(input.issueKey);
+        if (typeof input.text !== 'string' || !input.text.trim() || input.text.length > MAX_COMMENT || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(input.text)) invalid();
+        return write(signal, input.issueKey, 'addComment', input.text);
+      }),
+      executeTransition: input => execute(async signal => {
+        shape(input, ['issueKey', 'transitionId', 'expectedTo']); keyArg(input.issueKey);
+        if (typeof input.transitionId !== 'string' || !TRANSITION.test(input.transitionId)) invalid();
+        shape(input.expectedTo, ['id', 'key', 'display']);
+        for (const [name, max] of [['id', 128], ['key', 128], ['display', 256]]) {
+          if (typeof input.expectedTo[name] !== 'string' || !input.expectedTo[name].trim() || input.expectedTo[name].length > max || /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(input.expectedTo[name])) invalid();
+        }
+        return write(signal, input.issueKey, 'executeTransition', input.transitionId, input.expectedTo);
+      }),
+    });
+  }
+  return Object.freeze({ read, command, fetch, close, toolScope });
 }

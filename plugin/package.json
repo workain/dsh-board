@@ -27,6 +27,8 @@
     "tracker-fetch.test.mjs",
     "tracker-service.mjs",
     "tracker-service.test.mjs",
+    "tracker-tools.mjs",
+    "tracker-tools.test.mjs",
     "tracker-settings.mjs",
     "tracker-settings.test.mjs",
     "client.js",
@@ -42,7 +44,7 @@
   "scripts": {
     "build": "node ./scripts/build.mjs",
     "check": "node ./scripts/build.mjs --check",
-    "test": "node --test core.test.mjs service.test.mjs sqlite-store.test.mjs client.test.mjs filters.test.mjs refresh-race.test.mjs slash-guard.test.mjs tracker-api.test.mjs tracker-fetch.test.mjs tracker-service.test.mjs tracker-settings.test.mjs"
+    "test": "node --test core.test.mjs service.test.mjs sqlite-store.test.mjs client.test.mjs filters.test.mjs refresh-race.test.mjs slash-guard.test.mjs tracker-api.test.mjs tracker-fetch.test.mjs tracker-service.test.mjs tracker-tools.test.mjs tracker-settings.test.mjs"
   },
   "dsh": {
     "bundle": {

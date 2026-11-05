@@ -13,12 +13,17 @@ function fixture() {
       return { ok: true, revision: state.revision };
     },
   };
-  const registry = new Map([['ws', { id: 'ws', createdAt: 'one' }], ['ws2', { id: 'ws2', createdAt: 'two' }]]);
+  const registry = new Map([['ws', { id: 'ws', createdAt: 'one', sessionIds: ['session-1'] }], ['ws2', { id: 'ws2', createdAt: 'two', sessionIds: ['session-2'] }]]);
+  registry.archivedSessionIds = [];
   const tracker = {
     identity: 'identity-A',
     async listBoards() { return { boards: [{ id: '1', name: 'First' }, { id: '2', name: 'Second' }], complete: true, reason: null }; },
     async getBoardOverview(id, options) { return { board: { id, name: 'First' }, columns: [], issues: [], issuesComplete: false, issuesReason: 'explicit_keys_only', keys: options.issueKeys, searchByBoard: options.searchByBoard }; },
-    async openSession() { return { identity: this.identity, listBoards: (...args) => this.listBoards(...args), getBoardOverview: (...args) => this.getBoardOverview(...args) }; },
+    async getIssue(key) { return { key, summary: 'Example', description: 'Description', status: { id: '1', key: 'open', display: 'Open' }, assigneeKnown: true, assignee: null, boards: [{ id: '1' }, { id: '99' }], version: 1 }; },
+    async listTransitions() { return [{ id: 'start', display: 'Start', to: { id: '2', key: 'progress', display: 'In progress' } }]; },
+    async addComment() { return { id: '123' }; },
+    async executeTransition() { return {}; },
+    async openSession() { return { identity: this.identity, listBoards: (...args) => this.listBoards(...args), getBoardOverview: (...args) => this.getBoardOverview(...args), getIssue: (...args) => this.getIssue(...args), listTransitions: (...args) => this.listTransitions(...args), addComment: (...args) => this.addComment(...args), executeTransition: (...args) => this.executeTransition(...args) }; },
   };
   return { settings, registry, tracker, service: createTrackerService({ settings, tracker, workspaceRegistry: registry }) };
 }
@@ -28,6 +33,98 @@ const config = (svc, rev = 0) => svc.command({ op: 'configuration.configure', ex
 const select = (svc, rev = 1, boardIds = ['1'], workspaceId = 'ws') => svc.command({ op: 'workspace.select', expectedRevision: rev, workspaceId, boardIds });
 const boardRead = (svc, workspaceId = 'ws', boardId = '1', issueKeys = []) => svc.command({ op: 'board.read', workspaceId, boardId, issueKeys });
 const rejected = (promise, code) => assert.rejects(promise, e => e.code === code);
+
+const scopeFor = (f, options = {}) => f.service.toolScope({ workspaceId: 'ws', sessionId: 'session-1', signal: undefined, ...options });
+const prepareScope = async () => {
+  const f = fixture(); await config(f.service); await f.service.command({ op: 'boards.list' }); await select(f.service);
+  return f;
+};
+const target = { id: '2', key: 'progress', display: 'In progress' };
+const transitionInput = { issueKey: 'ABC-1', transitionId: 'start', expectedTo: target };
+
+test('tool scope checks session, selected boards and in-memory activation', async () => {
+  const f = await prepareScope();
+  const scope = scopeFor(f);
+  assert.equal(Object.isFrozen(scope), true);
+  assert.deepEqual(await scope.selectedBoards(), ['1']);
+  assert.deepEqual((await scope.boardRead({ boardId: '1', issueKeys: [] })).board, { id: '1', name: 'First' });
+  await rejected(scope.boardRead({ boardId: '2', issueKeys: [] }), 'board_not_selected');
+  assert.throws(() => scopeFor(f, { sessionId: 'session-2' }), e => e.code === 'session_not_in_workspace');
+  assert.throws(() => scopeFor(f, { workspaceId: 'ws2' }), e => e.code === 'board_not_selected');
+  f.registry.archivedSessionIds.push('session-1');
+  await rejected(scope.selectedBoards(), 'session_not_in_workspace');
+  assert.throws(() => scopeFor(f), e => e.code === 'session_not_in_workspace');
+  f.registry.archivedSessionIds = [];
+  const restarted = createTrackerService({ settings: f.settings, tracker: f.tracker, workspaceRegistry: f.registry });
+  assert.throws(() => restarted.toolScope({ workspaceId: 'ws', sessionId: 'session-1', signal: undefined }), e => e.code === 'needs_reselect');
+});
+
+test('tool issue membership is positive and response is strictly projected', async () => {
+  const f = await prepareScope(), scope = scopeFor(f);
+  const value = await scope.getIssue({ issueKey: 'ABC-1' });
+  assert.deepEqual(value, { key: 'ABC-1', summary: 'Example', description: 'Description', status: { id: '1', key: 'open', display: 'Open' }, assigneeKnown: true, assignee: null, version: 1 });
+  assert.doesNotMatch(JSON.stringify(value), /99|identity|boards/);
+  for (const boards of [undefined, [], [{ id: '99' }], [{ id: '1' }, {}]]) {
+    f.tracker.getIssue = async key => ({ key, boards });
+    await rejected(scope.getIssue({ issueKey: 'ABC-1' }), 'issue_not_in_selected_boards');
+  }
+  await rejected(scope.getIssue({ issueKey: 'ABC-1', url: 'http://evil' }), 'invalid');
+  await rejected(scope.getIssue({ issueKey: 'abc-1' }), 'invalid');
+});
+
+test('tool scope revokes on revision, binding, identity and session changes', async () => {
+  for (const change of ['revision', 'identity', 'archived', 'removed', 'incarnation', 'reselect']) {
+    const f = await prepareScope(), scope = scopeFor(f);
+    let release, started;
+    const ready = new Promise(resolve => { started = resolve; });
+    f.tracker.getIssue = key => new Promise(resolve => { release = () => resolve({ key, summary: 'private', description: null, status: { id: '1', key: 'open', display: 'Open' }, assigneeKnown: false, assignee: null, boards: [{ id: '1' }], version: 1 }); started(); });
+    const pending = scope.getIssue({ issueKey: 'ABC-1' }); await ready;
+    if (change === 'revision') { const s = f.settings.read(); f.settings.compareAndSet(s.revision, s.settings); }
+    if (change === 'identity') f.tracker.identity = 'identity-B';
+    if (change === 'archived') f.registry.archivedSessionIds.push('session-1');
+    if (change === 'removed') f.registry.get('ws').sessionIds = [];
+    if (change === 'incarnation') f.registry.get('ws').createdAt = 'new';
+    if (change === 'reselect') { await f.service.command({ op: 'boards.list' }); await select(f.service, 2); }
+    release(); await assert.rejects(pending, e => ['needs_reselect', 'session_not_in_workspace'].includes(e.code), change);
+  }
+});
+
+test('writes revalidate membership and transition destination after approval', async () => {
+  const f = await prepareScope(), scope = scopeFor(f); let writes = 0;
+  f.tracker.addComment = async () => { writes++; return { id: '123' }; };
+  f.tracker.executeTransition = async () => { writes++; return {}; };
+  assert.deepEqual(await scope.listTransitions({ issueKey: 'ABC-1' }), [{ id: 'start', display: 'Start', to: target }]);
+  f.tracker.getIssue = async key => ({ key, boards: [{ id: '99' }] });
+  await rejected(scope.addComment({ issueKey: 'ABC-1', text: 'hello' }), 'issue_not_in_selected_boards');
+  assert.equal(writes, 0);
+  f.tracker.getIssue = async key => ({ key, summary: 'Example', description: null, status: { id: '1', key: 'open', display: 'Open' }, assigneeKnown: true, assignee: null, boards: [{ id: '1' }], version: 1 });
+  f.tracker.listTransitions = async () => [{ id: 'start', display: 'Start', to: { ...target, display: 'Changed' } }];
+  await rejected(scope.executeTransition(transitionInput), 'transition_not_available');
+  assert.equal(writes, 0);
+  f.tracker.listTransitions = async () => [{ id: 'start', display: 'Start', to: target }];
+  assert.deepEqual(await scope.executeTransition(transitionInput), { ok: true });
+  assert.deepEqual(await scope.addComment({ issueKey: 'ABC-1', text: 'hello' }), { id: '123' });
+  assert.equal(writes, 2);
+  await rejected(scope.addComment({ issueKey: 'ABC-1', text: '' }), 'invalid');
+  await rejected(scope.executeTransition({ ...transitionInput, transitionId: '../bad' }), 'invalid');
+});
+
+test('write unknown outcomes and known errors are sanitized, never retried', async () => {
+  for (const kind of ['identity', 'abort', 'network', 'known']) {
+    const f = await prepareScope(), controller = new AbortController(), scope = scopeFor(f, { signal: controller.signal }); let writes = 0;
+    f.tracker.addComment = async () => {
+      writes++;
+      if (kind === 'identity') { f.tracker.identity = 'identity-B'; return { id: '123' }; }
+      if (kind === 'abort') { controller.abort(); return new Promise(() => {}); }
+      throw Object.assign(new Error('SECRET http://private'), { name: 'TrackerError', code: kind === 'known' ? 'forbidden' : 'network_error' });
+    };
+    await assert.rejects(scope.addComment({ issueKey: 'ABC-1', text: 'hi' }), e => {
+      assert.equal(e.code, kind === 'known' ? 'forbidden' : 'outcome_unknown');
+      assert.doesNotMatch(String(e), /SECRET|private|identity/); return true;
+    });
+    assert.equal(writes, 1);
+  }
+});
 
 test('configuration and selected board lifecycle uses fixed references and CAS', async () => {
   const f = fixture();

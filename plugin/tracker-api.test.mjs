@@ -279,6 +279,139 @@ test('sessions reject credential resolution errors, timeout and cancellation saf
   t.mock.timers.tick(10_000); await checked;
 });
 
+test('issue and transitions use fixed paths and minimal bounded projections', async () => {
+  const full = { ...makeIssue('TEST-1', [{ id: 42, self: 'https://evil.invalid' }, { id: '2', name: 'private' }]),
+    description: 'First line\n\tSecond line', version: 7, assignee: { id: 'u', display: 'User', email: 'secret@example.invalid' },
+    self: 'https://evil.invalid', private: 'do not expose' };
+  const { client, calls } = harness([json(full), json([{ id: 'approve_1', display: 'Approve', to: { id: '2', key: 'done', display: 'Done', self: 'https://evil.invalid' }, private: 'secret' }])]);
+  const session = await client.openSession();
+  assert.deepEqual(await session.getIssue('TEST-1'), { key: 'TEST-1', summary: 'Synthetic issue', description: 'First line\n\tSecond line',
+    status: { id: '1', key: 'open', display: 'Open' }, assigneeKnown: true, assignee: { id: 'u', display: 'User' }, boards: [{ id: '42' }, { id: '2' }], version: 7 });
+  assert.deepEqual(await session.listTransitions('TEST-1'), [{ id: 'approve_1', display: 'Approve', to: { id: '2', key: 'done', display: 'Done' } }]);
+  assert.equal(calls[0].url, 'https://api.tracker.yandex.net/v3/issues/TEST-1?fields=key%2Csummary%2Cdescription%2Cstatus%2Cassignee%2Cboards%2Cversion');
+  assert.equal(calls[1].url, 'https://api.tracker.yandex.net/v3/issues/TEST-1/transitions');
+  for (const { init } of calls) { assert.equal(init.method, 'GET'); assert.equal(init.redirect, 'error'); assert.equal(init.body, undefined); }
+});
+
+test('issue projection fails closed on malformed data and preserves unknown assignee', async () => {
+  const issue = { ...makeIssue('TEST-1', [{ id: 42 }]), description: '', version: 0 };
+  for (const patch of [{ key: 'OTHER-1' }, { boards: undefined }, { boards: [{ id: '4/2' }] }, { boards: Array(501).fill({ id: 1 }) },
+    { description: 'x'.repeat(48 * 1024 + 1) }, { description: 'bad\u0000text' }, { description: 42 },
+    { version: -1 }, { version: '1' }, { status: {} }]) {
+    const session = await harness([json({ ...issue, ...patch })]).client.openSession();
+    await rejects(session.getIssue('TEST-1'), 'invalid_response');
+  }
+  const result = await (await harness([json({ ...issue, description: 'x'.repeat(48 * 1024), assignee: { id: 'x' } })]).client.openSession()).getIssue('TEST-1');
+  assert.equal(result.description.length, 48 * 1024);
+  assert.equal(result.assigneeKnown, false); assert.equal(result.assignee, null);
+});
+
+test('documented Tracker response shapes are accepted without leaking extra fields', async () => {
+  const issue = { ...makeIssue('TEST-1', [{ id: 42 }]), version: 1 };
+  const { client, calls } = harness([json(issue), json({ ...issue, description: null }),
+    json([{ id: 'approve', to: { id: '2', key: 'done', display: 'Done', self: 'secret' } }]),
+    json({ id: 626, text: 'private' }, 201), json([{ key: 'TEST-1', secret: 'private' }]), json([])]);
+  const session = await client.openSession();
+  assert.equal((await session.getIssue('TEST-1')).description, '');
+  assert.equal((await session.getIssue('TEST-1')).description, '');
+  assert.deepEqual(await session.listTransitions('TEST-1'), [{ id: 'approve', display: 'Done', to: { id: '2', key: 'done', display: 'Done' } }]);
+  assert.deepEqual(await session.addComment('TEST-1', 'text'), { id: '626' });
+  assert.deepEqual(await session.executeTransition('TEST-1', 'approve'), {});
+  assert.deepEqual(await session.executeTransition('TEST-1', 'approve'), {});
+  assert.equal(calls.length, 6);
+  for (const id of [-1, 1.5, 9007199254740992]) {
+    const h = harness([json({ id }, 201)]);
+    await rejects((await h.client.openSession()).addComment('TEST-1', 'text'), 'outcome_unknown');
+    assert.equal(h.calls.length, 1);
+  }
+});
+
+test('transition projection rejects unsafe ids, malformed fields and excess results', async () => {
+  for (const value of [[{ id: '../secret', display: 'Name', to: { id: '1', key: 'x', display: 'X' } }],
+    [{ id: 'x', display: 'bad\nname', to: { id: '1', key: 'x', display: 'X' } }], [{ id: 'x', display: 'Name', to: {} }],
+    Array(2).fill({ id: 'x', display: 'Name', to: { id: '1', key: 'x', display: 'X' } }), Array(501).fill({}), {}]) {
+    await rejects((await harness([json(value)]).client.openSession()).listTransitions('TEST-1'), 'invalid_response');
+  }
+});
+
+test('writes use fixed endpoints, exact bodies, statuses and sanitized receipts', async () => {
+  const { client, calls } = harness([json({ id: 'comment-1', text: 'private', self: 'https://evil.invalid' }, 201), json({ key: 'TEST-1', secret: 'private' })]);
+  const session = await client.openSession();
+  assert.deepEqual(await session.addComment('TEST-1', 'hello\nworld'), { id: 'comment-1' });
+  assert.deepEqual(await session.executeTransition('TEST-1', 'approve_1'), {});
+  assert.equal(calls[0].url, 'https://api.tracker.yandex.net/v3/issues/TEST-1/comments?isAddToFollowers=false');
+  assert.equal(calls[1].url, 'https://api.tracker.yandex.net/v3/issues/TEST-1/transitions/approve_1/_execute');
+  assert.deepEqual(calls.map(c => JSON.parse(c.init.body)), [{ text: 'hello\nworld' }, {}]);
+  for (const { init } of calls) { assert.equal(init.method, 'POST'); assert.equal(init.redirect, 'error'); assert.equal(init.headers['Content-Type'], 'application/json'); }
+});
+
+test('invalid task keys, transition ids, comments and signals never reach network', async () => {
+  const { client, calls } = harness([]); const session = await client.openSession();
+  for (const key of ['', 'test-1', 'TEST-0', 'TEST-1/other', 'TEST-1?x=1', 'TEST-1\n', 'A'.repeat(33) + '-1']) {
+    await rejects(session.getIssue(key), 'invalid_input'); await rejects(session.listTransitions(key), 'invalid_input');
+    await rejects(session.addComment(key, 'text'), 'invalid_input'); await rejects(session.executeTransition(key, 'ok'), 'invalid_input');
+  }
+  for (const id of ['', '../x', 'a/b', 'a?b', 'https://evil.invalid', 'x'.repeat(129), 3]) await rejects(session.executeTransition('TEST-1', id), 'invalid_input');
+  for (const text of ['', '  ', 'x'.repeat(48 * 1024 + 1), 'bad\u0000text', null]) await rejects(session.addComment('TEST-1', text), 'invalid_input');
+  await rejects(session.addComment('TEST-1', 'text', { signal: {} }), 'invalid_input');
+  assert.equal(calls.length, 0);
+});
+
+test('write HTTP errors distinguish explicit rejections and uncertain outcomes', async () => {
+  for (const [status, code] of [[401, 'unauthorized'], [403, 'forbidden'], [404, 'not_found'], [409, 'conflict'], [412, 'precondition_failed'], [422, 'unprocessable'], [429, 'rate_limited'], [400, 'outcome_unknown'], [302, 'outcome_unknown'], [500, 'outcome_unknown']]) {
+    for (const method of ['addComment', 'executeTransition']) {
+      const { client, calls } = harness([new Response('secret', { status })]); const session = await client.openSession();
+      await rejects(session[method]('TEST-1', method === 'addComment' ? 'text' : 'ok'), code);
+      assert.equal(calls.length, 1);
+    }
+  }
+  for (const response of [json({ id: 'ok' }, 200), json({ secret: 'bad' }, 201), json({ id: '../secret' }, 201), new Response('not json', { status: 201 }), json([], 201)]) {
+    const { client, calls } = harness([response]);
+    await rejects((await client.openSession()).addComment('TEST-1', 'text'), 'outcome_unknown'); assert.equal(calls.length, 1);
+  }
+  for (const response of [json({}, 201), json(Array(501).fill({}), 200), json(null), new Response('not json')]) {
+    const { client, calls } = harness([response]);
+    await rejects((await client.openSession()).executeTransition('TEST-1', 'ok'), 'outcome_unknown'); assert.equal(calls.length, 1);
+  }
+});
+
+test('task session snapshots credentials and never resolves a profile or reads the network implicitly', async () => {
+  const mutable = { ...credentials }; let resolutions = 0;
+  const calls = [];
+  const client = createTrackerClient({ getCredentials: () => { resolutions++; return mutable; }, fetch: async (url, init) => {
+    calls.push({ url, init }); return json({ id: 'ok' }, 201);
+  } });
+  const session = await client.openSession(); mutable.token = 'rotated-token';
+  assert.equal(calls.length, 0); assert.equal(resolutions, 1);
+  await session.addComment('TEST-1', 'text');
+  assert.equal(calls[0].init.headers.Authorization, 'OAuth synthetic-token'); assert.equal(resolutions, 1);
+});
+
+test('write cancellation before send is cancelled; transport, abort and timeout after send are unknown without retry', async t => {
+  const ac = new AbortController(); ac.abort();
+  const { client, calls } = harness([() => { throw new Error('synthetic-token'); }, () => new Promise(() => {}), () => new Promise(() => {})]);
+  const session = await client.openSession();
+  await rejects(session.addComment('TEST-1', 'text', { signal: ac.signal }), 'cancelled'); assert.equal(calls.length, 0);
+  await rejects(session.addComment('TEST-1', 'text'), 'outcome_unknown'); assert.equal(calls.length, 1);
+  const active = new AbortController(); const pending = session.executeTransition('TEST-1', 'ok', { signal: active.signal });
+  active.abort(); await rejects(pending, 'outcome_unknown'); assert.equal(calls.length, 2);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const timeout = session.addComment('TEST-1', 'text'); const checked = rejects(timeout, 'outcome_unknown');
+  t.mock.timers.tick(10_000); await checked; assert.equal(calls.length, 3);
+});
+
+test('write stream failure and hanging body are outcome unknown with no retry', async t => {
+  const broken = new ReadableStream({ pull() { throw new Error('synthetic-token'); } });
+  const stalled = new ReadableStream({ pull() {} });
+  const { client, calls } = harness([new Response(broken, { status: 201 }), new Response(stalled, { status: 201 })]);
+  const session = await client.openSession();
+  await rejects(session.addComment('TEST-1', 'text'), 'outcome_unknown');
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const pending = session.addComment('TEST-1', 'text'); const checked = rejects(pending, 'outcome_unknown');
+  await new Promise(resolve => setImmediate(resolve)); t.mock.timers.tick(10_000);
+  await checked; assert.equal(calls.length, 2);
+});
+
 test('response arriving after abort still has its body cancelled', async () => {
   let finish, cancelled = false;
   const client = createTrackerClient({ getCredentials: () => credentials, fetch: () => new Promise(resolve => { finish = resolve; }) });
