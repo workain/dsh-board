@@ -9,6 +9,8 @@ window.__ModuleLoader__.load({
     const en = {
       issueMissingId: 'Issue details are unavailable because its immutable ID is missing.', issueDetails: 'Issue details', issueSaveFields: 'Save fields', issueChangeStatus: 'Change status', issueAddComment: 'Add comment', issueComments: 'Comments & activity', issueCommentsLoaded: 'Loaded comments:', issueCommentsComplete: 'Traversal complete; comments may have changed during loading.', issueCommentsPartial: 'More comments may be available.', issueCommentsTerminalPartial: 'Traversal stopped without a continuation cursor; more comments may exist.', issueCommentsLoading: 'Loading comments…', issueCommentsError: 'Comments could not be loaded. Previously loaded comments are retained.', issueCommentsInvalid: 'Comment pagination was invalid; reload the issue to start again.', issueCommentsLimit: 'Loading stopped at the comment or size limit.', issueCommentsMore: 'Load more', issueNewComment: 'New comment', issueAssigneeId: 'Assignee ID (empty to unassign)', issueTransitions: 'Available transitions', issueNoTransition: 'Choose a transition', issueTransitionsUnavailable: 'No status transitions are available or permitted.', issueConfirmTransition: 'Apply this status transition? The status check is best-effort; the remote API has no atomic precondition.', issueSessionsPending: 'Tracker session linking is not available yet.', issueUnknown: 'The operation outcome is unknown. Do not retry until you independently check Tracker; it may still commit.', issueConflict: 'The issue changed or this transition is no longer available. Reload and review your draft.', issueRejected: 'The operation was rejected. Review the values.', issueSaved: 'Operation saved.', issueReload: 'Reload issue', issueDiscardConflict: 'Discard field draft and reload', issueReview: 'I checked Tracker and accept the uncertainty', issueUnavailable: 'Issue details are hidden until access is revalidated.', issueInvalid: 'Enter valid, nonempty values within the limits.', issueVersionUnavailable: 'Editing fields is unavailable because the issue version is unknown.', issueSessionPartial: 'Session links are incomplete; unavailable links may be omitted.', issueLinkSave: 'Save session link', issueChooseSession: 'Choose a workspace session', issueLinkAction: 'Link session', issueUnlinkAction: 'Unlink session', issueLinkUnavailable: 'Session links could not be loaded.',
       issueSeparateOperations: 'Fields, status, comments and session links are saved separately; changes are not atomic.', issueKeepDraft: 'Cancel editing (draft retained)',
+      sessionSendChoose: 'Choose linked sessions for this text', sessionSendAction: 'Send to selected sessions', sessionSendConfirm: 'Queue this text as a user message in the selected sessions? This can start or resume their agents and does not add a Tracker comment.', sessionSendAccepted: 'Accepted into queue', sessionSendNotSent: 'Not sent', sessionSendUnknown: 'Outcome unknown — inspect this session before retrying.', sessionSendInflight: 'Sending or awaiting result', sessionSendReview: 'I inspected this session; allow retry', sessionSendReviewConfirm: 'Did you inspect this session and accept that the previous message may still arrive? Allowing a retry can create a duplicate.', sessionSendWarning: 'Sending queues agent work and can start or resume agents; acceptance does not mean completion. Sending is a separate action and does not add a Tracker comment. Delivery history is only kept in this page’s memory: reloads and other tabs cannot prevent duplicates.', sessionSendSaved: 'Tracker comment saved. The text remains here; press Send to selected sessions separately.', sessionSendUnavailable: 'Session message sending is unavailable.',
+      issueAddSession: 'Add session', issueCancelAddSession: 'Cancel adding a session', issueUnlinkSession: 'Unlink session', issueConfirmUnlinkSession: 'Unlink this session from the issue?',
       issueEditComment: 'Edit comment', issueSaveCommentEdit: 'Save comment edit', issueEditCommentText: 'Comment text', issueDiscardCommentConflict: 'Discard edited comment and reload', issueCommentVersionUnavailable: 'Editing is unavailable because the comment version is unknown.', issueCommentRaceWarning: 'The version check before the remote request is best-effort, not atomic. This edit can overwrite a concurrent change.', issueEditedCommentMissing: 'The comment being edited is not in this partial result; the draft is retained.',
       sessionCardOpen: 'Open linked tasks', sessionCardTitle: 'Linked tasks', sessionCardBoard: 'Open full board to edit', sessionCardReadOnly: 'This view is read-only. Open the full board to edit. Access changes may not appear immediately.', sessionCardLocalHistory: 'Local links are historical and do not record workspace incarnation; verify them on the full board.', sessionCardNoLocal: 'No linked local tasks found.', trackerLocal: 'Local tasks', sessionCardPartial: 'Linked issues are a partial result; other links may exist.', sessionCardScanError: 'Some boards could not be checked.', sessionCardNoLinks: 'No linked issues found.', sessionCardNoLinksPartial: 'No linked issues found in this partial result.', sessionCardCurrentSession: 'Open current session', trackerNoBoardsSelected: 'No Tracker boards are selected.', sessionCardChoose: 'Choose a linked issue', sessionCardSelect: 'Select an issue',
       trackerReviewDraft: 'I reviewed the refreshed board list and my selection.', trackerUpdatedAt: 'Last successful partial update:',
@@ -42,6 +44,8 @@ window.__ModuleLoader__.load({
     const ru = {
       issueMissingId: 'Карточка недоступна: отсутствует неизменяемый ID задачи.', issueDetails: 'Карточка задачи', issueSaveFields: 'Сохранить поля', issueChangeStatus: 'Изменить статус', issueAddComment: 'Добавить комментарий', issueComments: 'Комментарии и активность', issueCommentsLoaded: 'Загружено комментариев:', issueCommentsComplete: 'Обход завершён; за время загрузки комментарии могли измениться.', issueCommentsPartial: 'Могут быть доступны другие комментарии.', issueCommentsTerminalPartial: 'Обход остановлен без курсора продолжения; могут существовать другие комментарии.', issueCommentsLoading: 'Загрузка комментариев…', issueCommentsError: 'Не удалось загрузить комментарии. Ранее загруженные комментарии сохранены.', issueCommentsInvalid: 'Некорректная пагинация комментариев; обновите задачу, чтобы начать заново.', issueCommentsLimit: 'Достигнут предел количества или размера комментариев.', issueCommentsMore: 'Загрузить ещё', issueNewComment: 'Новый комментарий', issueAssigneeId: 'ID исполнителя (пусто — снять назначение)', issueTransitions: 'Доступные переходы', issueNoTransition: 'Выберите переход', issueTransitionsUnavailable: 'Нет доступных или разрешённых переходов статуса.', issueConfirmTransition: 'Выполнить этот переход статуса? Проверка выполняется по возможности: удалённый API не поддерживает атомарное предусловие.', issueSessionsPending: 'Связывание сессий с задачами Трекера пока недоступно.', issueUnknown: 'Результат операции неизвестен. Не повторяйте её до самостоятельной проверки в Трекере: она ещё может выполниться.', issueConflict: 'Задача изменилась или переход больше недоступен. Обновите данные и проверьте черновик.', issueRejected: 'Операция отклонена. Проверьте значения.', issueSaved: 'Операция сохранена.', issueReload: 'Обновить задачу', issueDiscardConflict: 'Отменить черновик полей и обновить', issueReview: 'Я проверил Трекер и принимаю неопределённость', issueUnavailable: 'Данные задачи скрыты до повторной проверки доступа.', issueInvalid: 'Введите допустимые непустые значения в пределах ограничений.', issueVersionUnavailable: 'Изменение полей недоступно: версия задачи неизвестна.', issueSessionPartial: 'Список связей неполный; недоступные связи могут отсутствовать.', issueLinkSave: 'Сохранить связь с сессией', issueChooseSession: 'Выберите сессию рабочего пространства', issueLinkAction: 'Связать сессию', issueUnlinkAction: 'Отвязать сессию', issueLinkUnavailable: 'Не удалось загрузить связи сессий.',
       issueSeparateOperations: 'Поля, статус, комментарии и связи с сессиями сохраняются отдельно; изменения не атомарны.', issueKeepDraft: 'Закрыть редактирование (черновик сохранён)',
+      sessionSendChoose: 'Выберите связанные сессии для этого текста', sessionSendAction: 'Отправить в выбранные сессии', sessionSendConfirm: 'Поставить этот текст в очередь как сообщение пользователя в выбранных сессиях? Это может запустить или продолжить работу их агентов и не добавляет комментарий в Трекер.', sessionSendAccepted: 'Принято в очередь', sessionSendNotSent: 'Не отправлено', sessionSendUnknown: 'Результат неизвестен — проверьте эту сессию перед повторной отправкой.', sessionSendInflight: 'Отправляется или ожидается результат', sessionSendReview: 'Я проверил эту сессию; разрешить повтор', sessionSendReviewConfirm: 'Вы проверили эту сессию и принимаете, что предыдущее сообщение ещё может поступить? Повтор может создать дубликат.', sessionSendWarning: 'Отправка ставит работу агента в очередь и может запустить или продолжить его работу; принятие в очередь не означает выполнения. Это отдельное действие, оно не добавляет комментарий в Трекер. История отправки хранится только в памяти этой страницы: после обновления и в других вкладках защита от дублей не действует.', sessionSendSaved: 'Комментарий в Трекере сохранён. Текст оставлен здесь; отдельно нажмите «Отправить в выбранные сессии».', sessionSendUnavailable: 'Отправка сообщений в сессии недоступна.',
+      issueAddSession: 'Добавить сессию', issueCancelAddSession: 'Отмена добавления сессии', issueUnlinkSession: 'Отвязать сессию', issueConfirmUnlinkSession: 'Отвязать эту сессию от задачи?',
       issueEditComment: 'Изменить комментарий', issueSaveCommentEdit: 'Сохранить изменение комментария', issueEditCommentText: 'Текст комментария', issueDiscardCommentConflict: 'Отменить изменение комментария и обновить', issueCommentVersionUnavailable: 'Редактирование недоступно: версия комментария неизвестна.', issueCommentRaceWarning: 'Проверка версии перед удалённым запросом выполняется по возможности и не атомарна. Изменение может перезаписать параллельную правку.', issueEditedCommentMissing: 'Редактируемый комментарий отсутствует в частичном списке; черновик сохранён.',
       sessionCardOpen: 'Открыть связанные задачи', sessionCardTitle: 'Связанные задачи', sessionCardBoard: 'Открыть доску для редактирования', sessionCardReadOnly: 'Просмотр без редактирования. Для изменений откройте доску. Изменения доступа могут появляться не сразу.', sessionCardLocalHistory: 'Локальные связи не хранят версию рабочего пространства; проверьте их на доске.', sessionCardNoLocal: 'Связанные локальные задачи не найдены.', trackerLocal: 'Локальные задачи', sessionCardPartial: 'Список связанных задач может быть неполным.', sessionCardScanError: 'Некоторые доски не удалось проверить.', sessionCardNoLinks: 'Связанные задачи не найдены.', sessionCardNoLinksPartial: 'В частичном списке связанные задачи не найдены.', sessionCardCurrentSession: 'Открыть текущую сессию', trackerNoBoardsSelected: 'Доски Трекера не выбраны.', sessionCardChoose: 'Выберите связанную задачу', sessionCardSelect: 'Выберите задачу',
       trackerReviewDraft: 'Я проверил обновлённый список досок и свой выбор.', trackerUpdatedAt: 'Последнее успешное частичное обновление:',
@@ -147,13 +151,17 @@ window.__ModuleLoader__.load({
       if (memory.loading) updateMemory({ loading: false });
     }
     const unknownIssues = new Set();
+    // Exact message text stays only in this page's memory. This is not cross-tab
+    // or reload durable; accepted and uncertain receipts fence duplicate sends.
+    const sessionSendLedger = new Map();
     const issueUnknownKey = (issue) => JSON.stringify([issue.workspaceId, issue.incarnation, issue.key, issue.issueId]);
+    const sessionSendKey = (issue, id, text) => JSON.stringify([issue.workspaceId, issue.incarnation, issue.key, issue.issueId, id, text]);
     // A reselect may bind the same workspace and issue IDs to a different Tracker principal.
     // Drop all issue content, but retain the global uncertainty guard for in-flight writes.
     function discardTrackerIssue(workspaceId) {
       const issue = memory.issue;
       if (!issue || (workspaceId && issue.workspaceId !== workspaceId)) return;
-      if ((issue.pending && !issue.preflight) || issue.unknown) unknownIssues.add(issueUnknownKey(issue));
+      if ((issue.pending && !issue.preflight && !issue.sendOwner) || issue.unknown) unknownIssues.add(issueUnknownKey(issue));
       updateMemory({ issue: null });
     }
     function discardReselectedIssue(settings) {
@@ -165,7 +173,7 @@ window.__ModuleLoader__.load({
       const draftWorkspace = current.pickerWorkspace || current.draftWorkspace;
       const draftPicked = current.pickerWorkspace ? [...current.picked] : current.draftPicked;
       const next = emptyTracker(current.generation + 1, preserveOpen && current.open);
-      if (memory.issue) { const writing = memory.issue.pending && !memory.issue.preflight; if (writing) unknownIssues.add(issueUnknownKey(memory.issue)); memory.issue = { ...memory.issue, available: false, loading: false, unknown: memory.issue.unknown || writing, error: writing ? 'issueUnknown' : memory.issue.error, generation: memory.issue.generation + 1 }; }
+      if (memory.issue) { const writing = memory.issue.pending && !memory.issue.preflight && !memory.issue.sendOwner; if (writing) unknownIssues.add(issueUnknownKey(memory.issue)); memory.issue = { ...memory.issue, available: false, loading: false, unknown: memory.issue.unknown || writing, error: writing ? 'issueUnknown' : memory.issue.error, generation: memory.issue.generation + 1 }; }
       if (trackerMutationPending) Object.assign(next, { busy: true, mutating: true, error: 'trackerUncertain' });
       if (preserveDraft && draftWorkspace) Object.assign(next, { draftWorkspace, draftPicked, draftIncarnation: current.draftIncarnation || current.incarnations[draftWorkspace], reviewRequired: true });
       updateMemory({ tracker: next });
@@ -174,7 +182,7 @@ window.__ModuleLoader__.load({
     let unloadArmed = false;
     function beforeUnload(event) { event.preventDefault(); event.returnValue = ''; }
     memory.listeners.add(() => {
-      const needed = memory.dirty || memory.pending || memory.uncertain || Boolean(memory.issue && (memory.issue.dirty || memory.issue.pending || memory.issue.unknown));
+      const needed = memory.dirty || memory.pending || memory.uncertain || Boolean(memory.issue && (memory.issue.dirty || memory.issue.pending || memory.issue.unknown)) || [...sessionSendLedger.values()].some(status => status === 'inflight' || status === 'unknown');
       if (needed && !unloadArmed) window.addEventListener('beforeunload', beforeUnload);
       if (!needed && unloadArmed) window.removeEventListener('beforeunload', beforeUnload);
       unloadArmed = needed;
@@ -289,7 +297,7 @@ window.__ModuleLoader__.load({
       return stop;
     }
     /* BEGIN GENERATED TRACKER HELPERS */
-const { parseTrackerMarkup, safeTrackerHref, groupTrackerStatuses, createSessionCard } = {
+const { parseTrackerMarkup, safeTrackerHref, groupTrackerStatuses, createSessionCard, createSessionSender } = {
   // tracker-markup.mjs sha256:57c60106a9c2fd8380725309c06fd09b018114bff7b7b884d5f7ae4468d76ea4
   ...(() => {
 // A deliberately small, pure, non-DOM parser for untrusted Tracker content.
@@ -898,6 +906,127 @@ function createSessionCard(React, deps) {
 
     return { createSessionCard };
   })(),
+  // session-send.mjs sha256:56832ff496730dbb2a989cd61ec6b1dc941fd6e165b0fc074718a067ae45eae5
+  ...(() => {
+// Enqueue only: the caller owns confirmation, link/authorization validation and UI.
+// Results and progress deliberately contain no prompt text or raw exceptions.
+const MAX_TARGETS = 20;
+const MAX_TEXT_BYTES = 48 * 1024;
+
+// These failures are raised during gateway validation or before admission. In
+// particular, do not treat session/agent-busy as definite: the host wraps
+// generic failures even when followup() may already have been called.
+const DEFINITE_REJECTIONS = new Set([
+  'gateway/bad-request',
+  'gateway/arguments-invalid',
+  'gateway/input-invalid',
+  'gateway/interactions-forbidden',
+  'session/not-found',
+  'session/migration-required',
+  'session/attachment-invalid',
+]);
+
+/**
+ * Build an isolated, serialized sender. validateSession(id) must resolve to
+ * true only while the selected session remains authorized and linked.
+ *
+ * send() returns { state, targets }, with state complete, stopped, or unknown,
+ * and targets in selection order as { id, status } (accepted, not-sent, or
+ * unknown). Progress receives independent copies of that same shape. An
+ * invalid argument rejects before acquiring or sending to any session.
+ */
+function createSessionSender({ sessions, validateSession }) {
+  if (typeof sessions?.using !== 'function' || typeof validateSession !== 'function') {
+    throw new TypeError('A sessions service and validateSession function are required');
+  }
+
+  let tail = Promise.resolve();
+
+  async function send(targetIds, text, { signal, onProgress } = {}) {
+    if (!Array.isArray(targetIds) || targetIds.length === 0 ||
+        targetIds.some(id => typeof id !== 'string' || id.length === 0)) {
+      throw new TypeError('Target IDs must be nonempty strings');
+    }
+    const ids = [...new Set(targetIds)];
+    if (ids.length !== targetIds.length) throw new TypeError('Duplicate target sessions');
+    if (ids.length > MAX_TARGETS) throw new RangeError('Too many target sessions');
+    if (typeof text !== 'string' || text.trim().length === 0 ||
+        new TextEncoder().encode(text).byteLength > MAX_TEXT_BYTES) {
+      throw new TypeError('Text must be nonempty and no larger than 48 KiB');
+    }
+    if (onProgress !== undefined && typeof onProgress !== 'function') {
+      throw new TypeError('onProgress must be a function');
+    }
+
+    // Each call takes its place immediately; its releases are independent of
+    // failures in earlier batches. No caller's queued batch can interleave.
+    const predecessor = tail;
+    let release;
+    tail = new Promise(resolve => { release = resolve; });
+    await predecessor;
+    try {
+      const targets = ids.map(id => ({ id, status: 'not-sent' }));
+      let state = 'stopped';
+      const report = () => {
+        if (!onProgress) return;
+        try { onProgress({ state, targets: targets.map(target => ({ ...target })) }); } catch { /* UI callbacks cannot affect delivery. */ }
+      };
+
+      for (const target of targets) {
+        if (signal?.aborted) break;
+        let dispatched = false;
+        let outcome = 'not-sent';
+        try {
+          if (await validateSession(target.id) !== true || signal?.aborted) break;
+          await sessions.using(target.id, { source: 'controllerOperation', signal }, async ref => {
+            await ref.ready;
+            const session = ref.binding.session;
+            const validSnapshot = () => {
+              const snapshot = session.getSnapshot();
+              return ref.sessionId === target.id && session.sessionId === target.id &&
+                snapshot?.sessionId === target.id && snapshot.openState === 'open' &&
+                !snapshot.removed && !snapshot.subagent;
+            };
+            if (signal?.aborted || !validSnapshot()) return;
+            if (await validateSession(target.id) !== true || signal?.aborted || !validSnapshot()) return;
+
+            let handle;
+            try {
+              handle = session.beginSubmission({ mode: 'queue', text, attachments: [] });
+              // A synchronous abort during echo creation must not reach prompt.
+              if (signal?.aborted) return;
+              dispatched = true;
+              const result = await session.prompt([{ type: 'text', text }], 'queue', signal, handle.requestId);
+              if (signal?.aborted) outcome = 'unknown';
+              else if (result?.ok === true && result.value?.accepted === true) outcome = 'accepted';
+              else if (result?.ok === false && DEFINITE_REJECTIONS.has(result.error?.code)) outcome = 'not-sent';
+              else outcome = 'unknown';
+            } finally {
+              if (handle && !dispatched) handle.abandon();
+            }
+          });
+        } catch {
+          // The prompt may have reached the host even when it threw or a
+          // reference release failed. Never retry an uncertain request.
+          if (dispatched && outcome !== 'accepted' && outcome !== 'not-sent') outcome = 'unknown';
+          else if (dispatched && outcome === 'not-sent') outcome = 'unknown';
+        }
+        target.status = outcome;
+        if (outcome === 'unknown') state = 'unknown';
+        else if (outcome === 'accepted' && targets.every(item => item.status === 'accepted')) state = 'complete';
+        report();
+        if (outcome !== 'accepted') break;
+      }
+      return { state, targets: targets.map(target => ({ ...target })) };
+    } finally {
+      release();
+    }
+  }
+  return { send };
+}
+
+    return { createSessionSender };
+  })(),
 };
 /* END GENERATED TRACKER HELPERS */
     // Tracker content is untrusted. Render only a fixed AST vocabulary as React
@@ -936,6 +1065,7 @@ function createSessionCard(React, deps) {
       .dsh-board-content{margin-top:30px}.dsh-board-section-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;flex-wrap:wrap}.dsh-board-section-head>div:first-child{min-width:0;max-width:100%}.dsh-board-section-title{display:flex;align-items:center;gap:11px;min-width:0}.dsh-board-section-title h2{font-size:19px;font-weight:670;letter-spacing:-.025em;overflow-wrap:anywhere}.dsh-board-summary{display:flex;align-items:center;gap:8px;margin-top:7px;color:var(--muted);font-size:12px}.dsh-board-summary-dot{width:3px;height:3px;border-radius:50%;background:currentColor}.dsh-board-actions{display:flex;gap:8px;flex-wrap:wrap}
       .dsh-board-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:20px 0 16px}.dsh-board-switch{display:flex;gap:2px;padding:3px;border:1px solid var(--line);border-radius:9px;background:var(--layer)}.dsh-board-switch button{min-height:30px;padding:6px 11px;border:0;background:transparent;color:var(--muted)}.dsh-board-switch button[aria-pressed=true]{color:var(--ink);background:var(--base);box-shadow:0 1px 4px #172b4d1a}.dsh-board-toolbar-spacer{flex:1}.dsh-board-search{width:220px}.dsh-board-filter{width:165px}.dsh-board-search,.dsh-board-filter{position:relative}.dsh-board-search svg,.dsh-board-filter svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none}.dsh-board .dsh-board-search input,.dsh-board .dsh-board-filter select{padding-left:33px;min-height:36px}
       .dsh-board-kanban{display:flex;gap:14px;max-width:100%;min-width:0;overflow-x:auto;align-items:stretch;padding:2px 1px 22px;scrollbar-width:thin}.dsh-board-column{flex:0 0 290px;min-width:0;min-height:245px;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--layer)}.dsh-board-column-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:14px}.dsh-board-column-label{display:flex;align-items:center;gap:8px;min-width:0}.dsh-board-column-dot{flex:none;width:8px;height:8px;border-radius:50%;background:var(--column-color,var(--accent))}.dsh-board-column-head h2{overflow-wrap:anywhere;font-size:12px;font-weight:700}.dsh-board-count{display:inline-grid;place-items:center;min-width:21px;height:21px;padding:0 5px;border-radius:6px;background:var(--base);color:var(--muted);font-size:11px;font-weight:650}.dsh-board-column-head button{min-height:27px;padding:4px 7px;border-color:transparent;background:transparent;color:var(--muted);font-size:11px}.dsh-board-column-empty{display:grid;place-items:center;min-height:92px;border:1px dashed var(--line);border-radius:9px;color:var(--muted);font-size:11px;text-align:center}
+      .dsh-board button.dsh-board-card-title{text-align:left}
       .dsh-board-card{display:grid;gap:11px;margin:0 0 9px;padding:14px;border:1px solid var(--line);border-radius:10px;background:var(--base);box-shadow:0 2px 6px #172b4d0a}.dsh-board-card h3{font-size:13px;font-weight:660;line-height:1.45;overflow-wrap:anywhere}.dsh-board-card-description{margin-top:6px!important;color:var(--muted);font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}.dsh-board-card-header,.dsh-board-card-actions{display:flex;align-items:center;justify-content:space-between;gap:8px}.dsh-board-card-id{color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.04em}.dsh-board-card-status{min-width:0;overflow-wrap:anywhere;border-radius:5px;padding:4px 7px;background:var(--layer);color:var(--muted);font-size:10px;font-weight:700}.dsh-board-card-actions{justify-content:flex-start;padding-top:9px;border-top:1px solid var(--line)}.dsh-board-card-actions button{min-height:28px;padding:5px 7px;border:0;background:transparent;color:var(--muted);font-size:11px}.dsh-board-card-sessions-label{color:var(--muted);font-size:10px;font-weight:650}.dsh-board-card-sessions-list{display:grid;gap:5px;margin:6px 0 0;padding:0;list-style:none}.dsh-board-card-session{min-width:0;overflow-wrap:anywhere}.dsh-board-card-session button{display:block;max-width:100%;min-height:0;padding:0;overflow-wrap:anywhere;border:0;background:transparent;text-align:left;color:var(--accent);font-size:11px;font-weight:550}.dsh-board-card-session-unavailable{color:var(--muted);font-size:11px}.dsh-board-card-session-link{white-space:nowrap;text-overflow:ellipsis;overflow:hidden}
       .dsh-board-muted{color:var(--muted);font-size:12px;line-height:1.5}.dsh-board-list{display:grid;gap:10px;max-width:860px}.dsh-board-list .dsh-board-card{margin:0}.dsh-board-form{display:grid;gap:15px;max-width:700px;margin:18px 0;padding:22px;border:1px solid var(--line);border-radius:12px;background:var(--base);box-shadow:0 8px 28px #172b4d0c}.dsh-board-form h2{min-width:0;overflow-wrap:anywhere;font-size:16px;letter-spacing:-.02em}.dsh-board-form label{display:grid;gap:7px}.dsh-board-form fieldset{display:grid;gap:5px;max-height:240px;margin:0;padding:10px;border:1px solid var(--line);border-radius:8px;overflow:auto}.dsh-board-form legend{color:var(--muted);font-size:11px}.dsh-board-form fieldset label{display:flex;align-items:center;gap:9px;padding:7px;color:var(--ink);font-size:12px;overflow-wrap:anywhere}.dsh-board-form input[type=checkbox]{accent-color:var(--accent)}
       .dsh-board-alert{padding:12px 14px;margin:12px 0;border:1px solid var(--dsw-alias-state-warn-primary,var(--line));border-radius:9px;font-size:12px;line-height:1.5}.dsh-board-empty{padding:22px 0;color:var(--muted);font-size:12px}.dsh-board-welcome{display:grid;justify-items:center;gap:9px;margin:30px 0;padding:64px 20px;border:1px dashed var(--line);border-radius:12px;text-align:center}.dsh-board-welcome-icon{display:grid;place-items:center;width:44px;height:44px;margin-bottom:6px;border-radius:12px;background:var(--layer);color:var(--accent)}.dsh-board-welcome h2{font-size:15px}.dsh-board-welcome p{max-width:380px;color:var(--muted);font-size:12px;line-height:1.6}
@@ -968,7 +1098,7 @@ function createSessionCard(React, deps) {
       };
       return h('svg', { className: 'dsh-board-icon', width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }, paths[name]);
     }
-    function Page({ t, transport, workspacesSource, sessionsSource, openSession, sessionContext, connectionSource, panelSource }) {
+    function Page({ t, transport, workspacesSource, sessionsSource, sessionService, openSession, sessionContext, connectionSource, panelSource }) {
       const connection = useSource(connectionSource);
       const workspaces = useSource(workspacesSource);
       const sessions = useSource(sessionsSource);
@@ -1173,7 +1303,7 @@ function createSessionCard(React, deps) {
           const current = memory.tracker;
           const draftWorkspace = current.pickerWorkspace || current.draftWorkspace;
           const draftPicked = current.pickerWorkspace ? [...current.picked] : current.draftPicked;
-          if (memory.issue) { const writing = memory.issue.pending && !memory.issue.preflight; if (writing) unknownIssues.add(issueUnknownKey(memory.issue)); memory.issue = { ...memory.issue, available: false, loading: false, unknown: memory.issue.unknown || writing, error: writing ? 'issueUnknown' : memory.issue.error, generation: memory.issue.generation + 1 }; }
+          if (memory.issue) { const writing = memory.issue.pending && !memory.issue.preflight && !memory.issue.sendOwner; if (writing) unknownIssues.add(issueUnknownKey(memory.issue)); memory.issue = { ...memory.issue, available: false, loading: false, unknown: memory.issue.unknown || writing, error: writing ? 'issueUnknown' : memory.issue.error, generation: memory.issue.generation + 1 }; }
           updateTracker({ settings: null, incarnations: {}, board: null, boardLinks: null, boardUpdatedAt: null, listing: null, pickerWorkspace: '', draftWorkspace, draftPicked, draftIncarnation: current.draftIncarnation || current.incarnations[draftWorkspace], reviewRequired: Boolean(draftWorkspace) });
         };
         const drain = async () => {
@@ -1245,7 +1375,7 @@ function createSessionCard(React, deps) {
       function suspendIssueForRefresh() {
         const issue = memory.issue;
         if (!issue) return;
-        const writing = issue.pending && !issue.preflight;
+        const writing = issue.pending && !issue.preflight && !issue.sendOwner;
         if (writing) unknownIssues.add(issueUnknownKey(issue));
         updateMemory({ issue: { ...issue, available: false, loading: false, generation: issue.generation + 1, unknown: issue.unknown || writing, error: writing ? 'issueUnknown' : issue.error } });
       }
@@ -1622,7 +1752,7 @@ function createSessionCard(React, deps) {
             else if ([401, 403, 404, 409, 412].includes(error?.status) || ['unauthorized', 'forbidden', 'not_found', 'issue_not_in_selected_boards', 'board_not_selected', 'conflict', 'credential_changed', 'credentials_unavailable', 'invalid_credentials', 'scope_expired'].includes(error?.code)) {
               // Revocation, changed identity, or lost membership is not a
               // recoverable page error: do not retain previously visible data.
-              const issue = memory.issue, writing = issue.pending && !issue.preflight;
+              const issue = memory.issue, writing = issue.pending && !issue.preflight && !issue.sendOwner;
               if (writing) unknownIssues.add(issueUnknownKey(issue));
               issuePatch({ generation: issue.generation + 1, available: false, comments: [], commentsBytes: 0, commentsCursor: null, commentsCursors: [], commentsState: 'error', commentsOwner: null, unknown: issue.unknown || writing, error: writing ? 'issueUnknown' : 'issueUnavailable' });
             } else issuePatch({ commentsState: error?.message === 'invalid response' ? 'invalid' : 'error', commentsOwner: null });
@@ -1719,7 +1849,7 @@ function createSessionCard(React, deps) {
         if (!/^[A-Z][A-Z0-9_]{0,31}-[1-9][0-9]{0,14}$/.test(issue.key) || typeof issue.id !== 'string' || !issue.id || memory.tracker.busy || !setForm(null)) return;
         const connectionId = connectionSource.getSnapshot()?.id, incarnation = memory.tracker.incarnations[workspaceId];
         if (connectionId === undefined || !currentWorkspace(workspaceId, incarnation) || !memory.tracker.settings || memory.tracker.settings.needsReselect.includes(workspaceId) || !memory.tracker.settings.workspaces[workspaceId]?.includes(boardId)) return;
-        const draft = { token: {}, generation: 0, workspaceId, boardId, key: issue.key, issueId: issue.id || '', connectionId, incarnation, settingsRevision: memory.tracker.settings.revision, draft: null, comment: '', editComment: null, transitionId: '', linkSessionId: '', linkAction: 'link', editingFields: false, dirty: false, pending: false, unknown: false, loading: false, available: false, error: '', notice: '' };
+        const draft = { token: {}, generation: 0, workspaceId, boardId, key: issue.key, issueId: issue.id || '', connectionId, incarnation, settingsRevision: memory.tracker.settings.revision, draft: null, comment: '', editComment: null, transitionId: '', linkSessionId: '', addingSession: false, sendTargets: [], sendResult: null, savedComment: null, editingFields: false, dirty: false, pending: false, unknown: false, loading: false, available: false, error: '', notice: '' };
         draft.unknown = unknownIssues.has(issueUnknownKey(draft));
         issueOrigin.current = document.activeElement;
         setSessionMenu(null);
@@ -1729,7 +1859,7 @@ function createSessionCard(React, deps) {
       function editIssue(key, value) {
         const current = memory.issue;
         if (!current || !issueScope(current) || !current.available || current.pending) return;
-        const next = key === 'comment' || key === 'transitionId' || key === 'linkSessionId' || key === 'linkAction' ? { [key]: value } : { draft: { ...current.draft, [key]: value }, ...(key === 'assignee' ? { assigneeEdited: true } : {}) };
+        const next = key === 'comment' || key === 'transitionId' || key === 'linkSessionId' ? { [key]: value } : { draft: { ...current.draft, [key]: value }, ...(key === 'assignee' ? { assigneeEdited: true } : {}) };
         issuePatch({ ...next, dirty: true, notice: '' });
       }
       const sameStatus = (a, b) => Boolean(a && b && a.id === b.id && a.key === b.key && a.display === b.display);
@@ -1742,7 +1872,7 @@ function createSessionCard(React, deps) {
           current.transitions.some(item => item.id === selection.id && item.display === selection.display && sameStatus(item.to, selection.to)));
       }
       const safeIssueText = (value, max, multiline = false, empty = false) => typeof value === 'string' && value.length <= max && (empty || Boolean(value.trim())) && !(multiline ? /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u : /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u).test(value);
-      async function saveIssue(kind) {
+      async function saveIssue(kind, unlink = null) {
         const issue = memory.issue;
         if (!issueScope(issue) || !issue.available || issue.pending || issueMutationPending || issue.unknown || issue.conflict || issue.loading) return;
         const base = { workspaceId: issue.workspaceId, boardId: issue.boardId, issueKey: issue.key, issueId: issue.issueId };
@@ -1756,6 +1886,7 @@ function createSessionCard(React, deps) {
           if (Object.keys(changes).length === 1) return;
           command = { op: 'issue.update', ...base, changes };
         } else if (kind === 'comment') {
+          if (issue.savedComment === issue.comment) return;
           if (!safeIssueText(issue.comment, 48 * 1024, true)) { issuePatch({ error: 'issueInvalid' }); return; }
           command = { op: 'issue.comment', ...base, text: issue.comment };
         } else if (kind === 'editComment') {
@@ -1764,13 +1895,21 @@ function createSessionCard(React, deps) {
           if (edit.text === edit.original) return;
           command = { op: 'issue.editComment', ...base, commentId: edit.id, expectedVersion: edit.version, text: edit.text };
         } else if (kind === 'link') {
-          const ws = workspacesSource.getSnapshot(), sess = sessionsSource.getSnapshot(), member = ws.items.find(item => item.workspaceId === issue.workspaceId);
-          if (!issue.links || !issue.issueId || issue.issue.id !== issue.issueId || !issue.linkSessionId || ws.phase !== 'ready' || ws.state === 'error' || !member?.sessionIds?.includes(issue.linkSessionId) || sessionState(issue.linkSessionId, sess, ws) !== 'available') return;
-          const linked = issue.linkAction === 'link';
-          if (linked === issue.links.links.some(link => link.issueKey === issue.key && link.issueId === issue.issueId && link.sessionId === issue.linkSessionId)) return;
+          const linked = !unlink, sessionId = unlink?.sessionId || issue.linkSessionId;
+          const validLinkChange = () => {
+            const current = memory.issue, ws = workspacesSource.getSnapshot(), sess = sessionsSource.getSnapshot(), member = ws.items.find(item => item.workspaceId === issue.workspaceId);
+            return current === issue && issueScope(current) && current.available && !current.loading && !current.pending && !current.unknown && !current.conflict && !issueMutationPending &&
+              current.generation === generation && privacyEpoch === epoch && memory.tracker.generation === trackerGeneration && current.links === links &&
+              Boolean(current.issueId && current.issue?.id === current.issueId && sessionId && ws.phase === 'ready' && ws.state !== 'error' && member?.sessionIds?.includes(sessionId) && sessionState(sessionId, sess, ws) === 'available') &&
+              linked !== links.links.some(link => link.issueKey === current.key && link.issueId === current.issueId && link.sessionId === sessionId) &&
+              (linked ? current.linkSessionId === sessionId : unlink.token === current.token && unlink.generation === current.generation && unlink.epoch === privacyEpoch && unlink.trackerGeneration === memory.tracker.generation && unlink.links === links);
+          };
+          const generation = issue.generation, epoch = privacyEpoch, trackerGeneration = memory.tracker.generation, links = issue.links;
+          if (!links || !validLinkChange()) return;
+          if (!linked && (!window.confirm(t('issueConfirmUnlinkSession') + ' ' + label(sessionId)) || !validLinkChange())) return;
           ++boardLinksGeneration;
           updateTracker({ boardLinks: null });
-          command = { op: 'links.set', workspaceId: issue.workspaceId, boardId: issue.boardId, issueKey: issue.key, issueId: issue.issueId, sessionId: issue.linkSessionId, linked, expectedRevision: issue.links.revision };
+          command = { op: 'links.set', workspaceId: issue.workspaceId, boardId: issue.boardId, issueKey: issue.key, issueId: issue.issueId, sessionId, linked, expectedRevision: links.revision };
         } else {
           selection = statusSelection.current;
           if (!validStatusSelection(selection) || !Number.isSafeInteger(selection.version) || !window.confirm(t('issueConfirmTransition') + ' ' + selection.display + ': ' + selection.from.display + ' → ' + selection.to.display)) return;
@@ -1818,10 +1957,10 @@ function createSessionCard(React, deps) {
           unknownIssues.delete(issueUnknownKey(issue));
           const current = memory.issue;
           if (kind === 'fields') issuePatch({ pending: false, original: { ...current.draft }, issue: { ...current.issue, version: receipt.version }, assigneeEdited: false, dirty: Boolean(current.comment || current.editComment || current.transitionId || current.linkSessionId), notice: 'issueSaved' });
-          else if (kind === 'comment') issuePatch({ pending: false, comment: '', dirty: Boolean(current.editComment || current.transitionId || current.linkSessionId || JSON.stringify(current.draft) !== JSON.stringify(current.original) || current.assigneeEdited), notice: 'issueSaved' });
+          else if (kind === 'comment') { const keep = current.sendTargets?.length > 0; issuePatch({ pending: false, savedComment: keep ? current.comment : null, comment: keep ? current.comment : '', dirty: Boolean(keep || current.editComment || current.transitionId || current.linkSessionId || JSON.stringify(current.draft) !== JSON.stringify(current.original) || current.assigneeEdited), notice: keep ? 'sessionSendSaved' : 'issueSaved' }); }
           else if (kind === 'editComment') issuePatch({ pending: false, editComment: null, dirty: Boolean(current.comment || current.transitionId || current.linkSessionId || JSON.stringify(current.draft) !== JSON.stringify(current.original) || current.assigneeEdited), notice: 'issueSaved' });
           else if (kind === 'transition') issuePatch({ pending: false, transitionId: '', dirty: Boolean(current.comment || current.editComment || current.linkSessionId || JSON.stringify(current.draft) !== JSON.stringify(current.original) || current.assigneeEdited), notice: 'issueSaved' });
-          else { issuePatch({ pending: false, linkSessionId: '', dirty: Boolean(current.comment || current.editComment || current.transitionId || JSON.stringify(current.draft) !== JSON.stringify(current.original) || current.assigneeEdited), notice: 'issueSaved' }); updateTracker({ boardLinks: null }); void loadBoardLinks(); }
+          else { issuePatch({ pending: false, ...(command.linked ? { linkSessionId: '', addingSession: false } : {}), dirty: Boolean(current.comment || current.editComment || current.transitionId || (!command.linked && current.linkSessionId) || JSON.stringify(current.draft) !== JSON.stringify(current.original) || current.assigneeEdited), notice: 'issueSaved' }); updateTracker({ boardLinks: null }); void loadBoardLinks(); }
           issueMutationPending = false;
           void loadIssue();
         } catch (err) {
@@ -1864,12 +2003,75 @@ function createSessionCard(React, deps) {
         if (modifiedSessionClick(event)) newTabSession(stamp.workspaceId, id);
         else openSession(id);
       }
+      function toggleIssueAddSession(stamp) {
+        const current = memory.issue;
+        if (!issueScope(current) || current.token !== stamp.token || current.generation !== stamp.generation || privacyEpoch !== stamp.privacyEpoch || memory.tracker.generation !== stamp.trackerGeneration || !current.available || current.loading || current.pending || !current.links || current.links !== stamp.links) return;
+        if (current.addingSession && current.linkSessionId && !window.confirm(t('discardDraft'))) return;
+        if (memory.issue !== current || !issueScope(current) || current.generation !== stamp.generation || privacyEpoch !== stamp.privacyEpoch || memory.tracker.generation !== stamp.trackerGeneration || current.pending || current.links !== stamp.links) return;
+        issuePatch({ addingSession: !current.addingSession, ...(current.addingSession ? { linkSessionId: '', dirty: Boolean(current.comment || current.editComment || current.transitionId || JSON.stringify(current.draft) !== JSON.stringify(current.original) || current.assigneeEdited) } : {}) });
+      }
+      async function sendIssueToSessions() {
+        const initial = memory.issue;
+        if (!sessionService || typeof sessionService.using !== 'function' || !issueScope(initial) || !initial.available || initial.loading || initial.pending || initial.unknown || initial.conflict || issueMutationPending || !initial.links) return;
+        const selected = [...(initial.sendTargets || [])], text = initial.comment, revision = initial.links.revision;
+        if (!safeIssueText(text, 48 * 1024, true) || new TextEncoder().encode(text).byteLength > 48 * 1024 || !selected.length || selected.length > 20 || new Set(selected).size !== selected.length) { issuePatch({ error: 'issueInvalid' }); return; }
+        const stamp = { ...initial, trackerGeneration: memory.tracker.generation, epoch: privacyEpoch };
+        const key = id => sessionSendKey(stamp, id, text);
+        const scopeValid = () => Boolean(issueScope(stamp) && memory.issue.generation === stamp.generation && memory.tracker.generation === stamp.trackerGeneration && privacyEpoch === stamp.epoch && memory.issue.available && !memory.issue.loading && memory.issue.issue?.id === stamp.issueId);
+        const localValid = id => {
+          const current = memory.issue, ws = workspacesSource.getSnapshot(), catalog = sessionsSource.getSnapshot();
+          const owner = ws?.items?.find(item => item.workspaceId === stamp.workspaceId);
+          return Boolean(scopeValid() && current.comment === text && current.links?.revision === revision && current.links.links.some(link => link.issueKey === stamp.key && link.issueId === stamp.issueId && link.sessionId === id) && ws.phase === 'ready' && ws.state !== 'error' && owner?.sessionIds?.includes(id) && sessionState(id, catalog, ws) === 'available');
+        };
+        const unreserved = () => selected.every(id => !sessionSendLedger.has(key(id)));
+        if (!unreserved() || !selected.every(localValid) || !window.confirm(t('sessionSendConfirm') + '\n\n' + selected.map(id => label(id)).join('\n') + '\n\n' + text)) return;
+        if (!unreserved() || !selected.every(localValid) || memory.issue.pending || issueMutationPending) return;
+        // Without a dispatch callback, reserve all targets until the helper returns.
+        // On an unexpected exception the conservative outcome is unknown, not unsent.
+        selected.forEach(id => sessionSendLedger.set(key(id), 'inflight'));
+        issueMutationPending = true;
+        issuePatch({ pending: true, sendOwner: stamp, sendResult: { state: 'stopped', targets: selected.map(id => ({ id, status: 'inflight' })) }, notice: '' });
+        const validateSession = async id => {
+          if (!localValid(id)) return false;
+          try {
+            const result = validIssueLinks(await transport.trackerCommand({ op: 'links.issue.read', workspaceId: stamp.workspaceId, boardId: stamp.boardId, issueKey: stamp.key, issueId: stamp.issueId }), { key: stamp.key, issueId: stamp.issueId });
+            return Boolean(result && localValid(id) && result.revision === revision && result.links.some(link => link.sessionId === id));
+          } catch { return false; }
+        };
+        const record = (result, final = false) => {
+          for (const item of result.targets) {
+            if (item.status === 'accepted' || item.status === 'unknown') sessionSendLedger.set(key(item.id), item.status);
+            else if (final && item.status === 'not-sent') sessionSendLedger.delete(key(item.id));
+          }
+          if (scopeValid()) issuePatch({ ...(final ? { pending: false, sendTargets: selected.filter(id => !sessionSendLedger.has(key(id))) } : {}), sendResult: { state: result.state, targets: selected.map(id => ({ id, status: sessionSendLedger.get(key(id)) || 'not-sent' })) } });
+        };
+        try {
+          const sender = createSessionSender({ sessions: sessionService, validateSession });
+          const result = await sender.send(selected, text, { onProgress: result => record(result) });
+          record(result, true);
+        } catch {
+          selected.forEach(id => { if (sessionSendLedger.get(key(id)) === 'inflight') sessionSendLedger.set(key(id), 'unknown'); });
+          if (scopeValid()) issuePatch({ pending: false, sendResult: { state: 'unknown', targets: selected.map(id => ({ id, status: sessionSendLedger.get(key(id)) || 'not-sent' })) } });
+        } finally {
+          issueMutationPending = false;
+          // Release only this operation's lock, even when its scope was hidden or
+          // invalidated; never repaint its private result into a stale drawer.
+          if (memory.issue?.token === stamp.token && memory.issue.sendOwner === stamp) issuePatch({ pending: false, sendOwner: null });
+        }
+      }
+      function reviewSessionSend(issue, id) {
+        const text = issue.comment, key = sessionSendKey(issue, id, text), epoch = privacyEpoch, generation = issue.generation, trackerGeneration = memory.tracker.generation;
+        const valid = () => issueScope(issue) && memory.issue.generation === generation && privacyEpoch === epoch && memory.tracker.generation === trackerGeneration && memory.issue.available && !memory.issue.loading && !memory.issue.pending && memory.issue.comment === text && sessionSendLedger.get(key) === 'unknown';
+        if (!valid() || !window.confirm(t('sessionSendReviewConfirm') + '\n\n' + label(id)) || !valid()) return;
+        sessionSendLedger.delete(key);
+        issuePatch({ sendResult: null });
+      }
       function issueView() {
         const issue = memory.issue;
         if (!issue || memory.provider !== 'tracker' || overview || showContext) return null;
         const visible = issue.available && issueScope(issue) && connection && trackerLive(workspaceId);
         const retryAvailable = issueScope(issue) && !issue.loading && !issue.pending;
-        const sessionStamp = { token: issue.token, generation: issue.generation, trackerGeneration: memory.tracker.generation, privacyEpoch, workspaceId: issue.workspaceId, key: issue.key, issueId: issue.issueId };
+        const sessionStamp = { token: issue.token, generation: issue.generation, trackerGeneration: memory.tracker.generation, privacyEpoch, epoch: privacyEpoch, workspaceId: issue.workspaceId, key: issue.key, issueId: issue.issueId, links: issue.links };
         const statusOpen = visible && statusPopover === issue.token;
         const statusDisabled = issue.pending || issue.unknown || issue.conflict || issue.loading || issueMutationPending || !issue.issueId || issue.issue?.id !== issue.issueId || !issue.transitions?.length;
         const closeStatus = () => { setStatusPopover(null); statusSelection.current = null; const current = memory.issue; if (issueScope(current) && current.available && !current.pending && !current.unknown && !current.conflict && current.transitionId) issuePatch({ transitionId: '', dirty: Boolean(current.comment || current.editComment || current.linkSessionId || JSON.stringify(current.draft) !== JSON.stringify(current.original) || current.assigneeEdited) }); statusButton.current?.focus(); };
@@ -1912,13 +2114,24 @@ function createSessionCard(React, deps) {
                 h('ul', { className: 'dsh-board-tracker-list' }, issue.links.links.filter(link => issue.issueId && issue.issue?.id === issue.issueId && link.issueId === issue.issueId && link.issueKey === issue.key && workspace?.sessionIds?.includes(link.sessionId)).map(link => {
                   const state = sessionState(link.sessionId, sessions, workspaces);
                   const unavailable = state !== 'available' || issue.loading || issue.pending || issue.unknown;
-                  return h('li', { className: 'dsh-board-tracker-session', key: link.sessionId }, unavailable ? h('span', null, label(link.sessionId), ' — ', t(state !== 'available' ? state : 'issueUnavailable')) : h('button', { className: 'dsh-board-tracker-session-link', type: 'button', role: 'link', onClick: event => openIssueSession(sessionStamp, link.sessionId, event), onAuxClick: event => { if (event.button === 1) { event.preventDefault(); openIssueSession(sessionStamp, link.sessionId, event); } } }, label(link.sessionId)));
+                  return h('li', { className: 'dsh-board-tracker-session', key: link.sessionId }, unavailable ? h('span', null, label(link.sessionId), ' — ', t(state !== 'available' ? state : 'issueUnavailable')) : h('button', { className: 'dsh-board-tracker-session-link', type: 'button', role: 'link', onClick: event => openIssueSession(sessionStamp, link.sessionId, event), onAuxClick: event => { if (event.button === 1) { event.preventDefault(); openIssueSession(sessionStamp, link.sessionId, event); } } }, label(link.sessionId)),
+                    h('button', { type: 'button', className: 'dsh-board-tracker-session-unlink', disabled: unavailable || issue.conflict, 'aria-label': t('issueUnlinkSession') + ': ' + label(link.sessionId), onClick: () => saveIssue('link', { ...sessionStamp, sessionId: link.sessionId }) }, t('issueUnlinkSession')));
                 })),
-                h('div', { className: 'dsh-board-row' }, h('label', null, t('issueChooseSession'), h('select', { value: issue.linkSessionId, disabled: issue.pending, onChange: e => editIssue('linkSessionId', e.target.value) }, h('option', { value: '' }, t('issueChooseSession')), availableSessions.filter(id => sessionState(id, sessions, workspaces) === 'available').map(id => h('option', { key: id, value: id }, label(id))))),
-                  h('label', null, t('issueLinkAction'), h('select', { value: issue.linkAction, disabled: issue.pending, onChange: e => editIssue('linkAction', e.target.value) }, h('option', { value: 'link' }, t('issueLinkAction')), h('option', { value: 'unlink' }, t('issueUnlinkAction'))))),
-                h('button', { type: 'button', disabled: issue.pending || issue.unknown || issue.conflict || !issue.issueId || issue.issue?.id !== issue.issueId || !issue.linkSessionId, onClick: () => saveIssue('link') }, t('issueLinkSave'))) : h('p', null, t('issueLinkUnavailable'))),
+                issue.links.links.length > 0 && h('button', { type: 'button', disabled: issue.pending, 'aria-expanded': Boolean(issue.addingSession), 'aria-label': t(issue.addingSession ? 'issueCancelAddSession' : 'issueAddSession'), onClick: () => toggleIssueAddSession(sessionStamp) }, issue.addingSession ? t('issueCancelAddSession') : '+'),
+                (issue.links.links.length === 0 || issue.addingSession) && h(React.Fragment, null,
+                  h('label', null, t('issueChooseSession'), h('select', { value: issue.linkSessionId, disabled: issue.pending, onChange: e => editIssue('linkSessionId', e.target.value) }, h('option', { value: '' }, t('issueChooseSession')), availableSessions.filter(id => sessionState(id, sessions, workspaces) === 'available' && !issue.links.links.some(link => link.sessionId === id)).map(id => h('option', { key: id, value: id }, label(id))))),
+                  h('button', { type: 'button', disabled: issue.pending || issue.unknown || issue.conflict || !issue.issueId || issue.issue?.id !== issue.issueId || !issue.linkSessionId, onClick: () => saveIssue('link') }, t('issueLinkSave')))) : h('p', null, t('issueLinkUnavailable'))),
               h('section', { className: 'dsh-board-tracker-section' }, h('h3', null, t('issueComments')), h('div', { className: 'dsh-board-comment-summary', role: 'status' }, h('strong', null, t('issueCommentsLoaded'), ' ', String(issue.comments.length)), h('span', null, t(({ loading: 'issueCommentsLoading', complete: 'issueCommentsComplete', partial: 'issueCommentsPartial', terminalPartial: 'issueCommentsTerminalPartial', error: 'issueCommentsError', invalid: 'issueCommentsInvalid', limit: 'issueCommentsLimit' })[issue.commentsState]))),
-                h('div', { className: 'dsh-board-comment-composer' }, h('label', null, t('issueNewComment'), h('textarea', { value: issue.comment, maxLength: 48 * 1024, readOnly: issue.pending, onChange: (e) => editIssue('comment', e.target.value) })), h('button', { className: 'dsh-board-primary', type: 'button', disabled: issue.pending || issue.unknown || issue.conflict || !issue.comment.trim(), onClick: () => saveIssue('comment') }, t('issueAddComment'))),
+                h('div', { className: 'dsh-board-comment-composer' }, h('label', null, t('issueNewComment'), h('textarea', { value: issue.comment, maxLength: 48 * 1024, readOnly: issue.pending, onChange: (e) => editIssue('comment', e.target.value) })), h('button', { className: 'dsh-board-primary', type: 'button', disabled: issue.pending || issue.unknown || issue.conflict || !issue.comment.trim() || issue.savedComment === issue.comment, onClick: () => saveIssue('comment') }, t('issueAddComment')),
+                  issue.links && issue.links.links.length > 0 && h(React.Fragment, null,
+                    h('fieldset', { disabled: issue.pending }, h('legend', null, t('sessionSendChoose')), issue.links.links.filter(link => workspace?.sessionIds?.includes(link.sessionId) && link.issueKey === issue.key && link.issueId === issue.issueId).map(link => {
+                      const id = link.sessionId, status = sessionSendLedger.get(sessionSendKey(issue, id, issue.comment));
+                      return h('div', { key: id }, h('label', null, h('input', { type: 'checkbox', checked: (issue.sendTargets || []).includes(id), disabled: sessionState(id, sessions, workspaces) !== 'available' || Boolean(status), onChange: e => { const current = memory.issue; if (!issueScope(current) || current.pending || sessionSendLedger.has(sessionSendKey(current, id, current.comment)) || !current.links?.links.some(item => item.sessionId === id && item.issueId === current.issueId)) return; const ids = current.sendTargets || []; issuePatch({ sendTargets: e.target.checked ? [...new Set([...ids, id])] : ids.filter(item => item !== id), sendResult: null }); } }), label(id)), status && h('span', { role: 'status' }, ' — ', t(status === 'accepted' ? 'sessionSendAccepted' : status === 'unknown' ? 'sessionSendUnknown' : 'sessionSendInflight')), status === 'unknown' && h('button', { type: 'button', disabled: issue.pending, onClick: () => reviewSessionSend(issue, id) }, t('sessionSendReview')));
+                    })),
+                    h('p', { className: 'dsh-board-muted' }, t('sessionSendWarning')),
+                    typeof sessionService?.using !== 'function' && h('p', null, t('sessionSendUnavailable')),
+                    h('button', { type: 'button', disabled: issue.pending || issue.unknown || issue.conflict || !issue.comment.trim() || !(issue.sendTargets || []).length || issue.sendTargets.some(id => sessionSendLedger.has(sessionSendKey(issue, id, issue.comment))) || typeof sessionService?.using !== 'function', onClick: sendIssueToSessions }, t('sessionSendAction'))),
+                  issue.sendResult && h('ul', { role: 'status' }, issue.sendResult.targets.map(item => h('li', { key: item.id }, label(item.id), ' — ', t(item.status === 'accepted' ? 'sessionSendAccepted' : item.status === 'unknown' ? 'sessionSendUnknown' : item.status === 'inflight' ? 'sessionSendInflight' : 'sessionSendNotSent'))))),
                 h('ul', { className: 'dsh-board-tracker-list' }, issue.comments.map((comment) => h('li', { className: 'dsh-board-tracker-comment', key: comment.id }, h('div', { className: 'dsh-board-tracker-comment-meta' }, h('span', { className: 'dsh-board-comment-avatar', 'aria-hidden': true }, commentInitials(comment.createdBy.display)), h('strong', null, comment.createdBy.display), h('time', { dateTime: comment.createdAt, title: comment.createdAt }, commentTime(comment.createdAt))), renderTrackerText(comment.text),
                 issue.editComment?.id === comment.id ? commentEditor(issue) :
                   Number.isSafeInteger(comment.version) && comment.version >= 0 ? h('button', { type: 'button', disabled: issue.pending || Boolean(issue.editComment), 'aria-label': t('issueEditComment') + ': ' + comment.id, onClick: () => { const current = memory.issue; if (issueScope(current) && current.available && !current.pending && !current.editComment) issuePatch({ editComment: { id: comment.id, version: comment.version, original: comment.text, text: comment.text }, dirty: true, notice: '' }); } }, t('issueEditComment')) : h('p', { className: 'dsh-board-muted' }, t('issueCommentVersionUnavailable'))))),
@@ -2129,7 +2342,7 @@ function createSessionCard(React, deps) {
         }, SessionCardBody)), 'dsh-board: session issue body');
         ctx.slots.inject('main', () => ctx.slots.register({
           name: 'main', key: PANEL, locale: NS,
-          inject: () => ({ transport, sessionContext, connectionSource, panelSource: ctx.layout.panelInfo, workspacesSource: ctx.workspaces.list, sessionsSource: ctx.sessions.list, openSession: (id) => ctx.uiWorkspace.openSession(id) }),
+          inject: () => ({ transport, sessionContext, connectionSource, panelSource: ctx.layout.panelInfo, workspacesSource: ctx.workspaces.list, sessionsSource: ctx.sessions.list, sessionService: ctx.sessions, openSession: (id) => ctx.uiWorkspace.openSession(id) }),
         }, Page));
         ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id: PANEL, order: 15, locale: NS, label: () => t('panel') }, BoardIcon));
         ctx.effect(() => ctx.commandUi.register({

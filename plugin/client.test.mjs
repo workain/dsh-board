@@ -66,7 +66,7 @@ function harness(sessionFixture, initialCommands = []) {
     } },
     inputTriggers: { registerSource() { return () => {}; } },
     sidebarRight: { mounted: source(null), openTab() {} }, sidebarRightTabs: { register() { return () => {}; } },
-    connection: { generation }, workspaces: { list: ws }, sessions: { list: sessions }, uiWorkspace: { openSession(id) { openedSessions.push(id); } }, layout: { panelInfo, beginNavigation() { navigation.abort(); navigation = new AbortController(); return navigation.signal; }, selectPanel(id) { navigation.abort(); panels.push(id); panelInfo.set({ activePanelId: id }); } },
+    connection: { generation }, workspaces: { list: ws }, sessions: { list: sessions, ...(sessionFixture?.using ? { using: sessionFixture.using } : {}) }, uiWorkspace: { openSession(id) { openedSessions.push(id); } }, layout: { panelInfo, beginNavigation() { navigation.abort(); navigation = new AbortController(); return navigation.signal; }, selectPanel(id) { navigation.abort(); panels.push(id); panelInfo.set({ activePanelId: id }); } },
   };
   plugin.apply(ctx);
   const props = { t: key => key, ...slot.spec.inject() };
@@ -522,11 +522,11 @@ test('Tracker drawer marks unavailable links and hides foreign or mismatched rel
   ] };
   const h = await trackerIssueReady({ editing: false, links, fixture: { ids: ['session-1', 'archived', 'foreign', 'wrong-key', 'wrong-id'], archived: ['archived'], workspaces: [{ workspaceId: 'w', title: 'Workspace', sessionIds: ['session-1', 'archived', 'missing', 'wrong-key', 'wrong-id'] }, { workspaceId: 'w2', title: 'Other', sessionIds: ['foreign'] }] } });
   let rows = h.nodes('li').filter(n => n.props.className === 'dsh-board-tracker-session');
-  assert.deepEqual(rows.map(n => h.text(n)), ['Session (session-1)', 'archived — sessionArchived', 'missing — sessionUnavailable']);
+  assert.deepEqual(rows.map(n => h.text(n)), ['Session (session-1)issueUnlinkSession', 'archived — sessionArchivedissueUnlinkSession', 'missing — sessionUnavailableissueUnlinkSession']);
   assert.equal(h.nodes('button').filter(n => n.props.className === 'dsh-board-tracker-session-link').length, 1);
   h.sessions.set({ ...h.sessions.getSnapshot(), phase: 'pending' });
   rows = h.nodes('li').filter(n => n.props.className === 'dsh-board-tracker-session');
-  assert.ok(rows.every(n => h.text(n).endsWith(' — sessionLoading'))); assert.equal(drawerSessionButton(h), undefined);
+  assert.ok(rows.every(n => h.text(n).includes(' — sessionLoading'))); assert.equal(drawerSessionButton(h), undefined);
   assert.deepEqual(h.openedSessions, []); h.unmount();
 });
 
@@ -972,15 +972,47 @@ test('Tracker reselect retains unknown guard for in-flight issue mutation', asyn
   h.unmount();
 });
 
-test('Tracker session links use immutable issue ID and explicit revisioned write', async () => {
+test('Tracker session unlink confirms and uses immutable ID and exact link revision', async () => {
   const h = await trackerIssueReady();
-  const ws = h.ws.getSnapshot(); h.ws.set({ ...ws, items: ws.items.map(item => ({ ...item, sessionIds: ['session-1', 'session-2'] })) });
-  // Select an already-linked session to unlink, and do not mutate on selection.
-  h.change(h.nodes('select').find(n => n.children.some(c => c?.props?.value === 'session-1')), 'session-1');
-  h.change(h.nodes('select').find(n => n.children.some(c => c?.props?.value === 'unlink')), 'unlink');
-  assert.equal(h.requests.length, 9); h.click('issueLinkSave');
+  assert.equal(h.nodes('select').some(n => n.children.some(c => c?.props?.value === 'session-1')), false);
+  h.window.confirmResult = false; h.click('issueUnlinkSession: Session (session-1)'); assert.equal(h.requests.length, 9);
+  h.window.confirmResult = true; h.click('issueUnlinkSession: Session (session-1)');
   assert.deepEqual(JSON.parse(h.requests[9].options.body), { op: 'links.set', workspaceId: 'w', boardId: '1', issueKey: 'A-1', issueId: 'issue-1', sessionId: 'session-1', linked: false, expectedRevision: 1 });
-  assert.equal(h.button('issueLinkSave').props.disabled, true); h.unmount();
+  assert.equal(h.button('issueUnlinkSession: Session (session-1)').props.disabled, true); h.unmount();
+});
+
+test('Tracker session picker opens only for empty exact links or plus, and cancel guards drafts', async () => {
+  const fixture = { ids: ['session-1', 'session-2'], byId: { 'session-1': { title: 'Session' }, 'session-2': { title: 'Second' } } };
+  const h = await trackerIssueReady({ editing: false, fixture });
+  const picker = () => h.nodes('select').find(n => n.children.some(c => c?.props?.value === 'session-2'));
+  assert.equal(picker(), undefined); assert.equal(h.nodes('li').filter(n => n.props.className === 'dsh-board-tracker-session').length, 1);
+  h.click('issueAddSession'); assert.ok(picker()); assert.ok(!picker().children.some(c => c?.props?.value === 'session-1'));
+  h.change(picker(), 'session-2'); h.window.confirmResult = false; h.click('issueCancelAddSession'); assert.equal(picker().props.value, 'session-2');
+  h.window.confirmResult = true; h.click('issueCancelAddSession'); assert.equal(picker(), undefined);
+  h.click('issueAddSession'); h.change(picker(), 'session-2'); h.click('issueLinkSave');
+  assert.deepEqual(JSON.parse(h.requests[9].options.body), { op: 'links.set', workspaceId: 'w', boardId: '1', issueKey: 'A-1', issueId: 'issue-1', sessionId: 'session-2', linked: true, expectedRevision: 1 });
+  assert.equal(h.button('issueCancelAddSession').props.disabled, true); h.unmount();
+  const empty = await trackerIssueReady({ editing: false, links: { revision: 7, incomplete: false, links: [] }, fixture });
+  assert.ok(empty.nodes('select').some(n => n.children.some(c => c?.props?.value === 'session-2')));
+  assert.ok(!empty.nodes('button').some(n => n.props['aria-label'] === 'issueAddSession')); empty.unmount();
+});
+
+test('Tracker unlink handlers fence stale scope and membership, including confirmation races', async () => {
+  for (const scenario of ['membership', 'archive', 'session', 'panel', 'confirm-race']) {
+    const h = await trackerIssueReady({ editing: false });
+    const button = h.button('issueUnlinkSession: Session (session-1)');
+    if (scenario === 'membership') h.ws.set({ ...h.ws.getSnapshot(), items: [{ ...h.ws.getSnapshot().items[0], sessionIds: [] }] });
+    if (scenario === 'archive') h.ws.set({ ...h.ws.getSnapshot(), archivedSessionIds: ['session-1'] });
+    if (scenario === 'session') h.sessions.set({ ...h.sessions.getSnapshot(), ids: [] });
+    if (scenario === 'panel') h.panelInfo.set({ activePanelId: null });
+    if (scenario === 'confirm-race') h.window.confirm = () => { h.ws.set({ ...h.ws.getSnapshot(), archivedSessionIds: ['session-1'] }); return true; };
+    button.props.onClick(); assert.equal(h.requests.length, 9, scenario); h.unmount();
+  }
+});
+
+test('board task titles have left-aligned shared CSS for Tracker and local cards', () => {
+  assert.match(client, /\.dsh-board button\.dsh-board-card-title\{text-align:left\}/);
+  assert.ok((client.match(/className: 'dsh-board-card-title'/g) || []).length >= 2);
 });
 
 test('Tracker whales join only matching immutable issue IDs', async () => {
@@ -1513,4 +1545,63 @@ test('column whale counts distinct member sessions before session filter and int
   h.click('clearSessionFilter'); assert.equal(h.nodes('select').find(n => n.props['aria-label'] === 'sessionFilter').props.value, 'all');
   const region = h.nodes('div').find(n => n.props.className === 'dsh-board-kanban'); assert.equal(region.props.tabIndex, 0); assert.equal(region.props.role, 'region');
   assert.match(h.text(h.nodes('style')[0]), /max-width:100%;min-width:0;overflow-x:auto/); h.unmount();
+});
+
+const sendLinks = { revision: 1, incomplete: false, links: ['session-1', 'session-2'].map(sessionId => ({ issueKey: 'A-1', issueId: 'issue-1', sessionId })) };
+function fakeSessionService(outcome = () => ({ ok: true, value: { accepted: true } })) {
+  const calls = [];
+  return { calls, async using(id, options, fn) {
+    assert.equal(options.source, 'controllerOperation');
+    const session = { sessionId: id, getSnapshot: () => ({ sessionId: id, openState: 'open' }), beginSubmission: value => { assert.equal(value.mode, 'queue'); return { requestId: 'request-' + id, abandon() {} }; }, prompt: async (parts, mode) => { calls.push({ id, text: parts[0].text, mode }); return outcome(id); } };
+    return fn({ sessionId: id, ready: Promise.resolve(), binding: { session } });
+  } };
+}
+async function sendReady(outcome) {
+  const service = fakeSessionService(outcome);
+  const h = await trackerIssueReady({ editing: false, links: sendLinks, fixture: { ids: ['session-1', 'session-2'], using: service.using } });
+  return { h, service };
+}
+function selectSend(h, text = 'shared message') {
+  h.change(h.nodes('textarea').find(n => n.props.value === ''), text);
+  for (const input of h.nodes('input').filter(n => n.props.type === 'checkbox')) input.props.onChange({ target: { checked: true } });
+}
+async function sendValidation(h, links = sendLinks) {
+  await settle();
+  const index = h.requests.length - 1;
+  assert.equal(JSON.parse(h.requests[index].options.body).op, 'links.issue.read');
+  await h.resolve(index, links);
+}
+test('session send separately queues two targets and fences duplicate across drawer close', async () => {
+  const { h, service } = await sendReady();
+  selectSend(h); h.click('issueAddComment');
+  assert.equal(JSON.parse(h.requests[9].options.body).text, 'shared message'); await h.resolve(9, { id: 'new' });
+  await h.resolve(10, issueFixture); await h.resolve(11, issueComments); await h.resolve(12, issueTransitions); await h.resolve(13, sendLinks); await h.resolve(14, issueFixture);
+  assert.ok(h.nodes('textarea').some(n => n.props.value === 'shared message')); assert.equal(service.calls.length, 0);
+  assert.equal(h.button('issueAddComment').props.disabled, true, 'the saved comment cannot be posted twice accidentally');
+  h.click('sessionSendAction'); await sendValidation(h); await sendValidation(h); await sendValidation(h); await sendValidation(h);
+  assert.deepEqual(service.calls.map(c => c.id), ['session-1', 'session-2']); assert.ok(service.calls.every(c => c.mode === 'queue' && c.text === 'shared message'));
+  assert.ok(h.text(h.nodes('aside')[0]).includes('sessionSendAccepted'));
+  h.click('close'); h.nodes('button').find(n => n.props['aria-label'] === 'issueDetails: <script>unsafe</script>').props.onClick();
+  const i = h.requests.length - 1; await h.resolve(i, issueFixture); await h.resolve(i+1, issueComments); await h.resolve(i+2, issueTransitions); await h.resolve(i+3, sendLinks); await h.resolve(i+4, issueFixture);
+  h.change(h.nodes('textarea').find(n => n.props.value === ''), 'shared message');
+  assert.ok(h.nodes('input').filter(n => n.props.type === 'checkbox').every(n => n.props.disabled)); assert.equal(service.calls.length, 2); h.unmount();
+});
+test('session send stops on uncertainty and requires explicit acknowledgement', async () => {
+  const { h, service } = await sendReady(id => id === 'session-1' ? { ok: false, error: { code: 'network' } } : { ok: true, value: { accepted: true } });
+  selectSend(h); h.click('sessionSendAction'); await sendValidation(h); await sendValidation(h);
+  assert.deepEqual(service.calls.map(c => c.id), ['session-1']); assert.ok(h.text(h.nodes('aside')[0]).includes('sessionSendUnknown'));
+  h.window.confirmResult = false; h.click('sessionSendReview'); assert.ok(h.text(h.nodes('aside')[0]).includes('sessionSendUnknown'));
+  h.window.confirmResult = true; h.click('sessionSendReview'); assert.ok(!h.text(h.nodes('aside')[0]).includes('sessionSendUnknown')); h.unmount();
+});
+test('session send confirmation cancellation and changed link revision fail closed', async () => {
+  const { h, service } = await sendReady(); selectSend(h); h.window.confirmResult = false; h.click('sessionSendAction'); assert.equal(h.requests.length, 9);
+  h.window.confirmResult = true; h.click('sessionSendAction'); await sendValidation(h, { ...sendLinks, revision: 2 }); assert.equal(service.calls.length, 0); assert.ok(h.text(h.nodes('aside')[0]).includes('sessionSendNotSent')); h.unmount();
+});
+test('session send does not dispatch after panel or workspace changes in preflight', async () => {
+  for (const kind of ['panel', 'workspace']) {
+    const { h, service } = await sendReady(); selectSend(h); h.click('sessionSendAction'); await settle();
+    if (kind === 'panel') h.panelInfo.set({ activePanelId: 'other' });
+    else h.ws.set({ ...h.ws.getSnapshot(), items: [{ workspaceId: 'w', title: 'Workspace', sessionIds: [] }] });
+    await sendValidation(h); assert.equal(service.calls.length, 0); h.unmount();
+  }
 });

@@ -17,7 +17,7 @@ const pkg = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
 if (pkg.name !== 'dsh-board' || pkg.dsh?.bundle?.patch !== './cordis.patch.yml') {
   throw new Error('Unexpected package identity or bundle patch');
 }
-for (const file of ['index.js', 'core.mjs', 'service.mjs', 'sqlite-store.mjs', 'tracker-api.mjs', 'tracker-fetch.mjs', 'tracker-service.mjs', 'tracker-tools.mjs', 'tracker-account.mjs', 'tracker-links.mjs', 'tracker-settings.mjs', 'tracker-markup.mjs', 'tracker-statuses.mjs', 'session-card.mjs', 'client.js', 'cordis.patch.yml', 'icon.svg', 'locale/en.json', 'locale/ru.json']) {
+for (const file of ['index.js', 'core.mjs', 'service.mjs', 'sqlite-store.mjs', 'tracker-api.mjs', 'tracker-fetch.mjs', 'tracker-service.mjs', 'tracker-tools.mjs', 'tracker-account.mjs', 'tracker-links.mjs', 'tracker-settings.mjs', 'tracker-markup.mjs', 'tracker-statuses.mjs', 'session-card.mjs', 'session-send.mjs', 'client.js', 'cordis.patch.yml', 'icon.svg', 'locale/en.json', 'locale/ru.json']) {
   try {
     await access(resolve(root, file));
   } catch (error) {
@@ -36,6 +36,7 @@ const sources = [
   ['tracker-markup.mjs', ['TRACKER_MARKUP_LIMITS', 'safeTrackerHref', 'parseTrackerMarkup']],
   ['tracker-statuses.mjs', ['groupTrackerStatuses']],
   ['session-card.mjs', ['createSessionCard']],
+  ['session-send.mjs', ['createSessionSender']],
 ];
 const parts = [];
 for (const [file, expectedExports] of sources) {
@@ -55,7 +56,7 @@ for (const [file, expectedExports] of sources) {
 }
 const begin = '/* BEGIN GENERATED TRACKER HELPERS */';
 const end = '/* END GENERATED TRACKER HELPERS */';
-const generated = `${begin}\nconst { parseTrackerMarkup, safeTrackerHref, groupTrackerStatuses, createSessionCard } = {\n${parts.join('\n')}\n};\n${end}`;
+const generated = `${begin}\nconst { parseTrackerMarkup, safeTrackerHref, groupTrackerStatuses, createSessionCard, createSessionSender } = {\n${parts.join('\n')}\n};\n${end}`;
 const clientPath = resolve(root, 'client.js');
 const client = await readFile(clientPath, 'utf8');
 if (!client.includes('__ModuleLoader__')) throw new Error('client.js must register with the DSH ModuleLoader');
@@ -68,7 +69,7 @@ const updated = client.slice(0, start) + generated + client.slice(finish + end.l
 if (!write && actual !== generated) throw new Error('Generated Tracker helpers are stale; run node scripts/build.mjs --write');
 // Validate the prospective artifact before touching client.js. --write is an
 // explicit maintenance operation, never an implicit side effect of npm build.
-for (const file of ['index.js', 'core.mjs', 'service.mjs', 'sqlite-store.mjs', 'tracker-api.mjs', 'tracker-fetch.mjs', 'tracker-service.mjs', 'tracker-tools.mjs', 'tracker-account.mjs', 'tracker-links.mjs', 'tracker-settings.mjs', 'tracker-markup.mjs', 'tracker-statuses.mjs', 'session-card.mjs']) {
+for (const file of ['index.js', 'core.mjs', 'service.mjs', 'sqlite-store.mjs', 'tracker-api.mjs', 'tracker-fetch.mjs', 'tracker-service.mjs', 'tracker-tools.mjs', 'tracker-account.mjs', 'tracker-links.mjs', 'tracker-settings.mjs', 'tracker-markup.mjs', 'tracker-statuses.mjs', 'session-card.mjs', 'session-send.mjs']) {
   const result = spawnSync(process.execPath, ['--check', resolve(root, file)], { stdio: 'inherit' });
   if (result.error) throw result.error;
   if (result.status !== 0) process.exit(result.status ?? 1);
