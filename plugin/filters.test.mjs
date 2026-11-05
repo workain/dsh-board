@@ -193,7 +193,7 @@ test('partial Tracker board filters known identities, explicit unassigned and un
     h.mount(); await h.resolve(0, { revision: 1, boards: [], links: [] }); await h.resolve(1, settings);
     h.tile('tracker #1 — Workspace — tracker').props.onClick();
     await h.resolve(2, settings); await h.resolve(3, board);
-    assert.ok(h.nodes('p').some(node => h.text(node).includes('trackerPartial')), 'partial data is disclosed');
+    assert.ok(!h.nodes('p').some(node => ['trackerPartial', 'trackerStatusView'].includes(h.text(node))), 'no persistent explanatory banners');
     assert.equal(titles(h).length, 5);
     const options = Array.from(select(h, 'assignee').children).filter(child => child?.type === 'option');
     const identities = options.filter(option => [assigned('id-1'), assigned('id-2')].includes(option.props.value));
@@ -206,7 +206,7 @@ test('partial Tracker board filters known identities, explicit unassigned and un
       filter(h, 'assignee', value);
       const actual = Array.from(h.nodes('button').filter(node => node.props['aria-label']?.startsWith('issueDetails: ')), node => h.text(node)).sort();
       assert.deepEqual(actual, expected, `Tracker filter ${value}`);
-      assert.ok(h.nodes('p').some(node => h.text(node).includes('trackerPartial')), 'filter does not hide partial warning');
+      assert.ok(!h.nodes('p').some(node => h.text(node) === 'trackerPartial'), 'filters do not introduce an informational banner');
     }
     filter(h, 'assignee', all); assert.equal(titles(h).length, 5);
     assert.equal(h.requests.length, 4, 'client-side filters do not request or mutate Tracker');

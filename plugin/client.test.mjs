@@ -1047,7 +1047,7 @@ test('Tracker configuration, explicit workspace selection, and read-only partial
   assert.ok(h.text(columns[1]).includes('Ambiguous'), 'shared status appears once even in multiple source columns');
   assert.ok(h.text(columns[2]).includes('Unknown'), 'status absent from configuration uses its actual identity');
   assert.equal(h.nodes('article').length, 3, 'ambiguous statuses never duplicate issues');
-  assert.ok(h.nodes('p').some(n => h.text(n).includes('trackerPartial')));
+  assert.ok(!h.nodes('p').some(n => ['trackerPartial', 'trackerStatusView'].includes(h.text(n))), 'no persistent explanatory banners');
   assert.ok(!h.nodes('button').some(n => ['addTask', 'addStatus', 'linkCurrent'].includes(h.text(n))));
   assert.ok(h.nodes('h2').some(n => h.text(n) === '<img src=x onerror=alert(1)>'));
   const anchors = h.nodes('a'); assert.equal(anchors.length, 3);
@@ -1307,7 +1307,6 @@ test('empty Tracker issue result remains partial and never presents a confirmed 
   await h.resolve(2, trackerSettings(1, true, { w: ['1'] }, []));
   await h.resolve(3, { ...trackerBoard, issues: [] });
   assert.ok(h.nodes('p').some(n => h.text(n) === 'trackerEmpty'));
-  assert.ok(h.nodes('p').some(n => h.text(n).includes('trackerPartial')));
   assert.ok(!h.nodes('p').some(n => h.text(n) === 'noTasks')); h.unmount();
 });
 
