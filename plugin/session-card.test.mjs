@@ -13,7 +13,7 @@ const comment = id => ({ id, text: 'Comment ' + id, createdBy: { display: 'Alice
 const links = { '1': [{ sessionId: 's', issueKey: 'ABC-1', issueId: 'id-1' }, { sessionId: 'other', issueKey: 'SECRET-2', issueId: 'id-2' }], '2': [] };
 function harness(options = {}) {
   const ws = source(wsValue), sessions = source({ phase: 'ready', ids: ['s', 'other'] }), connection = source({ id: 1 }), mounted = source('s');
-  const opened = [], full = [], calls = [];
+  const opened = [], full = [], sessionOpened = [], sessionNewTabs = [], calls = [];
   let tree, cursor = 0, hooks = [], effects = [], pending = false, active = false, tab = { visible: true, signal: new AbortController().signal }, sessionId = 's';
   const React = {
     Fragment: Symbol('Fragment'),
@@ -29,8 +29,9 @@ function harness(options = {}) {
     async trackerCommand(command) {
       calls.push(command);
       if (options.command) { const custom = options.command(command); if (custom !== undefined) return await custom; }
-      if (command.op === 'links.read') return { revision: 1, incomplete: true, links: (options.links || links)[command.boardId] || [] };
-      if (command.op === 'board.read') return { board: { id: command.boardId }, issuesComplete: false, issues: [{ id: command.issueKeys[0] === 'ABC-1' ? 'id-1' : 'id-3', key: command.issueKeys[0] }] };
+      const all = Object.entries(options.links || links).flatMap(([boardId, items]) => items.map(item => ({ ...item, boardId })));
+      if (command.op === 'links.session.read') return { revision: 1, incomplete: Boolean(options.incomplete), links: all.filter(link => link.sessionId === command.sessionId) };
+      if (command.op === 'links.issue.read') return { revision: 1, incomplete: false, links: all.filter(link => link.boardId === command.boardId && link.issueKey === command.issueKey && link.issueId === command.issueId) };
       if (command.op === 'issue.read') return issue(command.issueKey, command.issueId);
       if (command.op === 'issue.comments') return { comments: [comment('a')], complete: true, nextCursor: null };
       throw Error('Unexpected write');
@@ -38,7 +39,7 @@ function harness(options = {}) {
     mutate() { throw Error('Unexpected mutation'); },
   };
   const sidebarRight = { mounted, openTab: id => opened.push(id) };
-  const card = createSessionCard(React, { transport, ws, sessions, connection, sidebarRight, t: key => key, renderTrackerText: value => value, openBoardForSession: id => full.push(id) });
+  const card = createSessionCard(React, { transport, ws, sessions, connection, sidebarRight, t: key => key, renderTrackerText: value => value, openBoardForSession: id => full.push(id), openSession: id => sessionOpened.push(id), ...(options.noNewTab ? {} : { openSessionInNewTab: id => sessionNewTabs.push(id) }) });
   function render(component = card.Body) {
     active = true; let loops = 0;
     do { pending = false; cursor = 0; effects = []; tree = component({ sessionId, useTabInfo: () => ({ tab }) }); const next = effects; effects = []; next.forEach(fn => fn()); assert.ok(++loops < 100); } while (pending);
@@ -47,7 +48,7 @@ function harness(options = {}) {
   function nodes(type) { render(); const out = []; function walk(n) { if (!n || typeof n !== 'object') return; if (n.type === type) out.push(n); n.children?.forEach(walk); } walk(tree); return out; }
   function text(n) { if (arguments.length === 0) n = tree; if (!n || typeof n !== 'object') return String(n ?? ''); return n.children.map(child => text(child)).join(''); }
   function unmount() { if (active) hooks.forEach(item => item?.cleanup?.()); active = false; hooks = []; }
-  return { card, render, nodes, text, unmount, ws, sessions, connection, mounted, opened, full, calls, setSession: id => { sessionId = id; }, setTab: value => { tab = { ...tab, ...value }; }, select: value => { const select = nodes('select')[0]; select.props.onChange({ target: { value } }); render(); } };
+  return { card, render, nodes, text, unmount, ws, sessions, connection, mounted, opened, full, sessionOpened, sessionNewTabs, calls, setSession: id => { sessionId = id; }, setTab: value => { tab = { ...tab, ...value }; }, select: value => { const select = nodes('select')[0]; select.props.onChange({ target: { value } }); render(); } };
 }
 async function ready(h) { h.render(); await settle(); h.render(); await settle(); h.render(); }
 
@@ -55,13 +56,31 @@ test('header is session-scoped and rechecks mounted session when clicked', () =>
   const h = harness(); const button = h.render(h.card.Header); assert.equal(button.type, 'button'); button.props.onClick(); assert.deepEqual(h.opened, ['dsh-board-issue']); h.mounted.set('other'); button.props.onClick(); assert.deepEqual(h.opened, ['dsh-board-issue']); assert.equal(h.render(h.card.Header), null);
 });
 test('joins local tasks in workspace and displays validated linked issue without writes', async () => {
-  const h = harness(); await ready(h); assert.match(h.text(), /Local task/); assert.doesNotMatch(h.text(), /Foreign local|SECRET/); assert.match(h.text(), /Private ABC-1/); assert.match(h.text(), /Comment a/); assert.match(h.text(), /partial result/); assert.match(h.text(), /read-only/i);
-  const board = h.calls.find(c => c.op === 'board.read'); assert.deepEqual(board, { op: 'board.read', workspaceId: 'w', boardId: '1', issueKeys: ['ABC-1'] });
-  const read = h.calls.find(c => c.op === 'issue.read'); assert.equal(read.issueId, 'id-1'); assert.ok(h.calls.every(c => ['local.read', 'settings.read', 'links.read', 'board.read', 'issue.read', 'issue.comments'].includes(c.op)));
+  const h = harness(); await ready(h); assert.match(h.text(), /Local task/); assert.doesNotMatch(h.text(), /Foreign local|SECRET/); assert.match(h.text(), /Private ABC-1/); assert.match(h.text(), /Comment a/); assert.doesNotMatch(h.text(), /partial result/); assert.match(h.text(), /read-only/i);
+  assert.deepEqual(h.calls.find(c => c.op === 'links.session.read'), { op: 'links.session.read', workspaceId: 'w', sessionId: 's' });
+  assert.deepEqual(h.calls.find(c => c.op === 'links.issue.read'), { op: 'links.issue.read', workspaceId: 'w', boardId: '1', issueKey: 'ABC-1', issueId: 'id-1' });
+  const read = h.calls.find(c => c.op === 'issue.read'); assert.equal(read.issueId, 'id-1'); assert.ok(h.calls.every(c => ['local.read', 'settings.read', 'links.session.read', 'links.issue.read', 'issue.read', 'issue.comments'].includes(c.op)));
   h.nodes('button').find(n => h.text(n).includes('Open full board')).props.onClick(); assert.deepEqual(h.full, ['s']);
 });
+test('visible session button opens current session and rejects stale scope and unsupported modifiers', async () => {
+  const h = harness(); h.sessions.set({ phase: 'ready', ids: ['s', 'other'], byId: { s: { displayTitle: 'Session title' } } }); await ready(h);
+  const button = h.nodes('button').find(node => h.text(node) === 'Open current session · Session title'); assert.ok(button);
+  button.props.onClick({ button: 0 }); button.props.onClick({ button: 0, ctrlKey: true }); button.props.onClick({ button: 0, metaKey: true }); button.props.onAuxClick({ button: 1 });
+  assert.deepEqual(h.sessionOpened, ['s']); assert.deepEqual(h.sessionNewTabs, ['s', 's', 's']);
+  h.mounted.set('other'); button.props.onClick({ button: 0 }); button.props.onAuxClick({ button: 1 }); assert.deepEqual(h.sessionOpened, ['s']); assert.equal(h.sessionNewTabs.length, 3);
+  const other = harness({ noNewTab: true }); await ready(other); const fallback = other.nodes('button').find(node => other.text(node) === 'Open current session · s'); fallback.props.onClick({ ctrlKey: true }); fallback.props.onAuxClick({ button: 1 }); assert.deepEqual(other.sessionOpened, []);
+});
+test('rejects malformed session discovery and exact issue results', async () => {
+  for (const mode of ['wrong-session', 'unselected-board', 'bad-incomplete', 'wrong-target']) {
+    const h = harness({ command(c) {
+      if (c.op === 'links.session.read' && mode !== 'wrong-target') return { revision: 1, incomplete: mode === 'bad-incomplete' ? 'no' : false, links: [{ sessionId: mode === 'wrong-session' ? 'other' : 's', boardId: mode === 'unselected-board' ? '99' : '1', issueKey: 'ABC-1', issueId: 'id-1' }] };
+      if (c.op === 'links.issue.read' && mode === 'wrong-target') return { revision: 1, incomplete: false, links: [{ sessionId: 's', issueKey: 'ABC-1', issueId: 'other-id' }] };
+    } });
+    await ready(h); assert.doesNotMatch(h.text(), /Private ABC-1|Comment a/, mode); assert.match(h.text(), mode === 'wrong-target' ? /hidden/ : /unavailable/, mode);
+  }
+});
 test('multiple linked issues require an explicit choice; results remain partial', async () => {
-  const h = harness({ links: { '1': links['1'], '2': [{ sessionId: 's', issueKey: 'XYZ-3', issueId: 'id-3' }] } }); await ready(h);
+  const h = harness({ incomplete: true, links: { '1': links['1'], '2': [{ sessionId: 's', issueKey: 'XYZ-3', issueId: 'id-3' }] } }); await ready(h);
   assert.equal(h.nodes('select').length, 1); assert.doesNotMatch(h.text(), /Private ABC-1|Private XYZ-3/); assert.match(h.text(), /partial result/);
   const select = h.nodes('select')[0]; const option = select.children.find(n => n?.type === 'option' && h.text(n).includes('XYZ-3')); h.select(option.props.value); await settle(); h.render(); assert.match(h.text(), /Private XYZ-3/); assert.equal(h.calls.find(c => c.op === 'issue.read').boardId, '2');
 });
@@ -100,8 +119,8 @@ test('stale or mismatched immutable issue target is never rendered', async () =>
 });
 test('link removal during detail fetch hides the issue', async () => {
   let reads = 0;
-  const h = harness({ command(c) { if (c.op === 'links.read' && c.boardId === '1' && ++reads === 2) return { revision: 2, incomplete: true, links: [] }; } });
-  await ready(h); assert.equal(reads, 2); assert.doesNotMatch(h.text(), /Private ABC-1|Comment a/); assert.match(h.text(), /hidden/);
+  const h = harness({ command(c) { if (c.op === 'links.issue.read' && c.boardId === '1' && ++reads === 1) return { revision: 2, incomplete: false, links: [] }; } });
+  await ready(h); assert.equal(reads, 1); assert.doesNotMatch(h.text(), /Private ABC-1|Comment a/); assert.match(h.text(), /hidden/);
 });
 test('workspace ABA and settings revision changes invalidate old reads', async () => {
   const slow = defer(); let hit = false, revision = 1;
@@ -114,7 +133,7 @@ test('workspace ABA and settings revision changes invalidate old reads', async (
 test('board and comment traversal have bounded work', async () => {
   const many = Array.from({ length: 20 }, (_, n) => String(n + 1));
   const h = harness({ settings: () => ({ ...settings, workspaces: { w: many } }), command(c) { if (c.op === 'issue.comments') return { comments: [comment(c.cursor || '0')], complete: false, nextCursor: String(Number(c.cursor || 0) + 1) }; } });
-  await ready(h); assert.equal(h.calls.filter(c => c.op === 'links.read').length, 7); assert.equal(h.calls.filter(c => c.op === 'issue.comments').length, 10); assert.match(h.text(), /More comments/); assert.match(h.text(), /Some boards could not be checked/);
+  await ready(h); assert.equal(h.calls.filter(c => c.op === 'links.session.read').length, 1); assert.equal(h.calls.filter(c => c.op === 'issue.comments').length, 10); assert.match(h.text(), /More comments/);
 });
 const clickButton = (h, label) => { const button = h.nodes('button').find(node => h.text(node) === label); assert.ok(button, label); button.props.onClick(); };
 test('load more traverses ten pages per explicit batch, retains prior pages, and completes', async () => {
@@ -127,7 +146,7 @@ test('load more revalidates link and scope before displaying new content', async
   for (const scenario of ['removed', 'session', 'hidden']) {
     const slow = defer(); let paging = false, unlinked = false;
     const h = harness({ command(c) {
-      if (c.op === 'links.read' && c.boardId === '1' && unlinked) return { revision: 2, incomplete: true, links: [] };
+      if (c.op === 'links.issue.read' && c.boardId === '1' && unlinked) return { revision: 2, incomplete: false, links: [] };
       if (c.op === 'issue.comments') { const n = Number(c.cursor || 0); if (n === 10 && scenario !== 'removed') { paging = true; return slow.promise; } return { comments: [comment('page-' + n)], complete: false, nextCursor: String(n + 1) }; }
     } });
     await ready(h); if (scenario === 'removed') unlinked = true; clickButton(h, 'Load more'); h.render(); await settle();
@@ -155,7 +174,7 @@ test('link unlink-relink ABA during initial or later batch fails closed', async 
   for (const when of ['initial', 'continuation']) {
     let revision = 1;
     const h = harness({ command(c) {
-      if (c.op === 'links.read' && c.boardId === '1') return { revision, incomplete: true, links: links['1'] };
+      if (c.op === 'links.issue.read' && c.boardId === '1') return { revision, incomplete: false, links: links['1'].filter(link => link.issueId === c.issueId) };
       if (c.op === 'issue.comments') { const n = Number(c.cursor || 0); if ((when === 'initial' && n === 0) || (when === 'continuation' && n === 10)) revision = 3; return { comments: [comment('page-' + n)], complete: false, nextCursor: String(n + 1) }; }
     } });
     await ready(h); if (when === 'continuation') { assert.match(h.text(), /Private ABC-1/); clickButton(h, 'Load more'); h.render(); await settle(); h.render(); }
@@ -180,11 +199,11 @@ test('bounded retry handles read throttling and cancels after scope change', asy
     const originalTimeout = globalThis.setTimeout, timers = []; let attempts = 0;
     globalThis.setTimeout = fn => { timers.push(fn); return 1; };
     try {
-      const h = harness({ command(c) { if (c.op === 'links.read' && c.boardId === '1' && ++attempts === 1) return Promise.reject(Object.assign(Error('throttled'), { code: 'client_rate_limited' })); } });
+      const h = harness({ command(c) { if (c.op === 'links.session.read' && ++attempts === 1) return Promise.reject(Object.assign(Error('throttled'), { code: 'client_rate_limited' })); } });
       h.render(); await settle(); assert.equal(timers.length, 1); if (revoked) { h.mounted.set('other'); h.render(); }
       timers.shift()(); await settle(); h.render(); await settle(); h.render();
       if (revoked) { assert.equal(attempts, 1); assert.doesNotMatch(h.text(), /Private ABC-1/); }
-      else { assert.equal(attempts, 4); assert.match(h.text(), /Private ABC-1/); }
+      else { assert.equal(attempts, 2); assert.match(h.text(), /Private ABC-1/); }
       h.unmount();
     } finally { globalThis.setTimeout = originalTimeout; }
   }

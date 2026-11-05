@@ -20,6 +20,7 @@ function fixture(options = {}) {
     async listBoards() { return { boards: [{ id: '1', name: 'First' }, { id: '2', name: 'Second' }], complete: true, reason: null }; },
     async getBoardOverview(id, options) { return { board: { id, name: 'First' }, columns: [], issues: [], issuesComplete: false, issuesReason: 'explicit_keys_only', keys: options.issueKeys, searchByBoard: options.searchByBoard }; },
     async getIssue(key) { return { key, id: 'id-1', summary: 'Example', description: 'Description', status: { id: '1', key: 'open', display: 'Open' }, assigneeKnown: true, assignee: null, boards: [{ id: '1' }, { id: '99' }], version: 1 }; },
+    async getIssueById(id) { return { id, key: 'ABC-1', boards: [{ id: '1' }] }; },
     async listTransitions() { return [{ id: 'start', display: 'Start', to: { id: '2', key: 'progress', display: 'In progress' } }]; },
     async addComment() { return { id: '123' }; },
     async getComments() { return { comments: [{ id: '1', text: 'hello', version: 1, createdBy: { id: 'u', display: 'User', secret: 'hidden' }, createdAt: '2026-01-01T12:00:00Z', secret: 'hidden' }], complete: false, nextCursor: '1' }; },
@@ -31,7 +32,7 @@ function fixture(options = {}) {
     async createIssue() { return { id: 'issue-1', key: 'DOC-1', version: 1 }; },
     async openSession() {
       const capabilities = new WeakSet();
-      return { identity: this.identity, listBoards: (...args) => this.listBoards(...args), getBoardOverview: (...args) => this.getBoardOverview(...args), getIssue: (...args) => this.getIssue(...args), getComments: (...args) => this.getComments(...args), getComment: (...args) => this.getComment(...args), editComment: (...args) => this.editComment(...args), updateIssue: (...args) => this.updateIssue(...args), listTransitions: (...args) => this.listTransitions(...args), addComment: (...args) => this.addComment(...args), executeTransition: (...args) => this.executeTransition(...args),
+      return { identity: this.identity, listBoards: (...args) => this.listBoards(...args), getBoardOverview: (...args) => this.getBoardOverview(...args), getIssue: (...args) => this.getIssue(...args), getIssueById: (...args) => this.getIssueById(...args), getComments: (...args) => this.getComments(...args), getComment: (...args) => this.getComment(...args), editComment: (...args) => this.editComment(...args), updateIssue: (...args) => this.updateIssue(...args), listTransitions: (...args) => this.listTransitions(...args), addComment: (...args) => this.addComment(...args), executeTransition: (...args) => this.executeTransition(...args),
         getBoardCreationQueue: async (...args) => { const queue = await this.getBoardCreationQueue(...args); if (queue && typeof queue === 'object') capabilities.add(queue); return queue; },
         createIssue: (...args) => { assert.ok(capabilities.has(args[0].queue), 'capability must come from same account session'); return this.createIssue(...args); } };
     },
@@ -618,7 +619,242 @@ async function prepareLinks() {
   return { ...f, links, control };
 }
 const linkRead = (f, workspaceId = 'ws', boardId = '1') => f.service.command({ op: 'links.read', workspaceId, boardId });
+const issueLinkCommand = (overrides = {}) => ({ op: 'links.issue.read', workspaceId: 'ws', boardId: '1', issueKey: 'ABC-1', issueId: 'id-1', ...overrides });
+const issueLinkRead = (f, overrides = {}, signal) => f.service.command(issueLinkCommand(overrides), signal);
 const linkSet = (f, overrides = {}) => f.service.command({ op: 'links.set', workspaceId: 'ws', boardId: '1', issueKey: 'ABC-1', issueId: 'id-1', sessionId: 'session-1', linked: true, expectedRevision: 0, ...overrides });
+const sessionLinkCommand = (overrides = {}) => ({ op: 'links.session.read', workspaceId: 'ws', sessionId: 'session-1', ...overrides });
+const sessionLinkRead = (f, overrides = {}, signal) => f.service.command(sessionLinkCommand(overrides), signal);
+
+test('session links use exact IDs without board search, preserve memberships and project only verified fields', async () => {
+  const f = await prepareLinks(); await linkSet(f);
+  await f.service.command({ op: 'boards.list' }); await select(f.service, 2, ['2', '1']);
+  const storeScope = { accountScope: 'a'.repeat(64), workspaceId: 'ws', workspaceCreatedAt: 'one' };
+  f.links.rows.push({ ...storeScope, issueId: 'id-2', sessionId: 'session-1' },
+    { ...storeScope, issueId: 'id-3', sessionId: 'foreign' },
+    { ...storeScope, accountScope: 'b'.repeat(64), issueId: 'id-4', sessionId: 'session-1' },
+    { ...storeScope, workspaceCreatedAt: 'old', issueId: 'id-5', sessionId: 'session-1' });
+  f.tracker.getBoardOverview = () => { throw Error('search must not run'); };
+  const ids = [];
+  f.tracker.getIssueById = async (id, { signal }) => {
+    signal.throwIfAborted(); ids.push(id);
+    return { id, key: 'ABC-1', boards: [{ id: '1' }, { id: '2' }], summary: 'secret' };
+  };
+  f.links.calls.length = 0;
+  assert.deepEqual(await sessionLinkRead(f), { revision: 1, incomplete: false, links: [
+    { issueId: 'id-1', issueKey: 'ABC-1', sessionId: 'session-1', boardId: '2' },
+    { issueId: 'id-2', issueKey: 'ABC-1', sessionId: 'session-1', boardId: '2' },
+  ] });
+  assert.deepEqual(ids, ['id-1', 'id-2', 'id-1', 'id-2']);
+  assert.deepEqual(f.links.calls, [['read', storeScope], ['read', storeScope]]);
+});
+
+test('session links require strict command, live member, active binding and enabled selected boards', async () => {
+  const f = await prepareLinks(); await linkSet(f); let lookups = 0;
+  f.tracker.getIssueById = async () => { lookups++; return {}; };
+  for (const c of [sessionLinkCommand({ extra: 1 }), sessionLinkCommand({ issueId: 'id-1' }), sessionLinkCommand({ sessionId: ' bad' }),
+    Object.defineProperty(sessionLinkCommand(), 'sessionId', { enumerable: true, get: () => 'session-1' })]) await rejected(f.service.command(c), 'invalid');
+  await rejected(sessionLinkRead(f, { workspaceId: 'missing' }), 'workspace_not_found');
+  await rejected(sessionLinkRead(f, { sessionId: 'missing' }), 'session_not_in_workspace');
+  f.registry.archivedSessionIds.push('session-1');
+  await rejected(sessionLinkRead(f), 'session_not_in_workspace');
+  f.registry.archivedSessionIds = [];
+  f.registry.get('ws').archivedSessionIds = ['session-1'];
+  await rejected(sessionLinkRead(f), 'session_not_in_workspace');
+  f.registry.get('ws').archivedSessionIds = [];
+  await select(f.service, 2, []);
+  await rejected(sessionLinkRead(f), 'board_not_selected');
+  assert.equal(lookups, 0);
+  const noLinks = fixture(); await config(noLinks.service); await noLinks.service.command({ op: 'boards.list' }); await select(noLinks.service);
+  await rejected(sessionLinkRead(noLinks), 'unavailable');
+});
+
+test('session links mark partial on unavailable or invalid individual issues without revealing them', async () => {
+  const f = await prepareLinks();
+  const scope = { accountScope: 'a'.repeat(64), workspaceId: 'ws', workspaceCreatedAt: 'one' };
+  for (let i = 1; i <= 8; i++) f.links.rows.push({ ...scope, issueId: `id-${i}`, sessionId: 'session-1' });
+  const error = code => Object.assign(new Error('secret'), { name: 'TrackerError', code });
+  f.tracker.getIssueById = async id => {
+    if (id === 'id-1') throw error('forbidden');
+    if (id === 'id-2') throw error('not_found');
+    if (id === 'id-3') return { id, key: 'ABC-3', boards: [{ id: '2' }] };
+    if (id === 'id-4') return { id: 'wrong', key: 'ABC-4', boards: [{ id: '1' }] };
+    if (id === 'id-5') return { id, key: 'abc-5', boards: [{ id: '1' }] };
+    if (id === 'id-6') return { id, key: 'ABC-6', boards: [{ id: '1' }, {}] };
+    if (id === 'id-7') return { id, key: 'ABC-7', boards: [] };
+    return { id, key: 'ABC-8', boards: [{ id: '1' }] };
+  };
+  assert.deepEqual(await sessionLinkRead(f), { revision: 0, incomplete: true, links: [{ issueId: 'id-8', issueKey: 'ABC-8', sessionId: 'session-1', boardId: '1' }] });
+  for (const code of ['unauthorized', 'invalid_credentials', 'network_error', 'rate_limited']) {
+    f.tracker.getIssueById = async () => { throw error(code); };
+    await rejected(sessionLinkRead(f), code);
+  }
+});
+
+test('session links cap lookups and concurrency while preserving deterministic order', async () => {
+  const f = await prepareLinks(), scope = { accountScope: 'a'.repeat(64), workspaceId: 'ws', workspaceCreatedAt: 'one' };
+  for (let i = 0; i < 101; i++) f.links.rows.push({ ...scope, issueId: `id-${String(i).padStart(3, '0')}`, sessionId: 'session-1' });
+  let calls = 0, active = 0, maxActive = 0;
+  f.tracker.getIssueById = async id => {
+    active++; maxActive = Math.max(maxActive, active); assert.ok(active <= 5); calls++;
+    await new Promise(resolve => setImmediate(resolve));
+    active--; return { id, key: 'ABC-1', boards: [{ id: '1' }] };
+  };
+  const result = await sessionLinkRead(f);
+  assert.equal(maxActive, 5); assert.equal(active, 0);
+  assert.equal(calls, 200); assert.equal(result.links.length, 100); assert.equal(result.incomplete, true);
+  assert.equal(result.links[0].issueId, 'id-000'); assert.equal(result.links.at(-1).issueId, 'id-099');
+});
+
+test('session links revalidate earlier results after a deferred board change', async () => {
+  const f = await prepareLinks(), scope = { accountScope: 'a'.repeat(64), workspaceId: 'ws', workspaceCreatedAt: 'one' };
+  f.links.rows.push({ ...scope, issueId: 'id-1', sessionId: 'session-1' }, { ...scope, issueId: 'id-2', sessionId: 'session-1' });
+  let started, release, revoked = false;
+  const ready = new Promise(resolve => { started = resolve; });
+  f.tracker.getIssueById = async id => {
+    if (id === 'id-2' && !revoked) await new Promise(resolve => { release = resolve; started(); });
+    return { id, key: 'ABC-1', boards: [{ id: id === 'id-1' && revoked ? '2' : '1' }] };
+  };
+  const pending = sessionLinkRead(f); await ready; revoked = true; release();
+  assert.deepEqual(await pending, { revision: 0, incomplete: true, links: [{ issueId: 'id-2', issueKey: 'ABC-1', sessionId: 'session-1', boardId: '1' }] });
+});
+
+test('session links drain concurrent lookups after a fatal error and dispatch no more', async () => {
+  const f = await prepareLinks(), scope = { accountScope: 'a'.repeat(64), workspaceId: 'ws', workspaceCreatedAt: 'one' };
+  for (let i = 0; i < 10; i++) f.links.rows.push({ ...scope, issueId: `id-${i}`, sessionId: 'session-1' });
+  let started, active = 0, calls = 0, done = false;
+  const ready = new Promise(resolve => { started = resolve; });
+  // Every in-flight deferred read shares one gate.
+  let unblock; const gate = new Promise(resolve => { unblock = resolve; });
+  f.tracker.getIssueById = async id => {
+    calls++; active++;
+    if (id === 'id-0') { active--; throw Object.assign(new Error('private'), { name: 'TrackerError', code: 'unauthorized' }); }
+    started(); await gate; active--;
+    return { id, key: 'ABC-1', boards: [{ id: '1' }] };
+  };
+  const pending = sessionLinkRead(f).finally(() => { done = true; });
+  await ready; await new Promise(resolve => setImmediate(resolve));
+  assert.equal(done, false); assert.equal(calls, 5); assert.equal(active, 4);
+  unblock(); await rejected(pending, 'unauthorized'); assert.equal(active, 0); assert.equal(calls, 5);
+});
+
+test('session links fail closed on concurrent scope, membership or local revision changes', async () => {
+  for (const change of ['identity', 'scope', 'revision', 'workspace', 'removed', 'archived', 'unlink-relink', 'other-pair', 'abort']) {
+    const f = await prepareLinks(); await linkSet(f); let release, started;
+    const ready = new Promise(resolve => { started = resolve; }), controller = new AbortController();
+    let lookups = 0;
+    f.tracker.getIssueById = id => ++lookups === 1
+      ? new Promise(resolve => { release = () => resolve({ id, key: 'ABC-1', boards: [{ id: '1' }] }); started(); })
+      : Promise.resolve({ id, key: 'ABC-1', boards: [{ id: '1' }] });
+    const pending = sessionLinkRead(f, {}, controller.signal); await ready;
+    const scope = { accountScope: 'a'.repeat(64), workspaceId: 'ws', workspaceCreatedAt: 'one' };
+    if (change === 'identity') f.tracker.identity = 'other';
+    if (change === 'scope') f.control.scope = 'b'.repeat(64);
+    if (change === 'revision') { const s = f.settings.read(); f.settings.compareAndSet(s.revision, s.settings); }
+    if (change === 'workspace') f.registry.get('ws').createdAt = 'new';
+    if (change === 'removed') f.registry.get('ws').sessionIds = [];
+    if (change === 'archived') f.registry.archivedSessionIds.push('session-1');
+    if (change === 'unlink-relink') {
+      f.links.mutate({ ...scope, issueId: 'id-1', sessionId: 'session-1', linked: false, expectedRevision: 1 });
+      f.links.mutate({ ...scope, issueId: 'id-1', sessionId: 'session-1', linked: true, expectedRevision: 2 });
+    }
+    if (change === 'other-pair') f.links.mutate({ ...scope, issueId: 'other', sessionId: 'session-1', linked: true, expectedRevision: 1 });
+    if (change === 'abort') controller.abort();
+    release(); await assert.rejects(pending, change);
+  }
+});
+
+test('exact issue links bypass search, project current members and retain global CAS revision', async () => {
+  const f = await prepareLinks();
+  await linkSet(f);
+  f.registry.get('ws').sessionIds.push('archived', 'other');
+  f.registry.archivedSessionIds.push('archived');
+  const scope = { accountScope: 'a'.repeat(64), workspaceId: 'ws', workspaceCreatedAt: 'one' };
+  f.links.rows.push({ ...scope, issueId: 'id-1', sessionId: 'archived' },
+    { ...scope, issueId: 'id-1', sessionId: 'removed' }, { ...scope, issueId: 'id-2', sessionId: 'other' },
+    { ...scope, accountScope: 'b'.repeat(64), issueId: 'id-1', sessionId: 'other' },
+    { ...scope, workspaceCreatedAt: 'old', issueId: 'id-1', sessionId: 'other' });
+  f.tracker.getBoardOverview = async id => ({ board: { id }, issues: [], issuesComplete: false });
+  assert.deepEqual(await linkRead(f), { revision: 1, links: [], incomplete: true });
+  f.tracker.getBoardOverview = () => { throw Error('search must not run'); };
+  assert.deepEqual(await issueLinkRead(f), { revision: 1, incomplete: false, links: [
+    { issueId: 'id-1', issueKey: 'ABC-1', sessionId: 'session-1' },
+    { issueId: 'id-1', issueKey: 'ABC-1', sessionId: 'archived' },
+  ] });
+  await rejected(linkSet(f, { expectedRevision: 0, sessionId: 'other' }), 'conflict');
+  assert.deepEqual(await linkSet(f, { expectedRevision: 1, sessionId: 'other' }), { revision: 2 });
+  assert.equal((await issueLinkRead(f)).revision, 2);
+});
+
+test('exact issue link commands enforce strict shape and live exact authorization', async () => {
+  const f = await prepareLinks(); await linkSet(f); f.links.calls.length = 0;
+  for (const cmd of [issueLinkCommand({ extra: 1 }), issueLinkCommand({ issueId: '../bad' }),
+    issueLinkCommand({ issueKey: 'abc-1' }), issueLinkCommand({ boardId: '2' }),
+    Object.defineProperty(issueLinkCommand(), 'issueId', { enumerable: true, get: () => 'id-1' })]) {
+    await rejected(f.service.command(cmd), cmd.boardId === '2' ? 'board_not_selected' : 'invalid');
+  }
+  for (const [value, code] of [
+    [{ key: 'ABC-1', id: 'id-2', boards: [{ id: '1' }] }, 'conflict'],
+    [{ key: 'ABC-2', id: 'id-1', boards: [{ id: '1' }] }, 'issue_not_in_selected_boards'],
+    [{ key: 'ABC-1', id: 'id-1', boards: [{ id: '2' }] }, 'issue_not_in_selected_boards'],
+    [{ key: 'ABC-1', boards: [{ id: '1' }] }, 'issue_id_required'],
+  ]) { f.tracker.getIssue = async () => value; await rejected(issueLinkRead(f), code); }
+  assert.equal(f.links.calls.length, 0);
+});
+
+test('exact issue links revalidate after local read and suppress removed sessions', async () => {
+  for (const change of ['deleted', 'revoked', 'reused', 'identity', 'scope', 'revision', 'workspace', 'removed', 'abort']) {
+    const f = await prepareLinks(); await linkSet(f); let calls = 0, started, release;
+    const controller = new AbortController(), ready = new Promise(resolve => { started = resolve; });
+    f.tracker.getIssue = key => {
+      calls++;
+      if (calls === 1) return Promise.resolve({ key, id: 'id-1', boards: [{ id: '1' }] });
+      return new Promise((resolve, reject) => { release = () => change === 'deleted'
+        ? reject(Object.assign(new Error('secret'), { name: 'TrackerError', code: 'not_found' }))
+        : resolve({ key, id: change === 'reused' ? 'id-2' : 'id-1', boards: [{ id: change === 'revoked' ? '2' : '1' }] }); started(); });
+    };
+    const pending = issueLinkRead(f, {}, controller.signal); await ready;
+    if (change === 'identity') f.tracker.identity = 'other';
+    if (change === 'scope') f.control.scope = 'b'.repeat(64);
+    if (change === 'revision') { const s = f.settings.read(); f.settings.compareAndSet(s.revision, s.settings); }
+    if (change === 'workspace') f.registry.get('ws').createdAt = 'new';
+    if (change === 'removed') f.registry.get('ws').sessionIds = [];
+    if (change === 'abort') controller.abort();
+    release();
+    if (change === 'removed') assert.deepEqual(await pending, { revision: 1, incomplete: false, links: [] });
+    else await assert.rejects(pending, change);
+    assert.equal(f.links.calls.filter(([kind]) => kind === 'mutate').length, 1, change);
+  }
+});
+
+test('exact issue links reject a concurrent unlink or unlink-relink after snapshot', async () => {
+  for (const relink of [false, true]) {
+    const f = await prepareLinks(); await linkSet(f); let calls = 0, started, release;
+    const ready = new Promise(resolve => { started = resolve; });
+    f.tracker.getIssue = key => ++calls === 1
+      ? Promise.resolve({ key, id: 'id-1', boards: [{ id: '1' }] })
+      : new Promise(resolve => { release = () => resolve({ key, id: 'id-1', boards: [{ id: '1' }] }); started(); });
+    const pending = issueLinkRead(f); await ready;
+    const scope = { accountScope: 'a'.repeat(64), workspaceId: 'ws', workspaceCreatedAt: 'one', issueId: 'id-1', sessionId: 'session-1' };
+    f.links.mutate({ ...scope, linked: false, expectedRevision: 1 });
+    if (relink) f.links.mutate({ ...scope, linked: true, expectedRevision: 2 });
+    release(); await rejected(pending, 'conflict');
+  }
+});
+
+test('exact issue link reads bound store output and sanitize failures', async () => {
+  const f = await prepareLinks();
+  for (const value of [{ revision: -1, links: [] }, { revision: 0, links: Array(5001).fill({ issueId: 'id-1', sessionId: 's' }) },
+    { revision: 0, links: [{ issueId: 'id-1', sessionId: 's' }, { issueId: 'id-1', sessionId: 's' }] }]) {
+    f.links.read = () => value;
+    await rejected(issueLinkRead(f), 'internal');
+  }
+  f.links.read = () => { throw Error('private'); };
+  assert.deepEqual(await body(await post(f.service, issueLinkCommand())), { status: 500, value: { error: { code: 'internal' } } });
+  f.tracker.getIssue = async () => { throw Object.assign(new Error('private'), { name: 'TrackerError', code: 'forbidden' }); };
+  assert.deepEqual(await body(await post(f.service, issueLinkCommand())), { status: 403, value: { error: { code: 'forbidden' } } });
+  f.tracker.getIssue = async () => { throw Error('private'); };
+  assert.deepEqual(await body(await post(f.service, issueLinkCommand())), { status: 500, value: { error: { code: 'internal' } } });
+});
 
 test('links join only confirmed immutable IDs and workspace sessions', async () => {
   const f = await prepareLinks();

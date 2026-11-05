@@ -77,7 +77,7 @@ function harness(sessionFixture, initialCommands = []) {
       if (sessionFixture?.domRefs) {
         function attach(node) {
           if (!node || typeof node !== 'object') return;
-          if (node.props?.ref) node.props.ref.current = { isConnected: true, focus() { document.activeElement = { type: node.type, props: node.props }; } };
+          if (node.props?.ref) node.props.ref.current = { isConnected: true, style: {}, scrollWidth: 900, scrollLeft: 0, children: [], focus() { document.activeElement = { type: node.type, props: node.props }; } };
           node.children?.forEach(attach);
         }
         attach(tree);
@@ -131,6 +131,34 @@ function harness(sessionFixture, initialCommands = []) {
 async function ready() {
   const h = harness(); h.mount(); assert.equal(h.requests[0].options.method, 'GET'); await h.resolve(0, base()); await h.choose(); return h;
 }
+
+test('local empty lanes are hidden after filters and remain editable', async () => {
+  const h = harness(); const data = base(); data.boards[0].statuses.push({ id: 'empty', name: 'Empty', position: 1 });
+  h.mount(); await h.resolve(0, data); await h.choose();
+  assert.deepEqual(h.nodes('section').filter(n => n.props.className === 'dsh-board-column').map(n => n.props['aria-label']), ['Open']);
+  assert.ok(h.button('manageStatuses: Empty')); h.change(h.nodes('input').find(n => n.props.type === 'search'), 'not present');
+  assert.equal(h.nodes('section').filter(n => n.props.className === 'dsh-board-column').length, 0); assert.ok(h.nodes('p').some(n => h.text(n) === 'noResults'));
+  h.click('manageStatuses: Empty'); assert.equal(h.nodes('input').find(n => n.props.value === 'Empty').props.value, 'Empty'); h.unmount();
+});
+
+test('top and bottom board scroll areas synchronize without duplicating cards', async () => {
+  const h = harness({ domRefs: true }); h.mount(); await h.resolve(0, base()); await h.choose();
+  const top = h.nodes('div').find(n => n.props.className === 'dsh-board-scroll-top');
+  const board = h.nodes('div').find(n => n.props.className === 'dsh-board-kanban');
+  assert.equal(top.props.tabIndex, 0); assert.equal(top.props.role, 'region'); assert.equal(top.props['aria-label'], 'scrollBoardTop');
+  top.props.onScroll({ currentTarget: { scrollLeft: 123 } }); assert.equal(board.props.ref.current.scrollLeft, 123);
+  board.props.onScroll({ currentTarget: { scrollLeft: 42 } }); assert.equal(top.props.ref.current.scrollLeft, 42);
+  assert.equal(h.nodes('article').length, 1); h.unmount();
+});
+
+test('drawer separator clamps, supports keyboard and preserves width', async () => {
+  const h = await ready(); h.click('addTask');
+  let handle = h.nodes('div').find(n => n.props.role === 'separator'); assert.equal(handle.props['aria-orientation'], 'vertical'); assert.equal(handle.props['aria-valuemin'], 320);
+  handle.props.onKeyDown({ key: 'End', preventDefault() {} }); handle = h.nodes('div').find(n => n.props.role === 'separator'); assert.equal(handle.props['aria-valuenow'], 1024);
+  handle.props.onKeyDown({ key: 'Home', preventDefault() {} }); handle = h.nodes('div').find(n => n.props.role === 'separator'); assert.equal(handle.props['aria-valuenow'], 320);
+  handle.props.onKeyDown({ key: 'ArrowLeft', preventDefault() {} }); h.click('cancel'); h.click('addTask');
+  assert.equal(h.nodes('div').find(n => n.props.role === 'separator').props['aria-valuenow'], 340); h.unmount();
+});
 
 test('board command is session-scoped, effect-owned and fails on duplicate registration', () => {
   const h = harness();
@@ -314,7 +342,7 @@ const trackerSettings = (revision = 0, configured = false, workspaces = {}, need
 const issueFixture = { id: 'issue-1', key: 'A-1', summary: '<script>unsafe</script>', description: 'original', assigneeKnown: true, assignee: { id: 'user-1', display: 'User' }, status: { id: '1', key: 'open', display: 'Open' }, version: 5 };
 const issueComments = { comments: [{ id: 'c1', text: '<img>comment', version: 1, createdBy: { id: 'u', display: 'Author' }, createdAt: '2026-01-01' }], complete: true, nextCursor: null };
 const issueTransitions = [{ id: 'start', display: 'Start', to: { id: '2', key: 'doing', display: 'Doing' } }];
-const issueLinks = { revision: 1, links: [{ issueKey: 'A-1', issueId: 'issue-1', sessionId: 'session-1' }], incomplete: true };
+const issueLinks = { revision: 1, links: [{ issueKey: 'A-1', issueId: 'issue-1', sessionId: 'session-1' }], incomplete: false };
 const trackerStatuses = {
   open: { id: '1', key: 'open', display: 'Open' },
   shared: { id: '3', key: 'shared', display: 'Shared' },
@@ -338,7 +366,9 @@ async function trackerIssueReady({ editing = true, origin = null, domRefs = fals
   h.nodes('button').find(n => n.props['aria-label'] === 'issueDetails: <script>unsafe</script>').props.onClick();
   if (domRefs) h.nodes('aside');
   assert.deepEqual(h.requests.slice(4).map(r => JSON.parse(r.options.body).op), ['issue.read']);
-  await h.resolve(4, issue); await h.resolve(5, comments); await h.resolve(6, issueTransitions); await h.resolve(7, links); await h.resolve(8, issue);
+  await h.resolve(4, issue); await h.resolve(5, comments); await h.resolve(6, issueTransitions);
+  assert.deepEqual(JSON.parse(h.requests[7].options.body), { op: 'links.issue.read', workspaceId: 'w', boardId: '1', issueKey: 'A-1', issueId: 'issue-1' });
+  await h.resolve(7, links); await h.resolve(8, issue);
   if (editing) h.click('edit');
   return h;
 }
@@ -487,9 +517,8 @@ test('Tracker drawer session opens directly and modified without board links', a
 });
 
 test('Tracker drawer marks unavailable links and hides foreign or mismatched relations', async () => {
-  const links = { revision: 1, incomplete: true, links: [
+  const links = { revision: 1, incomplete: false, links: [
     ...['session-1', 'archived', 'missing', 'foreign'].map(sessionId => ({ issueKey: 'A-1', issueId: 'issue-1', sessionId })),
-    { issueKey: 'A-2', issueId: 'issue-1', sessionId: 'wrong-key' }, { issueKey: 'A-1', issueId: 'old-id', sessionId: 'wrong-id' },
   ] };
   const h = await trackerIssueReady({ editing: false, links, fixture: { ids: ['session-1', 'archived', 'foreign', 'wrong-key', 'wrong-id'], archived: ['archived'], workspaces: [{ workspaceId: 'w', title: 'Workspace', sessionIds: ['session-1', 'archived', 'missing', 'wrong-key', 'wrong-id'] }, { workspaceId: 'w2', title: 'Other', sessionIds: ['foreign'] }] } });
   let rows = h.nodes('li').filter(n => n.props.className === 'dsh-board-tracker-session');
@@ -499,6 +528,19 @@ test('Tracker drawer marks unavailable links and hides foreign or mismatched rel
   rows = h.nodes('li').filter(n => n.props.className === 'dsh-board-tracker-session');
   assert.ok(rows.every(n => h.text(n).endsWith(' — sessionLoading'))); assert.equal(drawerSessionButton(h), undefined);
   assert.deepEqual(h.openedSessions, []); h.unmount();
+});
+
+test('Tracker targeted links reject partial, foreign, duplicate and malformed sets', async () => {
+  for (const links of [
+    { ...issueLinks, incomplete: true },
+    { ...issueLinks, links: [...issueLinks.links, issueLinks.links[0]] },
+    { ...issueLinks, links: [{ ...issueLinks.links[0], issueKey: 'A-2' }] },
+    { ...issueLinks, links: [{ ...issueLinks.links[0], issueId: 'old' }] },
+    { ...issueLinks, links: [{ ...issueLinks.links[0], sessionId: '' }] },
+  ]) {
+    const h = await trackerIssueReady({ editing: false, links });
+    assert.equal(drawerSessionButton(h), undefined); assert.ok(!h.nodes('button').some(n => h.text(n) === 'issueLinkSave')); h.unmount();
+  }
 });
 
 test('Tracker drawer stale handler rechecks membership, catalogs, scope and generations', async () => {
@@ -949,7 +991,7 @@ test('Tracker whales join only matching immutable issue IDs', async () => {
   assert.ok(!h.nodes('button').some(n => n.props['aria-label'] === 'openSession: <script>unsafe</script>'));
   assert.ok(h.nodes('button').some(n => n.props['aria-label'] === 'columnSessions: Open — 0'));
   h.click('trackerRefreshBoard'); await h.resolve(5, trackerSettings(1, true, { w: ['1'] })); await h.resolve(6, trackerBoard); h.nodes('main'); [...h.timeouts][0](); await settle();
-  await h.resolve(7, issueLinks); const whale = h.nodes('button').find(n => n.props['aria-label'] === 'openSession: <script>unsafe</script>'); assert.ok(whale); whale.props.onClick(); assert.deepEqual(h.openedSessions, ['session-1']);
+  await h.resolve(7, { ...issueLinks, incomplete: true }); const whale = h.nodes('button').find(n => n.props['aria-label'] === 'openSession: <script>unsafe</script>'); assert.ok(whale); whale.props.onClick(); assert.deepEqual(h.openedSessions, ['session-1']);
   whale.props.onClick({ ctrlKey: true }); whale.props.onClick({ metaKey: true }); whale.props.onAuxClick(middle);
   assert.equal(h.openedTabs.length, 3); assert.ok(h.openedTabs.every(([url]) => url === 'http://localhost/app/#dsh-board-session-v1:w:session-1'));
   h.panelInfo.set({ activePanelId: null }); whale.props.onClick(); whale.props.onClick({ ctrlKey: true }); assert.deepEqual(h.openedSessions, ['session-1']); assert.equal(h.openedTabs.length, 3); h.unmount();
@@ -1000,11 +1042,10 @@ test('Tracker configuration, explicit workspace selection, and read-only partial
   assert.deepEqual(JSON.parse(h.requests[7].options.body), { op: 'board.read', workspaceId: 'w', boardId: '1', issueKeys: [] });
   await h.resolve(7, trackerBoard);
   const columns = h.nodes('section').filter(n => n.props.className === 'dsh-board-column');
-  assert.deepEqual(columns.map(n => n.props['aria-label']), ['Open', 'Shared', 'Doing', 'Unknown']);
+  assert.deepEqual(columns.map(n => n.props['aria-label']), ['Open', 'Shared', 'Unknown']);
   assert.ok(h.text(columns[0]).includes('<script>unsafe</script>'));
   assert.ok(h.text(columns[1]).includes('Ambiguous'), 'shared status appears once even in multiple source columns');
-  assert.ok(!h.text(columns[2]).includes('Ambiguous') && !h.text(columns[2]).includes('Unknown'), 'configured Doing status remains empty');
-  assert.ok(h.text(columns[3]).includes('Unknown'), 'status absent from configuration uses its actual identity');
+  assert.ok(h.text(columns[2]).includes('Unknown'), 'status absent from configuration uses its actual identity');
   assert.equal(h.nodes('article').length, 3, 'ambiguous statuses never duplicate issues');
   assert.ok(h.nodes('p').some(n => h.text(n).includes('trackerPartial')));
   assert.ok(!h.nodes('button').some(n => ['addTask', 'addStatus', 'linkCurrent'].includes(h.text(n))));
@@ -1059,13 +1100,12 @@ test('Tracker renders configured and issue-only statuses rather than source colu
     h.mount(); await h.resolve(0, base()); await h.resolve(1, trackerSettings(1, true, { w: ['1'] }));
     h.tile('tracker #1 — Workspace — tracker').props.onClick(); await h.resolve(2, trackerSettings(1, true, { w: ['1'] })); await h.resolve(3, board);
     const lanes = h.nodes('section').filter(n => n.props.className === 'dsh-board-column');
-    assert.deepEqual(lanes.map(n => n.props['aria-label']), ['First', 'Second', 'Empty', 'Observed']);
-    assert.deepEqual(lanes.map(n => n.props.key), ['one', 'two', 'empty', 'observed']);
-    for (const [index, title] of [[0, 'First issue'], [1, 'Second issue'], [3, 'Observed issue']]) {
+    assert.deepEqual(lanes.map(n => n.props['aria-label']), ['First', 'Second', 'Observed']);
+    assert.deepEqual(lanes.map(n => n.props.key), ['one', 'two', 'observed']);
+    for (const [index, title] of [[0, 'First issue'], [1, 'Second issue'], [2, 'Observed issue']]) {
       assert.ok(h.text(lanes[index]).includes(title));
       assert.equal(lanes.filter(lane => h.text(lane).includes(title)).length, 1);
     }
-    assert.ok(!h.text(lanes[2]).includes('issue'));
     assert.equal(h.nodes('article').length, 3);
     assert.ok(!h.nodes('p').some(n => ['trackerStatusPartial', 'trackerError'].includes(h.text(n))));
   } finally { h.unmount(); }
@@ -1125,7 +1165,7 @@ test('Tracker linked filter stays clearable when board links become unavailable'
     h.mount(); await h.resolve(0, base()); await h.resolve(1, trackerSettings(1, true, { w: ['1'] }));
     h.tile('tracker #1 — Workspace — tracker').props.onClick(); await h.resolve(2, trackerSettings(1, true, { w: ['1'] })); await h.resolve(3, trackerBoard);
     h.nodes('main'); const loadLinks = [...h.timeouts][0]; assert.ok(loadLinks); loadLinks(); await settle();
-    assert.equal(JSON.parse(h.requests[4].options.body).op, 'links.read'); await h.resolve(4, issueLinks);
+    assert.equal(JSON.parse(h.requests[4].options.body).op, 'links.read'); await h.resolve(4, { ...issueLinks, incomplete: true });
     h.button('columnSessions: Open — 1').props.onClick();
     assert.equal(h.button('columnSessions: Open — 1').props['aria-pressed'], true);
     assert.ok(h.nodes('p').some(n => h.text(n).includes('withSession')));

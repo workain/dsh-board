@@ -13,6 +13,8 @@ const TRANSITION = /^[A-Za-z0-9_-]{1,128}$/;
 const validCommentCursor = value => typeof value === 'string' && /^(?:0|[1-9][0-9]{0,15})$/.test(value) && Number.isSafeInteger(Number(value));
 const TOOL_SCOPE_TTL_MS = 60_000;
 const MAX_COMMENT = 48 * 1024;
+const MAX_SESSION_LINK_LOOKUPS = 100;
+const SESSION_LINK_CONCURRENCY = 5;
 
 class ServiceError extends Error {
   constructor(code, status) { super(code); this.code = code; this.status = status; }
@@ -78,6 +80,12 @@ function checkCommand(c) {
       shape(c, ['op', 'workspaceId', 'boardId', 'issueKeys']); workspaceId(c.workspaceId); boardId(c.boardId); issueKeys(c.issueKeys); break;
     case 'links.read':
       shape(c, ['op', 'workspaceId', 'boardId']); workspaceId(c.workspaceId); boardId(c.boardId); break;
+    case 'links.session.read':
+      shape(c, ['op', 'workspaceId', 'sessionId']); workspaceId(c.workspaceId); sessionId(c.sessionId); break;
+    case 'links.issue.read':
+      shape(c, ['op', 'workspaceId', 'boardId', 'issueKey', 'issueId']);
+      workspaceId(c.workspaceId); boardId(c.boardId); issueKey(c.issueKey);
+      if (typeof c.issueId !== 'string' || !TRANSITION.test(c.issueId)) invalid(); break;
     case 'links.set':
       shape(c, ['op', 'workspaceId', 'boardId', 'issueKey', 'issueId', 'sessionId', 'linked', 'expectedRevision']);
       workspaceId(c.workspaceId); boardId(c.boardId); issueKey(c.issueKey); sessionId(c.sessionId); revision(c.expectedRevision);
@@ -251,7 +259,7 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
       return { revision: nextRevision, configured: true, orgType: c.orgType, workspaces: {}, needsReselect: [] };
     }
     configured(state);
-    if (c.op === 'links.read' || c.op === 'links.set') return linksCommand(c, signal, state);
+    if (c.op === 'links.read' || c.op === 'links.issue.read' || c.op === 'links.session.read' || c.op === 'links.set') return linksCommand(c, signal, state);
     if (c.op.startsWith('issue.')) {
       const scope = makeWorkspaceScope({ workspaceId: c.workspaceId, boardId: c.boardId, signal }, false);
       const issueKey = c.issueKey;
@@ -342,15 +350,20 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
     if (!links) fail('unavailable', 503);
     const wid = c.workspaceId, incarnation = workspace(wid), binding = bindings.get(wid);
     const selected = initial.settings.workspaces[wid];
-    if (!Array.isArray(selected) || !selected.includes(c.boardId)) fail('board_not_selected', 403);
+    const sessionRead = c.op === 'links.session.read';
+    if (!Array.isArray(selected) || (sessionRead ? !selected.length : !selected.includes(c.boardId))) fail('board_not_selected', 403);
+    if (sessionRead) boardIds(selected);
     if (!binding || binding.incarnation !== incarnation || binding.revision !== initial.revision) fail('needs_reselect', 409);
-    const identity = binding.identity;
+    const identity = binding.identity, selectedScope = binding.accountScope;
+    const selectedBoards = [...selected];
     function check() {
       signal.throwIfAborted();
       const item = workspaceRegistry.get(wid), state = current();
       if (!item || item.createdAt !== incarnation || state.revision !== initial.revision || !state.settings.connection ||
-          bindings.get(wid) !== binding || binding.revision !== initial.revision || binding.incarnation !== incarnation || binding.identity !== identity ||
-          !Array.isArray(state.settings.workspaces[wid]) || !state.settings.workspaces[wid].includes(c.boardId)) fail('needs_reselect', 409);
+          bindings.get(wid) !== binding || binding.revision !== initial.revision || binding.incarnation !== incarnation || binding.identity !== identity || binding.accountScope !== selectedScope ||
+          !Array.isArray(state.settings.workspaces[wid]) || (sessionRead
+            ? state.settings.workspaces[wid].length !== selectedBoards.length || selectedBoards.some((id, index) => state.settings.workspaces[wid][index] !== id)
+            : !state.settings.workspaces[wid].includes(c.boardId))) fail('needs_reselect', 409);
       return item;
     }
     function member(item, sid, linking) {
@@ -362,13 +375,151 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
     async function liveAccount() {
       check();
       const account = await session(signal);
+      check();
+      if (account.identity !== identity) revokeAccount();
       const scope = await accountScope(account, signal);
       check();
-      if (account.identity !== identity || scope !== binding.accountScope) revokeAccount();
+      if (scope !== binding.accountScope) revokeAccount();
       return account;
     }
+    if (sessionRead) member(check(), c.sessionId, true);
     const account = await liveAccount();
     const scope = binding.accountScope;
+    if (sessionRead) {
+      member(check(), c.sessionId, true);
+      if (typeof account.getIssueById !== 'function') fail('invalid_tracker_response', 502);
+      const storeScope = { accountScope: scope, workspaceId: wid, workspaceCreatedAt: incarnation };
+      function snapshot() {
+        let result;
+        try { result = links.read(storeScope); } catch { fail('internal', 500); }
+        if (!result || !Number.isSafeInteger(result.revision) || result.revision < 0 || !Array.isArray(result.links) || result.links.length > 5000) fail('internal', 500);
+        const pairs = new Set(), issueIds = [];
+        for (const link of result.links) {
+          if (!link || typeof link.issueId !== 'string' || !TRANSITION.test(link.issueId) || !validSessionId(link.sessionId)) fail('internal', 500);
+          const pair = JSON.stringify([link.issueId, link.sessionId]);
+          if (pairs.has(pair)) fail('internal', 500);
+          pairs.add(pair);
+          if (link.sessionId === c.sessionId) issueIds.push(link.issueId);
+        }
+        return { revision: result.revision, pairs, issueIds };
+      }
+      const before = snapshot();
+      member(check(), c.sessionId, true);
+      // Stable order makes the cap and board choice independent of store ordering.
+      before.issueIds.sort();
+      let incomplete = before.issueIds.length > MAX_SESSION_LINK_LOOKUPS;
+      async function resolveIssue(id) {
+        member(check(), c.sessionId, true);
+        let issue;
+        try { issue = await raceAbort(() => account.getIssueById(id, { signal }), signal); }
+        catch (error) {
+          member(check(), c.sessionId, true);
+          // Verify credentials even on failures; a principal change is not partial.
+          await liveAccount();
+          member(check(), c.sessionId, true);
+          if (error?.name === 'TrackerError' && ['forbidden', 'not_found'].includes(error.code)) { incomplete = true; return null; }
+          throw error;
+        }
+        member(check(), c.sessionId, true);
+        if (!issue || issue.id !== id || typeof issue.key !== 'string' || !ISSUE.test(issue.key) ||
+            !Array.isArray(issue.boards) || issue.boards.length > 500 ||
+            issue.boards.some(board => !board || typeof board.id !== 'string' || !BOARD.test(board.id) || !Number.isSafeInteger(Number(board.id)))) {
+          incomplete = true; return null;
+        }
+        const board = selectedBoards.find(selectedId => issue.boards.some(candidate => candidate.id === selectedId));
+        if (!board) { incomplete = true; return null; }
+        return { issueId: id, issueKey: issue.key, sessionId: c.sessionId, boardId: board };
+      }
+      async function sweep(ids) {
+        const values = new Array(ids.length);
+        let next = 0, failure;
+        async function worker() {
+          while (!failure && next < ids.length) {
+            const index = next++;
+            try { values[index] = await resolveIssue(ids[index]); }
+            catch (error) { if (!failure) failure = error; }
+          }
+        }
+        // Wait for every in-flight read, including on failures, before proceeding.
+        await Promise.all(Array.from({ length: Math.min(SESSION_LINK_CONCURRENCY, ids.length) }, () => worker()));
+        if (failure) throw failure;
+        await liveAccount();
+        member(check(), c.sessionId, true);
+        return values;
+      }
+      const candidates = (await sweep(before.issueIds.slice(0, MAX_SESSION_LINK_LOOKUPS))).filter(Boolean);
+      // Revalidate every positive result after the first sweep. Tracker and SQLite
+      // cannot share an atomic snapshot; changes during this pass remain possible.
+      const latest = await sweep(candidates.map(candidate => candidate.issueId));
+      const visible = [];
+      for (let index = 0; index < candidates.length; index++) {
+        const candidate = candidates[index], value = latest[index];
+        if (!value || value.issueKey !== candidate.issueKey || value.boardId !== candidate.boardId) { incomplete = true; continue; }
+        visible.push(value);
+      }
+      await liveAccount();
+      member(check(), c.sessionId, true);
+      const after = snapshot();
+      member(check(), c.sessionId, true);
+      // Revision is global, so even an unlink/relink of the same pair is detected.
+      if (after.revision !== before.revision || visible.some(link => !after.pairs.has(JSON.stringify([link.issueId, link.sessionId])))) fail('conflict', 409);
+      return { revision: before.revision, incomplete, links: visible };
+    }
+    if (c.op === 'links.issue.read') {
+      // Validate the same immutable issue on both sides of the synchronous local
+      // snapshot. Search results are deliberately not used as membership evidence.
+      async function exactIssue(a) {
+        if (typeof a.getIssue !== 'function') fail('invalid_tracker_response', 502);
+        const issue = await raceAbort(() => a.getIssue(c.issueKey, { signal }), signal);
+        check();
+        if (!issue || issue.key !== c.issueKey || !Array.isArray(issue.boards) || issue.boards.length > 500 ||
+            issue.boards.some(board => !board || typeof board.id !== 'string' || !BOARD.test(board.id) || !Number.isSafeInteger(Number(board.id))) ||
+            !issue.boards.some(board => board.id === c.boardId)) fail('issue_not_in_selected_boards', 403);
+        if (typeof issue.id !== 'string' || !TRANSITION.test(issue.id)) fail('issue_id_required', 409);
+        if (issue.id !== c.issueId) fail('conflict', 409);
+      }
+      await exactIssue(account);
+      const afterAccount = await liveAccount();
+      const item = check();
+      if (!Array.isArray(item.sessionIds) || item.sessionIds.length > 100_000) fail('invalid_tracker_response', 502);
+      const sessions = new Set(item.sessionIds.filter(validSessionId));
+      let result;
+      try { result = links.read({ accountScope: scope, workspaceId: wid, workspaceCreatedAt: incarnation }); }
+      catch { fail('internal', 500); }
+      check();
+      if (!result || !Number.isSafeInteger(result.revision) || result.revision < 0 || !Array.isArray(result.links) || result.links.length > 5000) fail('internal', 500);
+      const visible = [], seen = new Set();
+      for (const link of result.links) {
+        if (!link || typeof link.issueId !== 'string' || !TRANSITION.test(link.issueId) || !validSessionId(link.sessionId)) fail('internal', 500);
+        const pair = JSON.stringify([link.issueId, link.sessionId]);
+        if (seen.has(pair)) fail('internal', 500);
+        seen.add(pair);
+        if (link.issueId === c.issueId && sessions.has(link.sessionId)) visible.push({ issueId: c.issueId, issueKey: c.issueKey, sessionId: link.sessionId });
+      }
+      await exactIssue(afterAccount);
+      await liveAccount();
+      const finalItem = check();
+      if (!Array.isArray(finalItem.sessionIds) || finalItem.sessionIds.length > 100_000) fail('invalid_tracker_response', 502);
+      const finalSessions = new Set(finalItem.sessionIds.filter(validSessionId));
+      let latest;
+      try { latest = links.read({ accountScope: scope, workspaceId: wid, workspaceCreatedAt: incarnation }); }
+      catch { fail('internal', 500); }
+      check();
+      if (!latest || !Number.isSafeInteger(latest.revision) || latest.revision < 0 || !Array.isArray(latest.links) || latest.links.length > 5000) fail('internal', 500);
+      if (latest.revision !== result.revision) fail('conflict', 409);
+      const latestPairs = new Set();
+      for (const link of latest.links) {
+        if (!link || typeof link.issueId !== 'string' || !TRANSITION.test(link.issueId) || !validSessionId(link.sessionId)) fail('internal', 500);
+        const pair = JSON.stringify([link.issueId, link.sessionId]);
+        if (latestPairs.has(pair)) fail('internal', 500);
+        latestPairs.add(pair);
+      }
+      if (visible.some(link => !latestPairs.has(JSON.stringify([link.issueId, link.sessionId])))) fail('conflict', 409);
+      const publishItem = check();
+      if (!Array.isArray(publishItem.sessionIds) || publishItem.sessionIds.length > 100_000) fail('invalid_tracker_response', 502);
+      const publishSessions = new Set(publishItem.sessionIds.filter(validSessionId));
+      return { revision: result.revision, incomplete: false, links: visible.filter(link => finalSessions.has(link.sessionId) && publishSessions.has(link.sessionId)) };
+    }
     let boardIssues, issueId;
     if (c.op === 'links.read') {
       const value = await raceAbort(() => account.getBoardOverview(c.boardId, { issueKeys: [], searchByBoard: true, signal }), signal);

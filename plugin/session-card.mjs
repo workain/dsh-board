@@ -32,6 +32,7 @@ export function createSessionCard(React, deps) {
     return value;
   };
   const identity = link => JSON.stringify([link.boardId, link.issueKey, link.issueId]);
+  const sessionLinksValid = (result, sessionId, boards) => result && Number.isSafeInteger(result.revision) && result.revision >= 0 && typeof result.incomplete === 'boolean' && Array.isArray(result.links) && result.links.length <= 10000 && result.links.every(link => link && link.sessionId === sessionId && typeof link.boardId === 'string' && boards.includes(link.boardId) && typeof link.issueKey === 'string' && /^[A-Z][A-Z0-9_]{0,31}-[1-9][0-9]{0,14}$/.test(link.issueKey) && typeof link.issueId === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(link.issueId));
   function Header({ sessionId }) {
     const mounted = useSource(mountedSource);
     if (!sessionId || mounted !== sessionId) return null;
@@ -129,20 +130,18 @@ export function createSessionCard(React, deps) {
           if (!settings.configured || settings.needsReselect.includes(currentScope.workspaceId)) {
             await publish({ links: [], settings, message: settings.needsReselect.includes(currentScope.workspaceId) ? 'reselect' : 'unconfigured' }); return;
           }
-          const links = []; let partialError = boards.length > 5;
-          for (const boardId of boards.slice(0, 5)) {
-            if (!accepts()) return;
-            try {
-              const result = await readCommand({ op: 'links.read', workspaceId: currentScope.workspaceId, boardId }, accepts);
-              if (!accepts()) return;
-              if (!result || result.incomplete !== true || !Number.isSafeInteger(result.revision) || !Array.isArray(result.links) || result.links.length > 10000) throw Error('invalid links');
-              for (const link of result.links) if (link?.sessionId === sessionId && typeof link.issueKey === 'string' && /^[A-Z][A-Z0-9_]{0,31}-[1-9][0-9]{0,14}$/.test(link.issueKey) && typeof link.issueId === 'string' && link.issueId && link.issueId.length <= 128) {
-                const item = { boardId, issueKey: link.issueKey, issueId: link.issueId, linkRevision: result.revision };
-                if (!links.some(other => identity(other) === identity(item))) links.push(item);
-                if (links.length >= 1000) { partialError = true; break; }
-              }
-              if (links.length >= 1000) break;
-            } catch (error) { if (!accepts()) return; if (authError(error)) throw error; partialError = true; }
+          if (boards.length === 0) { await publish({ links: [], settings, message: 'no_boards' }); return; }
+          const result = await readCommand({ op: 'links.session.read', workspaceId: currentScope.workspaceId, sessionId }, accepts);
+          if (!accepts()) return;
+          if (!sessionLinksValid(result, sessionId, boards)) throw Error('invalid session links');
+          const links = [], seen = new Set();
+          let partialError = result.incomplete;
+          for (const link of result.links) {
+            const item = { boardId: link.boardId, issueKey: link.issueKey, issueId: link.issueId, linkRevision: result.revision };
+            const key = identity(item);
+            if (seen.has(key)) continue;
+            if (links.length >= 1000) { partialError = true; break; }
+            seen.add(key); links.push(item);
           }
           // A settings read after traversal detects changes that occurred while scanning.
           const after = await transport.trackerRead();
@@ -176,9 +175,9 @@ export function createSessionCard(React, deps) {
         return true;
       };
       const checkLink = async () => {
-        const result = await readCommand({ op: 'links.read', workspaceId: currentScope.workspaceId, boardId: chosen.boardId }, accepts);
+        const result = await readCommand(command('links.issue.read'), accepts);
         if (!accepts()) return false;
-        if (!result || result.incomplete !== true || !Number.isSafeInteger(result.revision) || result.revision !== chosen.linkRevision || !Array.isArray(result.links) || !result.links.some(link => link?.sessionId === sessionId && link.issueKey === chosen.issueKey && link.issueId === chosen.issueId)) throw Error('link changed');
+        if (!result || result.incomplete !== false || !Number.isSafeInteger(result.revision) || result.revision !== chosen.linkRevision || !Array.isArray(result.links) || result.links.length > 10000 || result.links.some(link => !link || typeof link.sessionId !== 'string' || link.issueKey !== chosen.issueKey || link.issueId !== chosen.issueId) || !result.links.some(link => link.sessionId === sessionId)) throw Error('link changed');
         return true;
       };
       const checkIssue = async () => {
@@ -191,9 +190,6 @@ export function createSessionCard(React, deps) {
         const owner = {}; batchBusy.current = owner;
         try {
           if (!await checkSettings() || !accepts() || !await checkLink() || !accepts()) return;
-          const board = await readCommand({ op: 'board.read', workspaceId: currentScope.workspaceId, boardId: chosen.boardId, issueKeys: [chosen.issueKey] }, accepts);
-          if (!accepts()) return;
-          if (board?.board?.id !== chosen.boardId || board.issuesComplete !== false || !Array.isArray(board.issues) || !board.issues.some(issue => issue.key === chosen.issueKey && issue.id === chosen.issueId)) throw Error('board changed');
           if (!await checkIssue() || !accepts()) return;
           const comments = previous ? [...previous.comments] : [], ids = new Set(comments.map(comment => comment.id));
           const cursors = new Set(previous?.cursors || []); let cursor = previous?.cursor ?? null, bytes = previous?.bytes || 0, commentState = 'partial', resumable = false;
@@ -237,6 +233,15 @@ export function createSessionCard(React, deps) {
     const safeDetail = data && chosen && valid() && detail?.stamp === stamp && detail.generation === generation && detail.id === identity(chosen) && detail.revision === data.settings?.revision ? detail : null;
     if (!visible || mounted !== sessionId || !connected) return null;
     const openBoard = () => { if (valid()) openBoardForSession(sessionId); };
+    const openCurrentSession = event => {
+      if (!valid()) return;
+      const modified = event?.ctrlKey || event?.metaKey || event?.button === 1;
+      if (modified) {
+        if (typeof deps.openSessionInNewTab === 'function') deps.openSessionInNewTab(sessionId);
+      } else if (typeof deps.openSession === 'function') deps.openSession(sessionId);
+    };
+    const sessionTitle = catalog?.byId?.[sessionId]?.displayTitle || catalog?.byId?.[sessionId]?.title;
+    const sessionButton = h('button', { type: 'button', style: styles.button, onClick: openCurrentSession, onAuxClick: event => { if (event.button === 1) openCurrentSession(event); }, disabled: typeof deps.openSession !== 'function' }, text('sessionCardCurrentSession', 'Open current session'), ' · ', typeof sessionTitle === 'string' && sessionTitle.trim() ? sessionTitle : sessionId);
     const boardButton = h('button', { type: 'button', style: styles.button, onClick: openBoard }, text('sessionCardBoard', 'Open full board to edit'));
     if (!currentScope) {
       const ambiguous = workspaces?.phase === 'ready' && Array.isArray(workspaces.items) && workspaces.items.filter(item => item?.sessionIds?.includes(sessionId)).length > 1;
@@ -246,16 +251,15 @@ export function createSessionCard(React, deps) {
     const renderText = value => typeof renderTrackerText === 'function' ? renderTrackerText(value) : value;
     return h('section', { style: styles.card, 'aria-label': text('sessionCardTitle', 'Linked tasks') },
       h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' } }, h('strong', null, text('sessionCardTitle', 'Linked tasks')), h('span', { style: styles.badge }, text('trackerReadOnly', 'Read only'))),
-      h('p', { style: styles.muted }, text('sessionCardReadOnly', 'This view is read-only. Open the full board to edit. Access changes may not appear immediately.')), boardButton,
+      h('p', { style: styles.muted }, text('sessionCardReadOnly', 'This view is read-only. Open the full board to edit. Access changes may not appear immediately.')), sessionButton, boardButton,
       !data ? h('p', { style: styles.muted, role: 'status' }, text('loading', 'Loading…')) : h(React.Fragment, null,
         h('section', { style: styles.panel }, h('strong', null, text('trackerLocal', 'Local tasks')),
           h('p', { style: styles.muted }, text('sessionCardLocalHistory', 'Local links are historical and do not record workspace incarnation; verify them on the full board.')),
           data.localError ? h('p', { style: styles.muted }, text('loadError', 'Local tasks could not be loaded.')) : data.locals.length ? h('ul', { style: { paddingLeft: '18px', marginBottom: 0 } }, data.locals.map(task => h('li', { key: JSON.stringify([task.boardId, task.id]) }, h('strong', null, task.title), h('div', { style: styles.muted }, task.boardName, task.status ? ' · ' + task.status : '')))) : h('p', { style: styles.muted }, text('sessionCardNoLocal', 'No linked local tasks found.'))),
         h('section', { style: styles.panel }, h('strong', null, text('tracker', 'Yandex Tracker')),
-          h('p', { style: styles.muted }, text('sessionCardPartial', 'Linked issues are a partial result; other links may exist.')),
-          data.message && h('p', { role: 'status', style: styles.muted }, data.message === 'reselect' ? text('trackerReselect', 'Tracker board selection needs confirmation.') : data.message === 'unconfigured' ? text('trackerNotConfigured', 'Tracker is not configured.') : text('trackerError', 'Tracker is unavailable; issue details are hidden.')),
-          data.partialError && h('p', { role: 'status', style: styles.muted }, text('sessionCardScanError', 'Some boards could not be checked.')),
-          !data.message && data.links.length === 0 && h('p', { style: styles.muted }, text('sessionCardNoLinks', 'No linked issues found in this partial result.')),
+          data.message && h('p', { role: 'status', style: styles.muted }, data.message === 'reselect' ? text('trackerReselect', 'Tracker board selection needs confirmation.') : data.message === 'unconfigured' ? text('trackerNotConfigured', 'Tracker is not configured.') : data.message === 'no_boards' ? text('trackerNoBoardsSelected', 'No Tracker boards are selected.') : text('trackerError', 'Tracker is unavailable; issue details are hidden.')),
+          data.partialError && h('p', { role: 'status', style: styles.muted }, text('sessionCardPartial', 'Linked issues are a partial result; other links may exist.')),
+          !data.message && data.links.length === 0 && h('p', { style: styles.muted }, data.partialError ? text('sessionCardNoLinksPartial', 'No linked issues found in this partial result.') : text('sessionCardNoLinks', 'No linked issues found.')),
           data.links.length > 1 && h('label', null, text('sessionCardChoose', 'Choose a linked issue'), h('select', { style: styles.select, value: choice, onChange: event => { if (valid()) { selectedRef.current = event.target.value; setDetail(null); setChoice(event.target.value); } } }, h('option', { value: '' }, text('sessionCardSelect', 'Select an issue')), data.links.map(link => h('option', { key: identity(link), value: identity(link) }, link.issueKey + ' · ' + text('board', 'Board') + ' ' + link.boardId)))),
           chosen && !safeDetail && h('p', { style: styles.muted, role: 'status' }, text('loading', 'Loading…')),
           safeDetail?.error && h('p', { role: 'alert', style: styles.muted }, text('issueUnavailable', 'Issue details are hidden until access is revalidated.')),

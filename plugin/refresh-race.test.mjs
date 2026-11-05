@@ -7,7 +7,7 @@ import { TextEncoder } from 'node:util';
 // Reuse the real client harness without modifying its implementation or registering
 // its test cases. Reading only its declarations keeps these races independent.
 const tests = await readFile(new URL('./client.test.mjs', import.meta.url), 'utf8');
-const start = tests.indexOf('const client = '), end = tests.indexOf("test('board command");
+const start = tests.indexOf('const client = '), end = tests.indexOf("test('local empty lanes");
 assert.ok(start >= 0 && end > start, 'client harness declarations not found');
 const declarations = tests.slice(start, end).replace("new URL('./client.js', import.meta.url)", "new URL('./client.js', baseUrl)");
 const client = await readFile(new URL('./client.js', import.meta.url), 'utf8');

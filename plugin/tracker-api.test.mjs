@@ -321,6 +321,59 @@ test('issue and transitions use fixed paths and minimal bounded projections', as
   for (const { init } of calls) { assert.equal(init.method, 'GET'); assert.equal(init.redirect, 'error'); assert.equal(init.body, undefined); }
 });
 
+test('immutable issue ID lookup uses a fixed GET and returns only verified board evidence', async () => {
+  const raw = { ...makeIssue('NEW-1', [{ id: 42, self: 'https://evil.invalid', name: 'private' }, { id: '2' }]),
+    id: 'immutable_123', self: 'https://evil.invalid', secret: 'private', description: 'private',
+    status: { id: '1', key: 'open', display: 'Open', self: 'https://evil.invalid' } };
+  const h = harness([json(raw)]), session = await h.client.openSession();
+  const result = await session.getIssueById('immutable_123');
+  assert.deepEqual(result, { id: 'immutable_123', key: 'NEW-1', summary: 'Synthetic issue',
+    status: { id: '1', key: 'open', display: 'Open' }, boards: [{ id: '42' }, { id: '2' }] });
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0].url, 'https://api.tracker.yandex.net/v3/issues/immutable_123?fields=id%2Ckey%2Csummary%2Cstatus%2Cboards');
+  assert.equal(h.calls[0].init.method, 'GET'); assert.equal(h.calls[0].init.redirect, 'error');
+  assert.equal(h.calls[0].init.body, undefined);
+  assert.doesNotMatch(JSON.stringify(result), /evil\.invalid|private|synthetic-token|synthetic-org/);
+});
+
+test('immutable issue ID lookup rejects unsafe input and unverified or ambiguous response', async () => {
+  const h = harness([]), session = await h.client.openSession();
+  for (const id of ['', '../x', 'a/b', 'a?b', 'https://evil.invalid', 'x'.repeat(129), 123, null, 'a\n', 'é'])
+    await rejects(session.getIssueById(id), 'invalid_input');
+  await rejects(session.getIssueById('valid', { signal: {} }), 'invalid_input');
+  assert.equal(h.calls.length, 0);
+  const raw = { ...makeIssue('TEST-1', [{ id: '42' }]), id: 'immutable-1' };
+  for (const patch of [{ id: 'other' }, { id: 1 }, { id: undefined }, { key: 'test-1' }, { key: 'TEST-0' },
+    { key: 'TEST-1/evil' }, { boards: undefined }, { boards: null }, { boards: [{ id: '042' }] },
+    { boards: [{ id: 42 }, { id: '42' }] }, { boards: [{ id: '42' }, null] }, { boards: Array(501).fill({ id: '1' }) },
+    { status: {} }, { summary: 'bad\ntext' }]) {
+    const next = await harness([json({ ...raw, ...patch })]).client.openSession();
+    await rejects(next.getIssueById('immutable-1'), 'invalid_response');
+  }
+  // A key reused by a different issue must never satisfy an immutable-ID lookup.
+  const reused = await harness([json({ ...raw, id: 'replacement-id', key: 'TEST-1' })]).client.openSession();
+  await rejects(reused.getIssueById('immutable-1'), 'invalid_response');
+  const boundary = 'A'.repeat(128);
+  assert.equal((await (await harness([json({ ...raw, id: boundary, boards: [] })]).client.openSession()).getIssueById(boundary)).id, boundary);
+});
+
+test('immutable issue ID lookup bounds and cancels response without leaking errors', async () => {
+  const oversized = harness([new Response('{}', { headers: { 'content-length': '2097153' } })]);
+  await rejects((await oversized.client.openSession()).getIssueById('id'), 'response_too_large');
+  const largeStream = new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(2097153)); controller.close(); } });
+  await rejects((await harness([new Response(largeStream)]).client.openSession()).getIssueById('id'), 'response_too_large');
+  const failure = harness([() => { throw new Error('synthetic-token synthetic-org'); }]);
+  await rejects((await failure.client.openSession()).getIssueById('id'), 'network_error');
+  await rejects((await harness([new Response('{synthetic-token')]).client.openSession()).getIssueById('id'), 'invalid_response');
+  let cancelled = false;
+  const stream = new ReadableStream({ pull() {}, cancel() { cancelled = true; } });
+  const h = harness([new Response(stream)]), session = await h.client.openSession(), ac = new AbortController();
+  const pending = session.getIssueById('id', { signal: ac.signal });
+  await new Promise(resolve => setImmediate(resolve)); ac.abort();
+  await rejects(pending, 'cancelled'); assert.equal(cancelled, true); assert.equal(h.calls.length, 1);
+  await rejects(session.getIssueById('id', { signal: ac.signal }), 'cancelled'); assert.equal(h.calls.length, 1);
+});
+
 test('issue projection fails closed on malformed data and preserves unknown assignee', async () => {
   const issue = { ...makeIssue('TEST-1', [{ id: 42 }]), description: '', version: 0 };
   for (const patch of [{ key: 'OTHER-1' }, { boards: undefined }, { boards: [{ id: '4/2' }] }, { boards: Array(501).fill({ id: 1 }) },

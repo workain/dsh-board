@@ -244,7 +244,7 @@ async function readJson(response, signal, principal = false) {
  * createTrackerClient({getCredentials, fetch}) -> {listBoards, getBoardOverview}.
  * getCredentials(): {token, tokenType:'OAuth'|'Bearer', orgId, orgType:'org'|'cloud'}.
  * openSession({signal}) snapshots credentials and exposes an opaque identity and
- * getIssue, getComments, updateIssue, listTransitions, addComment and executeTransition. The caller must
+ * getIssue, getIssueById, getComments, updateIssue, listTransitions, addComment and executeTransition. The caller must
  * verify issue.boards against its authorized boards before reads or writes.
  * For creation, authorize the selected board first; getBoardCreationQueue(id, options)
  * returns an immutable queue capability accepted only by createIssue(payload, options)
@@ -434,6 +434,28 @@ export function createTrackerClient({ getCredentials, fetch: fetchFn = globalThi
       status: status(value.status), ...assignee(value.assignee), boards, version: value.version };
   }
 
+  // Lookup by immutable ID rather than a potentially reused issue key. Membership
+  // is only evidence for the caller to authorize, not authorization by itself.
+  async function getIssueById(credentials, id, { signal } = {}) {
+    if (!validTransitionId(id)) fail('invalid_input');
+    const params = new URLSearchParams({ fields: 'id,key,summary,status,boards' });
+    return request(`${ORIGIN}/v3/issues/${id}?${params}`, 'GET', undefined, signal, credentials, {
+      project(value) {
+        if (!object(value) || value.id !== id || !validKey(value.key) ||
+            !Array.isArray(value.boards) || value.boards.length > 500) fail('invalid_response');
+        const seen = new Set();
+        const boards = value.boards.map(b => {
+          if (!object(b)) fail('invalid_response');
+          const board = boardId(b.id, 'invalid_response');
+          if (seen.has(board)) fail('invalid_response');
+          seen.add(board);
+          return { id: board };
+        });
+        return { id, key: value.key, summary: text(value.summary, 4096), status: status(value.status), boards };
+      },
+    });
+  }
+
   // One page per call. A completed traversal is not a snapshot: Tracker recalculates pages.
   async function getComments(credentials, key, { signal, cursor } = {}) {
     issueKey(key);
@@ -584,6 +606,7 @@ export function createTrackerClient({ getCredentials, fetch: fetchFn = globalThi
         getBoardCreationQueue: (id, options) => getBoardCreationQueue(credentials, id, approvedQueues, options),
         createIssue: (payload, options) => createIssue(credentials, payload, approvedQueues, options),
         getIssue: (key, options) => getIssue(credentials, key, options),
+        getIssueById: (id, options) => getIssueById(credentials, id, options),
         getMyself: options => getMyself(credentials, options),
         async getAccountScope(options) {
           if (!getAccountScope) fail('invalid_credentials');
