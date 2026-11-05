@@ -316,25 +316,75 @@ const trackerBoard = { board: { id: '1', name: '<img src=x onerror=alert(1)>' },
   { key: 'A-3', summary: 'Unknown', status: trackerStatuses.unknown },
 ], issuesComplete: false, issuesReason: 'approximate_board_filter' };
 
-async function trackerIssueReady({ editing = true, origin = null, domRefs = false, issue = issueFixture, comments = issueComments } = {}) {
-  const h = harness({ manualTracker: true, domRefs, ids: ['session-1'], byId: { 'session-1': { title: 'Session' } } });
+async function trackerIssueReady({ editing = true, origin = null, domRefs = false, issue = issueFixture, comments = issueComments, links = issueLinks, fixture = {} } = {}) {
+  const h = harness({ manualTracker: true, domRefs, ids: ['session-1'], byId: { 'session-1': { title: 'Session' } }, ...fixture });
   h.mount(); await h.resolve(0, base()); await h.resolve(1, trackerSettings(1, true, { w: ['1'] }));
   h.tile('tracker #1 — Workspace — tracker').props.onClick(); await h.resolve(2, trackerSettings(1, true, { w: ['1'] })); await h.resolve(3, trackerBoard);
   h.document.activeElement = origin;
   h.nodes('button').find(n => n.props['aria-label'] === 'issueDetails: <script>unsafe</script>').props.onClick();
   if (domRefs) h.nodes('aside');
   assert.deepEqual(h.requests.slice(4).map(r => JSON.parse(r.options.body).op), ['issue.read']);
-  await h.resolve(4, issue); await h.resolve(5, comments); await h.resolve(6, issueTransitions); await h.resolve(7, issueLinks); await h.resolve(8, issue);
+  await h.resolve(4, issue); await h.resolve(5, comments); await h.resolve(6, issueTransitions); await h.resolve(7, links); await h.resolve(8, issue);
   if (editing) h.click('edit');
   return h;
 }
+
+const drawerSessionButton = h => h.nodes('button').find(n => n.props.className === 'dsh-board-tracker-session-link');
+
+test('Tracker drawer session opens directly and modified without board links', async () => {
+  const h = await trackerIssueReady({ editing: false });
+  const button = drawerSessionButton(h); assert.ok(button); assert.equal(button.props.type, 'button'); assert.equal(button.props.href, undefined);
+  assert.equal(h.text(button), 'Session (session-1)');
+  button.props.onClick({}); button.props.onClick({ ctrlKey: true }); button.props.onClick({ metaKey: true });
+  let prevented = 0; button.props.onAuxClick({ button: 1, preventDefault() { prevented++; } });
+  assert.equal(prevented, 1); assert.deepEqual(h.openedSessions, ['session-1']);
+  assert.equal(h.openedTabs.length, 3);
+  for (const [url, target, features] of h.openedTabs) assert.deepEqual([url, target, features], ['http://localhost/app/#dsh-board-session-v1:w:session-1', '_blank', 'noopener,noreferrer']);
+  assert.equal(h.requests.length, 9, 'drawer links work without a board-links read or mutation'); h.unmount();
+});
+
+test('Tracker drawer marks unavailable links and hides foreign or mismatched relations', async () => {
+  const links = { revision: 1, incomplete: true, links: [
+    ...['session-1', 'archived', 'missing', 'foreign'].map(sessionId => ({ issueKey: 'A-1', issueId: 'issue-1', sessionId })),
+    { issueKey: 'A-2', issueId: 'issue-1', sessionId: 'wrong-key' }, { issueKey: 'A-1', issueId: 'old-id', sessionId: 'wrong-id' },
+  ] };
+  const h = await trackerIssueReady({ editing: false, links, fixture: { ids: ['session-1', 'archived', 'foreign', 'wrong-key', 'wrong-id'], archived: ['archived'], workspaces: [{ workspaceId: 'w', title: 'Workspace', sessionIds: ['session-1', 'archived', 'missing', 'wrong-key', 'wrong-id'] }, { workspaceId: 'w2', title: 'Other', sessionIds: ['foreign'] }] } });
+  let rows = h.nodes('li').filter(n => n.props.className === 'dsh-board-tracker-session');
+  assert.deepEqual(rows.map(n => h.text(n)), ['Session (session-1)', 'archived — sessionArchived', 'missing — sessionUnavailable']);
+  assert.equal(h.nodes('button').filter(n => n.props.className === 'dsh-board-tracker-session-link').length, 1);
+  h.sessions.set({ ...h.sessions.getSnapshot(), phase: 'pending' });
+  rows = h.nodes('li').filter(n => n.props.className === 'dsh-board-tracker-session');
+  assert.ok(rows.every(n => h.text(n).endsWith(' — sessionLoading'))); assert.equal(drawerSessionButton(h), undefined);
+  assert.deepEqual(h.openedSessions, []); h.unmount();
+});
+
+test('Tracker drawer stale handler rechecks membership, catalogs, scope and generations', async () => {
+  for (const scenario of ['workspace-member', 'workspace-loading', 'workspace-error', 'session-loading', 'session-missing', 'archived', 'panel', 'issue-loading', 'pending', 'unknown', 'token', 'privacy', 'tracker-generation']) {
+    const h = await trackerIssueReady({ editing: false }); const button = drawerSessionButton(h); assert.ok(button, scenario);
+    const ws = h.ws.getSnapshot(), sessions = h.sessions.getSnapshot();
+    if (scenario === 'workspace-member') h.ws.set({ ...ws, items: [{ ...ws.items[0], sessionIds: [] }, { workspaceId: 'w2', sessionIds: ['session-1'] }] });
+    if (scenario === 'workspace-loading') h.ws.set({ ...ws, phase: 'pending' });
+    if (scenario === 'workspace-error') h.ws.set({ ...ws, state: 'error' });
+    if (scenario === 'session-loading') h.sessions.set({ ...sessions, phase: 'pending' });
+    if (scenario === 'session-missing') h.sessions.set({ ...sessions, ids: [] });
+    if (scenario === 'archived') h.ws.set({ ...ws, archivedSessionIds: ['session-1'] });
+    if (scenario === 'panel') h.panelInfo.set({ activePanelId: 'other' });
+    if (scenario === 'issue-loading') h.click('issueReload');
+    if (scenario === 'pending' || scenario === 'unknown') { h.change(h.nodes('textarea').find(n => n.props.value === ''), 'comment'); h.click('issueAddComment'); if (scenario === 'unknown') { h.requests[9].reject(new Error('offline')); await settle(); } }
+    if (scenario === 'token') { h.click('close'); h.nodes('button').find(n => n.props['aria-label'] === 'issueDetails: <script>unsafe</script>').props.onClick(); }
+    if (scenario === 'privacy') h.events.get('focus')();
+    if (scenario === 'tracker-generation') h.click('trackerRefreshBoard');
+    button.props.onClick({}); button.props.onClick({ ctrlKey: true }); let prevented = 0; button.props.onAuxClick({ button: 1, preventDefault() { prevented++; } });
+    assert.equal(prevented, 1, scenario); assert.deepEqual(h.openedSessions, [], scenario); assert.deepEqual(h.openedTabs, [], scenario); h.unmount();
+  }
+});
 
 test('Tracker drawer preview shows issue metadata and safe text before explicit field editing', async () => {
   const h = await trackerIssueReady({ editing: false });
   const aside = h.nodes('aside')[0];
   assert.equal(aside.props.role, undefined); assert.equal(aside.props['aria-modal'], undefined);
   assert.ok(h.nodes('h3').some(n => h.text(n) === issueFixture.summary));
-  assert.ok(h.nodes('span').some(n => n.props.className === 'dsh-board-tracker-status' && h.text(n) === 'Open'));
+  assert.ok(h.nodes('button').some(n => n.props.className === 'dsh-board-tracker-status' && h.text(n) === 'Open'));
   assert.ok(h.nodes('p').some(n => h.text(n) === 'assignee: User'));
   assert.ok(h.nodes('div').some(n => n.props.className === 'dsh-board-richtext' && h.text(n) === 'original'));
   const external = h.nodes('a').find(n => h.text(n) === 'A-1 ↗');
@@ -452,19 +502,98 @@ test('Tracker drawer opens lazily without writes, validates and saves only chang
 
 test('Tracker transition and comment are separate explicit writes and unknown is not retried', async () => {
   const h = await trackerIssueReady();
-  h.change(h.nodes('select').find(n => n.children.some(c => c?.props?.value === 'start')), 'start');
+  h.click('issueChangeStatus: Open'); h.click('Start → Doing');
   h.window.confirmResult = false; h.click('issueChangeStatus'); assert.equal(h.requests.length, 9);
+  assert.equal(h.confirms.at(-1), 'issueConfirmTransition Start: Open → Doing');
   h.window.confirmResult = true; h.click('issueChangeStatus');
-  assert.deepEqual(JSON.parse(h.requests[9].options.body), { op: 'issue.transition', workspaceId: 'w', boardId: '1', issueKey: 'A-1', issueId: 'issue-1', transitionId: 'start', expectedTo: issueTransitions[0].to });
-  await h.resolve(9, { error: { code: 'conflict' } }, 409);
-  assert.ok(h.nodes('p').some(n => h.text(n) === 'issueConflict')); assert.equal(h.button('issueChangeStatus').props.disabled, true);
-  h.click('issueReload'); await h.resolve(10, issueFixture); await h.resolve(11, issueComments); await h.resolve(12, issueTransitions); await h.resolve(13, issueLinks); await h.resolve(14, issueFixture);
-  assert.equal(h.button('issueChangeStatus').props.disabled, true, 'reload cannot silently rebase conflicted draft');
-  h.click('issueDiscardConflict'); await h.resolve(15, issueFixture); await h.resolve(16, issueComments); await h.resolve(17, issueTransitions); await h.resolve(18, issueLinks); await h.resolve(19, issueFixture);
+  assert.deepEqual(JSON.parse(h.requests[9].options.body), { op: 'issue.read', workspaceId: 'w', boardId: '1', issueKey: 'A-1', issueId: 'issue-1' });
+  await h.resolve(9, issueFixture);
+  assert.deepEqual(JSON.parse(h.requests[10].options.body), { op: 'issue.transition', workspaceId: 'w', boardId: '1', issueKey: 'A-1', issueId: 'issue-1', transitionId: 'start', expectedTo: issueTransitions[0].to });
+  await h.resolve(10, { error: { code: 'conflict' } }, 409);
+  assert.ok(h.nodes('p').some(n => h.text(n) === 'issueConflict')); assert.equal(h.button('issueChangeStatus: Open').props.disabled, true);
+  h.click('issueReload'); await h.resolve(11, issueFixture); await h.resolve(12, issueComments); await h.resolve(13, issueTransitions); await h.resolve(14, issueLinks); await h.resolve(15, issueFixture);
+  assert.equal(h.button('issueChangeStatus: Open').props.disabled, true, 'reload cannot silently rebase conflicted draft');
+  h.click('issueDiscardConflict'); await h.resolve(16, issueFixture); await h.resolve(17, issueComments); await h.resolve(18, issueTransitions); await h.resolve(19, issueLinks); await h.resolve(20, issueFixture);
   h.change(h.nodes('textarea')[1], 'new comment'); h.click('issueAddComment');
-  assert.deepEqual(JSON.parse(h.requests[20].options.body), { op: 'issue.comment', workspaceId: 'w', boardId: '1', issueKey: 'A-1', issueId: 'issue-1', text: 'new comment' });
-  h.requests[20].reject(new Error('offline')); await settle(); assert.equal(h.button('issueAddComment').props.disabled, true);
-  assert.equal(h.nodes('textarea')[1].props.value, 'new comment'); assert.ok(h.nodes('p').some(n => h.text(n) === 'issueUnknown')); assert.equal(h.requests.length, 21); h.unmount();
+  assert.deepEqual(JSON.parse(h.requests[21].options.body), { op: 'issue.comment', workspaceId: 'w', boardId: '1', issueKey: 'A-1', issueId: 'issue-1', text: 'new comment' });
+  h.requests[21].reject(new Error('offline')); await settle(); assert.equal(h.button('issueAddComment').props.disabled, true);
+  assert.equal(h.nodes('textarea')[1].props.value, 'new comment'); assert.ok(h.nodes('p').some(n => h.text(n) === 'issueUnknown')); assert.equal(h.requests.length, 22); h.unmount();
+});
+
+test('status popover opens without requests, supports Escape and focuses the trigger', async () => {
+  const h = await trackerIssueReady({ editing: false, domRefs: true });
+  const pill = h.button('issueChangeStatus: Open'); assert.equal(pill.props['aria-expanded'], false);
+  h.click('issueChangeStatus: Open');
+  assert.equal(h.button('issueChangeStatus: Open').props['aria-expanded'], true);
+  assert.equal(h.document.activeElement.type, 'button'); assert.equal(h.document.activeElement.props['aria-pressed'], false);
+  assert.equal(h.requests.length, 9); assert.equal(h.confirms.length, 0);
+  h.click('Start → Doing'); assert.equal(h.button('Start → Doing').props['aria-pressed'], true); assert.equal(h.requests.length, 9);
+  let prevented = false; h.nodes('aside')[0].props.onKeyDown({ key: 'Escape', preventDefault() { prevented = true; } });
+  assert.equal(prevented, true); assert.equal(h.nodes('aside').length, 1); assert.equal(h.document.activeElement.props.ref, h.button('issueChangeStatus: Open').props.ref);
+  assert.equal(h.requests.length, 9); h.unmount();
+});
+
+test('status disables unavailable transitions and preserves unknown selection without retry', async () => {
+  const h = await trackerIssueReady({ editing: false }); h.click('issueReload');
+  await h.resolve(9, issueFixture); await h.resolve(10, issueComments); await h.resolve(11, []); await h.resolve(12, issueLinks); await h.resolve(13, issueFixture);
+  assert.equal(h.button('issueChangeStatus: Open').props.disabled, true);
+  assert.ok(h.nodes('span').some(n => h.text(n) === 'issueTransitionsUnavailable'));
+  h.click('issueReload'); await h.resolve(14, issueFixture); await h.resolve(15, issueComments); await h.resolve(16, issueTransitions); await h.resolve(17, issueLinks); await h.resolve(18, issueFixture);
+  h.click('issueChangeStatus: Open'); h.click('Start → Doing'); h.click('issueChangeStatus');
+  await h.resolve(19, issueFixture); h.requests[20].reject(new Error('offline')); await settle();
+  assert.ok(h.nodes('p').some(n => h.text(n) === 'issueUnknown')); assert.equal(h.button('issueChangeStatus: Open').props.disabled, true);
+  assert.equal(h.button('Start → Doing').props['aria-pressed'], true); assert.equal(h.button('issueChangeStatus').props.disabled, true); assert.equal(h.requests.length, 21); h.unmount();
+});
+
+test('status selection is fenced on privacy refresh and never rebased by identity', async () => {
+  const h = await trackerIssueReady({ editing: false }); h.click('issueChangeStatus: Open'); h.click('Start → Doing');
+  const staleConfirm = h.button('issueChangeStatus').props.onClick;
+  h.events.get('focus')(); staleConfirm(); assert.equal(h.requests.length, 10); assert.equal(h.nodes('aside').length, 1);
+  assert.ok(!h.nodes('button').some(n => h.text(n) === 'Start → Doing'));
+  await h.resolve(9, trackerSettings(1, true, { w: ['1'] })); await h.resolve(10, trackerBoard); h.nodes('main');
+  await h.resolve(11, issueFixture); await h.resolve(12, issueComments); await h.resolve(13, [{ id: 'start', display: 'Different', to: { id: '3', key: 'other', display: 'Other' } }]); await h.resolve(14, issueLinks); await h.resolve(15, issueFixture);
+  h.click('issueChangeStatus: Open'); assert.equal(h.button('issueChangeStatus').props.disabled, true); staleConfirm(); assert.equal(h.requests.length, 16);
+  h.click('Different → Other'); h.window.confirmResult = false; h.click('issueChangeStatus'); assert.equal(h.confirms.at(-1), 'issueConfirmTransition Different: Open → Other'); assert.equal(h.requests.length, 16); h.unmount();
+});
+
+test('status preflight fails closed for changed identity, version or status and read errors', async () => {
+  for (const changed of [{ ...issueFixture, id: 'different' }, { ...issueFixture, version: 6 }, { ...issueFixture, status: { ...issueFixture.status, display: 'changed' } }, null]) {
+    const h = await trackerIssueReady(); h.change(h.nodes('input').find(n => n.props.value === issueFixture.summary), 'retained');
+    h.click('issueChangeStatus: Open'); h.click('Start → Doing'); h.click('issueChangeStatus');
+    if (changed) await h.resolve(9, changed); else { h.requests[9].reject(new Error('offline')); await settle(); }
+    assert.equal(h.requests.length, 10); assert.ok(!h.nodes('p').some(n => h.text(n) === 'issueUnknown'));
+    assert.ok(h.nodes('input').some(n => n.props.value === 'retained')); assert.ok(h.nodes('p').some(n => h.text(n) === (changed ? 'issueConflict' : 'trackerError'))); h.unmount();
+  }
+});
+
+test('status confirmation and preflight are fenced by access revocation', async () => {
+  {
+    const h = await trackerIssueReady({ editing: false }); h.click('issueChangeStatus: Open'); h.click('Start → Doing');
+    h.window.confirm = message => { h.confirms.push(message); h.generation.set(undefined); return true; };
+    h.click('issueChangeStatus'); assert.equal(h.requests.length, 9); assert.equal(h.nodes('aside').length, 1); h.unmount();
+  }
+  {
+    const h = await trackerIssueReady({ editing: false }); h.click('issueChangeStatus: Open'); h.click('Start → Doing'); h.click('issueChangeStatus');
+    h.events.get('focus')(); await h.resolve(9, issueFixture); assert.equal(h.requests.length, 11);
+    await h.resolve(10, trackerSettings(1, true, { w: ['1'] })); await h.resolve(11, trackerBoard); h.nodes('main');
+    await h.resolve(12, issueFixture); await h.resolve(13, issueComments); await h.resolve(14, issueTransitions); await h.resolve(15, issueLinks); await h.resolve(16, issueFixture);
+    assert.ok(!h.nodes('p').some(n => h.text(n) === 'issueUnknown')); assert.equal(h.requests.length, 17); h.unmount();
+  }
+});
+
+test('status preflight timeout is read-only and cannot dispatch late', async () => {
+  const h = await trackerIssueReady({ editing: false }); h.click('issueChangeStatus: Open'); h.click('Start → Doing'); h.click('issueChangeStatus');
+  [...h.timeouts].at(-1)(); await settle();
+  assert.ok(h.nodes('p').some(n => h.text(n) === 'trackerError')); assert.ok(!h.nodes('p').some(n => h.text(n) === 'issueUnknown'));
+  await h.resolve(9, issueFixture); assert.equal(h.requests.length, 10); assert.equal(h.button('issueChangeStatus').props.disabled, true); h.unmount();
+});
+
+test('status success reloads the live issue status and leaves other drafts', async () => {
+  const h = await trackerIssueReady(); h.change(h.nodes('input').find(n => n.props.value === issueFixture.summary), 'draft title');
+  h.click('issueChangeStatus: Open'); h.click('Start → Doing'); h.click('issueChangeStatus'); await h.resolve(9, issueFixture); await h.resolve(10, { ok: true });
+  const fresh = { ...issueFixture, status: issueTransitions[0].to, version: 6 };
+  await h.resolve(11, fresh); await h.resolve(12, issueComments); await h.resolve(13, []); await h.resolve(14, issueLinks); await h.resolve(15, fresh);
+  assert.equal(h.text(h.button('issueChangeStatus: Doing')), 'Doing'); assert.ok(h.nodes('input').some(n => n.props.value === 'draft title')); assert.equal(h.requests.length, 16); h.unmount();
 });
 
 test('Tracker comment edit retains versioned row draft across refresh and saves explicitly', async () => {
