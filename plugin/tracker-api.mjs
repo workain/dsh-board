@@ -68,6 +68,17 @@ function columns(value) {
     return { id, name: text(v.name, 256), statuses: v.statuses.map(status) };
   });
 }
+// Omitted or malformed assignees are unknown, never an explicit unassignment.
+// Return only the two display fields; other Tracker user properties can be private.
+function assignee(value) {
+  if (value === null) return { assigneeKnown: true, assignee: null };
+  if (!object(value)) return { assigneeKnown: false, assignee: null };
+  try {
+    return { assigneeKnown: true, assignee: { id: text(value.id, 128), display: text(value.display, 256) } };
+  } catch {
+    return { assigneeKnown: false, assignee: null };
+  }
+}
 function issue(value, wantedKeys, targetId) {
   if (!object(value) || !validKey(value.key) || (wantedKeys && !wantedKeys.has(value.key))) fail('invalid_response');
   if (!Array.isArray(value.boards) || value.boards.length > 500) return { uncertain: true };
@@ -79,7 +90,7 @@ function issue(value, wantedKeys, targetId) {
     if (id === targetId) member = true;
   }
   if (!member) return { member: false };
-  return { member: true, issue: { key: value.key, summary: text(value.summary, 4096), status: status(value.status) } };
+  return { member: true, issue: { key: value.key, summary: text(value.summary, 4096), status: status(value.status), ...assignee(value.assignee) } };
 }
 function abortCode(signal, timedOut) {
   return timedOut() ? 'timeout' : signal?.aborted ? 'cancelled' : 'network_error';
@@ -241,7 +252,7 @@ export function createTrackerClient({ getCredentials, fetch: fetchFn = globalThi
           if (delay) await waitForSearch(delay, signal);
         }
         lastSearchAt = Date.now();
-        const params = new URLSearchParams({ fields: 'key,summary,status,boards', perPage: String(PER_PAGE), page: String(page) });
+        const params = new URLSearchParams({ fields: 'key,summary,status,boards,assignee', perPage: String(PER_PAGE), page: String(page) });
         const body = searchByBoard ? { filter: { boards: Number(id) } } : { keys };
         const found = await request(`${ORIGIN}/v3/issues/_search?${params}`, 'POST', body, signal, credentials);
         if (!Array.isArray(found) || found.length > PER_PAGE) fail('invalid_response');

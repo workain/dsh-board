@@ -70,6 +70,41 @@ async function inHome(dir, action) {
 }
 async function dispose(f) { for (const fn of f.cleanup.reverse()) await fn(); }
 
+test('assignee DTO and optional writes preserve legacy values and reject invalid input', async () => {
+  const store = mockStore(), service = createBoardService(store, registry());
+  const { b, c, t } = await setup(service);
+  const task = (revision, fields = {}) => cmd(revision, 'task.save', {
+    boardId: b, task: { id: t, title: 'Task', description: '', statusId: c, ...fields },
+  });
+  assert.deepEqual((await service.read()).boards[0].tasks[0], { id: t, title: 'Task', description: '', statusId: c, assignee: null });
+  let result = await service.mutate(task(3, { assignee: 'synthetic-assignee-a' }));
+  assert.equal(result.boards[0].tasks[0].assignee, 'synthetic-assignee-a');
+  assert.equal(store.saved.state.boards[0].tasks[0].assignee, 'synthetic-assignee-a');
+  result = await service.mutate(task(4));
+  assert.equal(result.boards[0].tasks[0].assignee, 'synthetic-assignee-a');
+  result = await service.mutate(task(5, { assignee: null }));
+  assert.equal(result.boards[0].tasks[0].assignee, null);
+  for (const invalid of ['', ' ', ' Anne', 'Anne ', 'x'.repeat(257), 0, {}, []]) {
+    const response = await service.fetch(post(task(6, { assignee: invalid })));
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error.code, 'invalid');
+    assert.equal((await service.read()).revision, 6);
+  }
+  result = await service.mutate(task(6, { assignee: 'x'.repeat(256) }));
+  assert.equal(result.boards[0].tasks[0].assignee.length, 256);
+  result = await service.mutate(cmd(7, 'task.save', { boardId: b, task: { title: 'Assigned', description: '', statusId: c, assignee: 'synthetic-assignee-b' } }));
+  assert.equal(result.boards[0].tasks.find(item => item.title === 'Assigned').assignee, 'synthetic-assignee-b');
+  await service.close();
+
+  const legacy = store.saved;
+  legacy.state.boards[0].tasks[0].assignee = '  legacy  ';
+  const reopened = createBoardService(mockStore(legacy), registry());
+  assert.equal((await reopened.read()).boards[0].tasks[0].assignee, '  legacy  ');
+  result = await reopened.mutate(task(8));
+  assert.equal(result.boards[0].tasks[0].assignee, '  legacy  ');
+  await reopened.close();
+});
+
 test('mock transactions: mutations, conflict, persistence, rollback and projection', async () => {
   const store = mockStore(), s = createBoardService(store, registry()), { b, c, t } = await setup(s);
   const [a, conflict] = await Promise.all([

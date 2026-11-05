@@ -7,6 +7,7 @@ window.__ModuleLoader__.load({
     const PANEL = 'dsh-board';
     const NS = 'dshBoard';
     const en = {
+      trackerReviewDraft: 'I reviewed the refreshed board list and my selection.', trackerUpdatedAt: 'Last successful partial update:',
       panel: 'Board', workspace: 'Workspace', chooseWorkspace: 'Choose a workspace', board: 'Board',
       chooseBoard: 'Choose a board', noWorkspaces: 'No workspaces are available.', workspaceError: 'Workspaces could not be loaded.',
       noBoards: 'There are no boards in this workspace yet.', newBoard: 'New board', boardName: 'Board name',
@@ -29,10 +30,12 @@ window.__ModuleLoader__.load({
       discardDraft: 'Discard the unsaved draft?', reviewUnknown: 'The previous operation may still commit. Your next change can race it; only one can use the current revision. Carefully inspect the board, then confirm you accept this uncertainty.', readbackFirst: 'Refresh and inspect the board before acknowledging the unknown result. The original operation may still commit later.', acknowledgeUnknown: 'I checked the board; allow another attempt', draftWarning: 'Drafts are kept only while this page is open. Reloading or closing it will discard them.',
       eyebrow: 'YOUR WORKSPACE', pageDescription: 'A clear view of your work and the conversations behind it.', boardDescription: 'Your tasks, organized in one place.', chooseHint: 'Select a workspace and board to get started.', workspaceHint: 'Start by choosing a workspace.', boardHint: 'Choose a board to see your tasks.', taskCount: 'Tasks', statusCount: 'Statuses', filterLabel: 'Filter', refreshShort: 'Refresh board', emptyColumn: 'No tasks in this status', taskBoard: 'Task board',
       boardArgsUnsupported: 'The /board command does not accept arguments. Open /board without arguments.',
+      assignee: 'Assignee', allAssignees: 'All assignees', unassigned: 'Unassigned', assigneeUnknown: 'Assignee unknown', assigneeUnavailable: 'Selected assignee is not in the current results', sessionFilter: 'Session in this workspace', allSessions: 'All tasks', withSession: 'With linked session', withoutSession: 'Without linked session', sessionFilterUnavailable: 'Workspace session membership is unavailable.',
       boards: 'Boards', allBoards: 'All boards', noBoardsAnywhere: 'No boards yet', noBoardsHelp: 'Choose a workspace to create your first board.', linkCurrent: 'Link this session', unlinkCurrent: 'Unlink this session', sessionHelp: 'Choose a board and link this session to a task.', linkUnavailable: 'This session is not available in this workspace.', returnToBoards: 'All boards', sessionCount: 'Sessions',
       tracker: 'Yandex Tracker', trackerConnect: 'Connect Yandex Tracker', trackerSettings: 'Tracker settings', trackerOrg: 'Organization type', trackerConfigured: 'Configured in this profile', trackerNotConfigured: 'Not configured in this profile', trackerRefs: 'Credentials and organization ID must already be stored on the server. They are never entered here.', trackerConfigureWarning: 'Reconnecting clears all workspace board selections. Continue?', trackerChoose: 'Choose Tracker boards', trackerList: 'Load available boards', trackerSelect: 'Save board selection', trackerReselect: 'Selection needs confirmation after restart or account change. Load boards and select them again.', trackerNoSelection: 'No Tracker boards selected for this workspace.', trackerListPartial: 'Board list is partial; not all available boards may appear.', trackerPartial: 'Partial results as of the last request: board membership is approximate and the list may be incomplete, even when empty. Access changes are not shown instantly.', trackerReadOnly: 'read only', trackerPartialBadge: 'partial', trackerUnmapped: 'Unmapped', trackerEmpty: 'No issues returned in this partial result.', trackerError: 'Tracker is unavailable or the request failed. Try again.', trackerReload: 'Reload settings', trackerPickerHint: 'Select boards explicitly for this workspace. The list expires; reload it if saving fails.', trackerContext: 'Tracker boards cannot be linked to sessions.', trackerRefreshBoard: 'Refresh Tracker board', trackerSelectionSaved: 'Selection saved.', trackerUncertain: 'The result is unknown. Reload settings and review before trying again.', trackerMissingSelection: 'Some saved boards are absent from this list. They will be removed if you save.', trackerConfirmSelection: 'Confirm this workspace board selection? Removed board IDs: ', trackerNoBoards: 'No boards returned.', trackerStatus: 'Status', trackerClose: 'Close Tracker settings', trackerListRequired: 'The board list expired or changed. Load it again and reselect.', trackerConflict: 'Tracker settings changed. Reload settings and review your selection.', trackerNotSelected: 'This board is no longer selected. Reload settings.', trackerCredentials: 'Server credentials are unavailable or rejected. Check the server configuration.', trackerRate: 'Tracker is busy or rate-limited. Try again later.', trackerConfiguring: 'Save connection', trackerLocal: 'Local', trackerSettingsUnknown: 'Tracker is not loaded. Open its settings to check available boards.', trackerBindingsPending: 'Some workspace selections need confirmation. Open Tracker settings and choose a workspace to reselect.',
     };
     const ru = {
+      trackerReviewDraft: 'Я проверил обновлённый список досок и свой выбор.', trackerUpdatedAt: 'Последнее успешное частичное обновление:',
       panel: 'Доска', workspace: 'Рабочее пространство', chooseWorkspace: 'Выберите рабочее пространство', board: 'Доска',
       chooseBoard: 'Выберите доску', noWorkspaces: 'Нет доступных рабочих пространств.', workspaceError: 'Не удалось загрузить рабочие пространства.',
       noBoards: 'В этом рабочем пространстве пока нет досок.', newBoard: 'Новая доска', boardName: 'Название доски',
@@ -55,6 +58,7 @@ window.__ModuleLoader__.load({
       discardDraft: 'Отменить несохранённый черновик?', reviewUnknown: 'Предыдущий запрос ещё может сохраниться. Следующее изменение может с ним соревноваться; текущую ревизию сможет использовать только одно. Проверьте доску и подтвердите, что принимаете эту неопределённость.', readbackFirst: 'Обновите и проверьте доску перед подтверждением. Исходный запрос всё ещё может сохраниться позже.', acknowledgeUnknown: 'Я проверил доску; разрешить повторную попытку', draftWarning: 'Черновики хранятся только пока открыта эта страница. При обновлении или закрытии они пропадут.',
       eyebrow: 'ВАШЕ ПРОСТРАНСТВО', pageDescription: 'Все задачи и связанные с ними сессии — в одном месте.', boardDescription: 'Задачи и работа команды в одном месте.', chooseHint: 'Выберите рабочее пространство и доску, чтобы начать.', workspaceHint: 'Сначала выберите рабочее пространство.', boardHint: 'Выберите доску, чтобы увидеть задачи.', taskCount: 'Задачи', statusCount: 'Статусы', filterLabel: 'Фильтр', refreshShort: 'Обновить доску', emptyColumn: 'В этом статусе пока нет задач', taskBoard: 'Доска задач',
       boardArgsUnsupported: 'Команда /board не принимает аргументы. Откройте /board без аргументов.',
+      assignee: 'Исполнитель', allAssignees: 'Все исполнители', unassigned: 'Не назначен', assigneeUnknown: 'Исполнитель неизвестен', assigneeUnavailable: 'Выбранного исполнителя нет в текущих результатах', sessionFilter: 'Сессия в этом пространстве', allSessions: 'Все задачи', withSession: 'Есть связанная сессия', withoutSession: 'Нет связанной сессии', sessionFilterUnavailable: 'Сведения о сессиях пространства недоступны.',
       boards: 'Доски', allBoards: 'Все доски', noBoardsAnywhere: 'Досок пока нет', noBoardsHelp: 'Выберите рабочее пространство и создайте первую доску.', linkCurrent: 'Привязать сессию', unlinkCurrent: 'Отвязать сессию', sessionHelp: 'Выберите доску и привяжите текущую сессию к задаче.', linkUnavailable: 'Эта сессия недоступна в выбранном пространстве.', returnToBoards: 'Все доски', sessionCount: 'Сессии',
       tracker: 'Яндекс Трекер', trackerConnect: 'Подключить Яндекс Трекер', trackerSettings: 'Настройки Трекера', trackerOrg: 'Тип организации', trackerConfigured: 'Настроен в этом профиле', trackerNotConfigured: 'Не настроен в этом профиле', trackerRefs: 'Данные доступа и идентификатор организации должны быть заранее сохранены на сервере. Здесь они не вводятся.', trackerConfigureWarning: 'Повторное подключение удалит выбор досок всех пространств. Продолжить?', trackerChoose: 'Выбрать доски Трекера', trackerList: 'Загрузить доступные доски', trackerSelect: 'Сохранить выбор досок', trackerReselect: 'После перезапуска или смены аккаунта выбор нужно подтвердить заново. Загрузите доски и выберите их снова.', trackerNoSelection: 'Для этого пространства доски Трекера не выбраны.', trackerListPartial: 'Список досок неполный: доступны могут быть и другие.', trackerPartial: 'Данные на момент последнего запроса частичные: принадлежность к доске определена приблизительно, список может быть неполным, даже если он пуст. Изменения доступа отображаются не мгновенно.', trackerReadOnly: 'только чтение', trackerPartialBadge: 'частично', trackerUnmapped: 'Без соответствия', trackerEmpty: 'В этом частичном результате задачи не найдены.', trackerError: 'Трекер недоступен или запрос не выполнен. Повторите попытку.', trackerReload: 'Обновить настройки', trackerPickerHint: 'Выберите доски для этого пространства явно. Список действует недолго; при ошибке загрузите его снова.', trackerContext: 'Доски Трекера нельзя связывать с сессиями.', trackerRefreshBoard: 'Обновить доску Трекера', trackerSelectionSaved: 'Выбор сохранён.', trackerUncertain: 'Результат неизвестен. Обновите настройки и проверьте их перед повтором.', trackerMissingSelection: 'Некоторых сохранённых досок нет в списке. При сохранении они будут удалены.', trackerConfirmSelection: 'Подтвердить выбор досок для пространства? Удаляемые ID досок: ', trackerNoBoards: 'Доски не найдены.', trackerStatus: 'Статус', trackerClose: 'Закрыть настройки Трекера', trackerListRequired: 'Список досок устарел или изменился. Загрузите его и выберите доски снова.', trackerConflict: 'Настройки Трекера изменились. Обновите их и проверьте выбор.', trackerNotSelected: 'Эта доска больше не выбрана. Обновите настройки.', trackerCredentials: 'Данные доступа на сервере недоступны или отклонены. Проверьте настройки сервера.', trackerRate: 'Трекер занят или ограничил частоту запросов. Повторите позже.', trackerConfiguring: 'Сохранить подключение', trackerLocal: 'Локальная',
     };
@@ -97,7 +101,7 @@ window.__ModuleLoader__.load({
         }
         const taskIds = new Set();
         for (const task of board.tasks) {
-          if (!task || typeof task.id !== 'string' || taskIds.has(task.id) || typeof task.title !== 'string' || !statusIds.has(task.statusId) || (task.description !== undefined && typeof task.description !== 'string')) throw new Error('badSnapshot');
+          if (!task || typeof task.id !== 'string' || taskIds.has(task.id) || typeof task.title !== 'string' || !statusIds.has(task.statusId) || (task.description !== undefined && typeof task.description !== 'string') || (task.assignee !== undefined && task.assignee !== null && typeof task.assignee !== 'string')) throw new Error('badSnapshot');
           taskIds.add(task.id);
         }
       }
@@ -112,11 +116,11 @@ window.__ModuleLoader__.load({
     }
     // Local drafts outlive Page mounts; Tracker data is invalidated at each connection boundary.
     function emptyTracker(generation, open = false) {
-      return { open, settings: null, busy: false, mutating: false, error: '', notice: '', orgType: 'cloud', listing: null, pickerWorkspace: '', picked: [], board: null, incarnations: {}, generation };
+      return { open, settings: null, busy: false, mutating: false, error: '', notice: '', orgType: 'cloud', listing: null, listingStarted: 0, pickerWorkspace: '', picked: [], draftWorkspace: '', draftPicked: [], reviewRequired: false, board: null, boardUpdatedAt: null, incarnations: {}, generation };
     }
     const memory = {
       snapshot: null, workspaceId: '', boardId: '', showContext: false, contextSessionId: '',
-      mode: 'board', query: '', statusFilter: '', form: null, dirty: false,
+      mode: 'board', query: '', statusFilter: '', assigneeFilter: '["all"]', sessionFilter: 'all', form: null, dirty: false,
       pending: false, loading: false, uncertain: false, uncertainRevision: null, readback: false, error: '', generation: 0, overview: true,
       contextHandled: null, provider: 'local', tracker: emptyTracker(0), listeners: new Set(),
     };
@@ -124,8 +128,16 @@ window.__ModuleLoader__.load({
       Object.assign(memory, patch);
       memory.listeners.forEach((listener) => listener());
     }
-    function invalidateTracker(preserveOpen = true) {
-      updateMemory({ tracker: emptyTracker(memory.tracker.generation + 1, preserveOpen && memory.tracker.open) });
+    let privacyEpoch = 0, trackerMutationPending = false;
+    function invalidateTracker(preserveOpen = true, preserveDraft = false) {
+      privacyEpoch++;
+      const current = memory.tracker;
+      const draftWorkspace = current.pickerWorkspace || current.draftWorkspace;
+      const draftPicked = current.pickerWorkspace ? [...current.picked] : current.draftPicked;
+      const next = emptyTracker(current.generation + 1, preserveOpen && current.open);
+      if (trackerMutationPending) Object.assign(next, { busy: true, mutating: true, error: 'trackerUncertain' });
+      if (preserveDraft && draftWorkspace) Object.assign(next, { draftWorkspace, draftPicked, draftIncarnation: current.draftIncarnation || current.incarnations[draftWorkspace], reviewRequired: true });
+      updateMemory({ tracker: next });
     }
     // Register only while needed: browsers may otherwise disable back/forward cache.
     let unloadArmed = false;
@@ -152,7 +164,11 @@ window.__ModuleLoader__.load({
     function trackerBoard(value, id) {
       if (!value || !value.board || value.board.id !== id || typeof value.board.name !== 'string' || value.issuesComplete !== false || !Array.isArray(value.columns) || !Array.isArray(value.issues)) throw new Error('invalid response');
       if (value.columns.some((c) => !c || typeof c.id !== 'string' || typeof c.name !== 'string' || !Array.isArray(c.statuses) || c.statuses.some((s) => !s || typeof s.key !== 'string')) || new Set(value.columns.map((c) => c.id)).size !== value.columns.length || value.issues.some((i) => !i || typeof i.key !== 'string' || typeof i.summary !== 'string' || !i.status || typeof i.status.key !== 'string' || typeof i.status.display !== 'string') || new Set(value.issues.map((i) => i.key)).size !== value.issues.length) throw new Error('invalid response');
-      return { board: { id, name: value.board.name }, columns: value.columns.map((c) => ({ id: c.id, name: c.name, statuses: c.statuses.map((s) => ({ key: s.key })) })), issues: value.issues.map((i) => ({ key: i.key, summary: i.summary, status: { key: i.status.key, display: i.status.display } })) };
+      return { board: { id, name: value.board.name }, columns: value.columns.map((c) => ({ id: c.id, name: c.name, statuses: c.statuses.map((s) => ({ key: s.key })) })), issues: value.issues.map((i) => {
+        const validAssignee = i.assignee && typeof i.assignee === 'object' && typeof i.assignee.id === 'string' && i.assignee.id.length > 0 && typeof i.assignee.display === 'string' && i.assignee.display.length > 0;
+        const known = i.assigneeKnown === true && (i.assignee === null || validAssignee);
+        return { key: i.key, summary: i.summary, status: { key: i.status.key, display: i.status.display }, assigneeKnown: known, assignee: known && validAssignee ? { id: i.assignee.id, display: i.assignee.display } : null };
+      }) };
     }
     function trackerError(error) {
       const code = error?.code;
@@ -205,7 +221,7 @@ window.__ModuleLoader__.load({
       };
       return h('svg', { className: 'dsh-board-icon', width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true }, paths[name]);
     }
-    function Page({ t, transport, workspacesSource, sessionsSource, openSession, sessionContext, connectionSource }) {
+    function Page({ t, transport, workspacesSource, sessionsSource, openSession, sessionContext, connectionSource, panelSource }) {
       const connection = useSource(connectionSource);
       const workspaces = useSource(workspacesSource);
       const sessions = useSource(sessionsSource);
@@ -218,7 +234,7 @@ window.__ModuleLoader__.load({
         listener();
         return () => memory.listeners.delete(listener);
       }, []);
-      const { snapshot, workspaceId, boardId, showContext, contextSessionId, mode, query, statusFilter, form, error, loading, uncertain, overview } = memory;
+      const { snapshot, workspaceId, boardId, showContext, contextSessionId, mode, query, statusFilter, assigneeFilter, sessionFilter, form, error, loading, uncertain, overview } = memory;
       const busy = memory.pending;
       const setMode = (value) => updateMemory({ mode: value });
       const setQuery = (value) => updateMemory({ query: value });
@@ -242,8 +258,19 @@ window.__ModuleLoader__.load({
         ? snapshot.boards.filter((board) => (!workspaceId || board.workspaceId === workspaceId) && workspaces.items.some((item) => item.workspaceId === board.workspaceId) && (!showContext || !contextSessionId || workspaces.items.some((item) => item.workspaceId === board.workspaceId && item.sessionIds.includes(contextSessionId)))) : [];
       const workspace = workspaces.items.find((item) => item.workspaceId === workspaceId);
       const statuses = selected ? [...selected.statuses].sort((a, b) => (a.position || 0) - (b.position || 0)) : [];
-      const tasks = selected ? selected.tasks.filter((task) => (!statusFilter || task.statusId === statusFilter) && (task.title + '\n' + (task.description || '')).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())) : [];
+      const filterValue = (kind, value) => JSON.stringify(value === undefined ? [kind] : [kind, value]);
+      const allAssigneesValue = filterValue('all'), unassignedValue = filterValue('unassigned'), unknownValue = filterValue('unknown');
+      const assigneeMatches = (filter, known, value) => filter === allAssigneesValue || (filter === unknownValue ? !known : filter === unassignedValue ? known && value === null : known && value !== null && filter === filterValue('assignee', value));
+      const localAssignees = selected ? [...new Set(selected.tasks.map((task) => task.assignee).filter((value) => typeof value === 'string'))].sort((a, b) => a.localeCompare(b)) : [];
+      const specialAssigneeFilter = [allAssigneesValue, unassignedValue, unknownValue].includes(assigneeFilter);
       const linksFor = (taskId) => snapshot.links.filter((link) => link.boardId === boardId && link.taskId === taskId);
+      const sessionMembershipReady = Boolean(workspaceReady && workspace && Array.isArray(workspace.sessionIds));
+      const tasks = selected ? selected.tasks.filter((task) => {
+        const linked = sessionMembershipReady && linksFor(task.id).some((link) => workspace.sessionIds.includes(link.sessionId));
+        return (!statusFilter || task.statusId === statusFilter) && (task.title + '\n' + (task.description || '')).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()) &&
+          assigneeMatches(assigneeFilter, task.assignee !== undefined, task.assignee ?? null) &&
+          (sessionFilter === 'all' || (sessionMembershipReady && (sessionFilter === 'linked' ? linked : !linked)));
+      }) : [];
       const availableSessions = workspace && sessions.phase === 'ready' && workspaces.phase === 'ready' && workspaces.state !== 'error'
         ? workspace.sessionIds.filter((id) => sessions.ids.includes(id)) : [];
       function label(id) {
@@ -268,24 +295,50 @@ window.__ModuleLoader__.load({
       }
       useEffect(() => { if (!memory.pending) load(); }, []);
       useEffect(() => {
-        invalidateTracker(false);
         if (connectionSource.getSnapshot()) loadTracker();
-        return () => invalidateTracker(false);
+        return () => invalidateTracker(false, true);
       }, []);
       useEffect(() => {
         if (connection && !memory.tracker.settings && !memory.tracker.busy && !memory.tracker.error) loadTracker();
       }, [connection]);
       useEffect(() => {
-        const refresh = () => {
-          if (document.visibilityState === 'hidden') { if (!memory.tracker.mutating) invalidateTracker(); else updateTracker({ board: null, listing: null }); return; }
-          if (memory.tracker.mutating) { updateTracker({ board: null, listing: null }); return; }
-          invalidateTracker();
-          if (connectionSource.getSnapshot()) loadTracker();
+        let alive = true, running = false, queued = false, lastEvent = 0;
+        const active = () => trackerActive();
+        const targetOpen = () => memory.provider === 'tracker' && !memory.overview && !memory.showContext && Boolean(memory.workspaceId && memory.boardId);
+        // Keep only non-authorizing draft IDs; fence every private response across a boundary.
+        const clearPrivate = () => {
+          privacyEpoch++;
+          const current = memory.tracker;
+          const draftWorkspace = current.pickerWorkspace || current.draftWorkspace;
+          const draftPicked = current.pickerWorkspace ? [...current.picked] : current.draftPicked;
+          updateTracker({ settings: null, incarnations: {}, board: null, boardUpdatedAt: null, listing: null, pickerWorkspace: '', draftWorkspace, draftPicked, draftIncarnation: current.draftIncarnation || current.incarnations[draftWorkspace], reviewRequired: Boolean(draftWorkspace) });
         };
-        window.addEventListener('focus', refresh);
-        document.addEventListener('visibilitychange', refresh);
-        const timer = window.setInterval(() => { if (document.visibilityState !== 'hidden') refresh(); }, 30000);
-        return () => { window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', refresh); window.clearInterval(timer); };
+        const drain = async () => {
+          if (!alive || running || !queued || !active() || !connectionSource.getSnapshot() || memory.tracker.busy) return;
+          queued = false; running = true;
+          try { await loadTracker(); } finally {
+            running = false;
+            if (alive && queued) void drain();
+          }
+        };
+        const request = (force = false) => {
+          if (!force && !targetOpen()) return;
+          if (running && lastEvent && Date.now() - lastEvent < 250) return;
+          lastEvent = Date.now();
+          clearPrivate();
+          if (!active()) { queued = false; return; }
+          queued = true; void drain();
+        };
+        const onVisibility = () => { if (!active()) { clearPrivate(); queued = false; lastEvent = 0; } else request(true); };
+        const onFocus = () => { if (active()) request(true); };
+        const onPanel = () => { if (!active()) { clearPrivate(); queued = false; lastEvent = 0; } else request(true); };
+        const onMemory = () => { if (queued && !running && !memory.tracker.busy) void drain(); };
+        window.addEventListener('focus', onFocus);
+        document.addEventListener('visibilitychange', onVisibility);
+        const unsubscribe = panelSource?.subscribe(onPanel);
+        memory.listeners.add(onMemory);
+        const timer = window.setInterval(() => { if (active() && targetOpen()) request(); }, 30000);
+        return () => { alive = false; queued = false; memory.listeners.delete(onMemory); unsubscribe?.(); window.removeEventListener('focus', onFocus); document.removeEventListener('visibilitychange', onVisibility); window.clearInterval(timer); };
       }, []);
       useEffect(() => {
         if (!context.sessionId || workspaces.phase !== 'ready' || workspaces.state === 'error' || memory.contextHandled === context.token) return;
@@ -294,12 +347,18 @@ window.__ModuleLoader__.load({
         if (memory.form && memory.dirty && !window.confirm(t('discardDraft'))) { memory.contextHandled = context.token; return; }
         memory.contextHandled = context.token;
         const candidates = workspaces.items.filter((item) => item.sessionIds.includes(context.sessionId));
-        updateMemory({ showContext: true, contextSessionId: context.sessionId, form: null, dirty: false, workspaceId: candidates.length === 1 ? candidates[0].workspaceId : '', boardId: '', provider: 'local', statusFilter: '', query: '', overview: true });
+        updateMemory({ showContext: true, contextSessionId: context.sessionId, form: null, dirty: false, workspaceId: candidates.length === 1 ? candidates[0].workspaceId : '', boardId: '', provider: 'local', statusFilter: '', query: '', assigneeFilter: '["all"]', sessionFilter: 'all', overview: true });
       }, [context, workspaces, busy, uncertain]);
       useEffect(() => { if (form && formHeading.current) formHeading.current.focus(); }, [form && form.kind]);
       function updateTracker(patch) { updateMemory({ tracker: { ...memory.tracker, ...patch } }); }
       function validTrackerRequest(epoch, connectionId) {
         return memory.tracker.generation === epoch && connectionId !== undefined && connectionSource.getSnapshot()?.id === connectionId;
+      }
+      function trackerActive() {
+        return document.visibilityState !== 'hidden' && (!panelSource || panelSource.getSnapshot()?.activePanelId === PANEL);
+      }
+      function validPrivateRequest(generation, connectionId, epoch) {
+        return validTrackerRequest(generation, connectionId) && privacyEpoch === epoch && trackerActive();
       }
       function workspaceIncarnation(id) {
         const current = workspacesSource.getSnapshot();
@@ -315,21 +374,24 @@ window.__ModuleLoader__.load({
         if (current.phase === 'ready' && current.state !== 'error') for (const item of current.items) if (typeof item.createdAt === 'string' && item.createdAt) result[item.workspaceId] = item.createdAt;
         return result;
       }
-      async function loadTracker() {
+      async function loadTracker(accepts = () => document.visibilityState !== 'hidden' && (!panelSource || panelSource.getSnapshot()?.activePanelId === PANEL)) {
         const connectionId = connectionSource.getSnapshot()?.id;
-        if (memory.tracker.busy || connectionId === undefined) return;
-        const generation = memory.tracker.generation + 1, incarnations = workspaceIncarnations();
+        if (memory.tracker.busy || connectionId === undefined || !accepts()) return;
+        const generation = memory.tracker.generation + 1, incarnations = workspaceIncarnations(), epoch = privacyEpoch;
         const target = memory.provider === 'tracker' && !memory.overview && !memory.showContext ? memory.workspaceId : '', id = memory.boardId;
-        updateTracker({ busy: true, error: '', notice: '', settings: null, pickerWorkspace: '', listing: null, board: null, incarnations: {}, generation });
+        const draftWorkspace = memory.tracker.pickerWorkspace || memory.tracker.draftWorkspace;
+        const draftPicked = memory.tracker.pickerWorkspace ? [...memory.tracker.picked] : memory.tracker.draftPicked;
+        updateTracker({ busy: true, error: '', notice: '', settings: null, pickerWorkspace: '', listing: null, draftWorkspace, draftPicked, reviewRequired: Boolean(draftWorkspace), board: null, boardUpdatedAt: null, incarnations: {}, generation });
         try {
           const settings = trackerSettings(await transport.trackerRead());
-          if (!validTrackerRequest(generation, connectionId)) return;
+          if (!validPrivateRequest(generation, connectionId, epoch) || !accepts()) return;
           updateTracker({ settings, orgType: settings.orgType || 'cloud', incarnations, board: null });
-          if (target && memory.provider === 'tracker' && memory.workspaceId === target && memory.boardId === id && currentWorkspace(target, incarnations[target]) && !settings.needsReselect.includes(target) && settings.workspaces[target]?.includes(id)) {
+          if (target && memory.provider === 'tracker' && !memory.overview && !memory.showContext && memory.workspaceId === target && memory.boardId === id && currentWorkspace(target, incarnations[target])) {
+            if (settings.needsReselect.includes(target) || !settings.workspaces[target]?.includes(id)) { updateTracker({ error: 'trackerReselect' }); return; }
             const board = trackerBoard(await transport.trackerCommand({ op: 'board.read', workspaceId: target, boardId: id, issueKeys: [] }), id);
-            if (validTrackerRequest(generation, connectionId) && memory.provider === 'tracker' && memory.workspaceId === target && memory.boardId === id && currentWorkspace(target, incarnations[target])) updateTracker({ board });
+            if (validPrivateRequest(generation, connectionId, epoch) && accepts() && memory.provider === 'tracker' && !memory.overview && !memory.showContext && memory.workspaceId === target && memory.boardId === id && currentWorkspace(target, incarnations[target])) updateTracker({ board, boardUpdatedAt: Date.now() });
           }
-        } catch { if (validTrackerRequest(generation, connectionId)) updateTracker({ settings: null, board: null, error: 'trackerError' }); }
+        } catch (err) { if (validPrivateRequest(generation, connectionId, epoch) && accepts() && (!target || (memory.provider === 'tracker' && !memory.overview && memory.workspaceId === target && memory.boardId === id))) updateTracker({ settings: null, board: null, error: trackerError(err) }); }
         finally { if (validTrackerRequest(generation, connectionId)) updateTracker({ busy: false }); }
       }
       async function configureTracker() {
@@ -337,73 +399,96 @@ window.__ModuleLoader__.load({
         if (current.busy || !current.settings || (current.settings.configured && !window.confirm(t('trackerConfigureWarning')))) return;
         const revision = current.settings.revision, connectionId = connectionSource.getSnapshot()?.id;
         if (connectionId === undefined) return;
-        const generation = current.generation + 1;
+        const generation = current.generation + 1, epoch = privacyEpoch;
+        trackerMutationPending = true;
         updateTracker({ busy: true, mutating: true, error: '', notice: '', listing: null, pickerWorkspace: '', board: null, settings: null, generation });
         try {
           const next = trackerSettings(await transport.trackerCommand({ op: 'configuration.configure', expectedRevision: revision, orgType: current.orgType }));
-          if (!validTrackerRequest(generation, connectionId)) return;
+          if (!validPrivateRequest(generation, connectionId, epoch)) return;
           if (next.revision !== revision + 1 || !next.configured) throw new Error('invalid receipt');
-          updateTracker({ settings: next, orgType: next.orgType, notice: 'trackerConfigured' });
-        } catch (err) { if (validTrackerRequest(generation, connectionId)) updateTracker({ settings: null, error: err.status >= 400 && err.status < 500 ? trackerError(err) : 'trackerUncertain' }); }
-        finally { if (validTrackerRequest(generation, connectionId)) updateTracker({ busy: false, mutating: false }); }
+          updateTracker({ settings: next, orgType: next.orgType, notice: 'trackerConfigured', draftWorkspace: '', draftPicked: [], reviewRequired: false });
+        } catch (err) { if (validPrivateRequest(generation, connectionId, epoch)) updateTracker({ settings: null, error: err.status >= 400 && err.status < 500 ? trackerError(err) : 'trackerUncertain' }); }
+        finally {
+          trackerMutationPending = false;
+          if (validTrackerRequest(generation, connectionId)) updateTracker({ busy: false, mutating: false, ...(privacyEpoch !== epoch ? { error: 'trackerUncertain' } : {}) });
+          else if (memory.tracker.mutating) {
+            updateTracker({ busy: false, mutating: false, settings: null, error: 'trackerUncertain' });
+            if (trackerActive() && connectionSource.getSnapshot()) void loadTracker();
+          }
+        }
       }
       async function listTrackerBoards() {
         const current = memory.tracker;
         if (current.busy || !current.settings?.configured || !memory.workspaceId || !workspaceReady) return;
         const target = memory.workspaceId, revision = current.settings.revision, connectionId = connectionSource.getSnapshot()?.id;
         if (connectionId === undefined || !currentWorkspace(target)) return;
-        const generation = current.generation + 1;
-        updateTracker({ busy: true, error: '', notice: '', listing: null, pickerWorkspace: '', generation });
+        const generation = current.generation + 1, epoch = privacyEpoch, incarnation = current.incarnations[target];
+        const listingStarted = Date.now(), draftWorkspace = current.pickerWorkspace || current.draftWorkspace;
+        const draftPicked = current.pickerWorkspace ? [...current.picked] : current.draftPicked;
+        updateTracker({ busy: true, error: '', notice: '', listing: null, pickerWorkspace: '', draftWorkspace, draftPicked, generation });
         try {
           const listing = trackerListing(await transport.trackerCommand({ op: 'boards.list' }));
-          if (!validTrackerRequest(generation, connectionId) || memory.workspaceId !== target || !currentWorkspace(target) || memory.tracker.settings?.revision !== revision) return;
-          const saved = current.settings.workspaces[target] || [];
-          updateTracker({ listing, pickerWorkspace: target, picked: saved.filter((id) => listing.boards.some((board) => board.id === id)) });
-        } catch (err) { if (validTrackerRequest(generation, connectionId) && memory.workspaceId === target && currentWorkspace(target)) updateTracker({ error: trackerError(err) }); }
+          if (!validPrivateRequest(generation, connectionId, epoch) || memory.workspaceId !== target || !currentWorkspace(target, incarnation) || memory.tracker.settings?.revision !== revision) return;
+          const hasDraft = draftWorkspace === target && current.draftIncarnation === incarnation;
+          const saved = hasDraft ? draftPicked : current.settings.workspaces[target] || [];
+          updateTracker({ listing, listingStarted, pickerWorkspace: target, picked: hasDraft ? [...saved] : saved.filter((id) => listing.boards.some((board) => board.id === id)), draftWorkspace: target, draftPicked: saved, draftIncarnation: incarnation, reviewRequired: hasDraft });
+        } catch (err) { if (validPrivateRequest(generation, connectionId, epoch) && memory.workspaceId === target && currentWorkspace(target, incarnation)) updateTracker({ error: trackerError(err) }); }
         finally { if (validTrackerRequest(generation, connectionId)) updateTracker({ busy: false }); }
       }
       async function selectTrackerBoards() {
         const current = memory.tracker, target = memory.workspaceId;
         if (current.busy || !current.settings || !current.listing || current.pickerWorkspace !== target || !workspaceReady) return;
+        if (Date.now() - current.listingStarted >= 30000 || current.reviewRequired) { updateTracker({ error: 'trackerListRequired' }); return; }
+        if (current.picked.some((id) => !current.listing.boards.some((board) => board.id === id))) { updateTracker({ error: 'trackerListRequired' }); return; }
         const revision = current.settings.revision, connectionId = connectionSource.getSnapshot()?.id;
         if (connectionId === undefined || !currentWorkspace(target)) return;
         const removed = (current.settings.workspaces[target] || []).filter((id) => !current.picked.includes(id));
-        if ((removed.length || current.settings.needsReselect.includes(target)) && !window.confirm(t('trackerConfirmSelection') + (removed.join(', ') || '—'))) return;
-        const generation = current.generation + 1, incarnations = workspaceIncarnations();
-        updateTracker({ busy: true, mutating: true, error: '', notice: '', settings: null, listing: null, board: null, generation });
+        if (!window.confirm(t('trackerConfirmSelection') + (removed.join(', ') || '—'))) return;
+        const generation = current.generation + 1, incarnations = workspaceIncarnations(), epoch = privacyEpoch;
+        trackerMutationPending = true;
+        updateTracker({ busy: true, mutating: true, error: '', notice: '', settings: null, listing: null, pickerWorkspace: '', draftWorkspace: target, draftPicked: [...current.picked], draftIncarnation: incarnations[target], reviewRequired: true, board: null, generation });
         try {
           const receipt = await transport.trackerCommand({ op: 'workspace.select', expectedRevision: revision, workspaceId: target, boardIds: [...current.picked] });
-          if (!validTrackerRequest(generation, connectionId)) return;
+          if (!validPrivateRequest(generation, connectionId, epoch)) return;
           if (!receipt || receipt.revision !== revision + 1 || receipt.workspaceId !== target || !Array.isArray(receipt.boardIds) || JSON.stringify(receipt.boardIds) !== JSON.stringify(current.picked)) throw new Error('invalid receipt');
           const settings = trackerSettings(await transport.trackerRead());
-          if (!validTrackerRequest(generation, connectionId)) return;
+          if (!validPrivateRequest(generation, connectionId, epoch)) return;
           if (settings.revision < receipt.revision) throw new Error('invalid receipt');
-          updateTracker({ settings, listing: current.listing, incarnations, pickerWorkspace: '', picked: [], board: null, notice: 'trackerSelectionSaved' });
+          updateTracker({ settings, listing: null, incarnations, pickerWorkspace: '', picked: [], draftWorkspace: '', draftPicked: [], draftIncarnation: undefined, reviewRequired: false, board: null, notice: 'trackerSelectionSaved' });
         } catch (err) {
-          if (validTrackerRequest(generation, connectionId)) {
+          if (validPrivateRequest(generation, connectionId, epoch)) {
             updateTracker({ settings: null, listing: null, pickerWorkspace: '', board: null, error: err.status >= 400 && err.status < 500 ? trackerError(err) : 'trackerUncertain' });
             try {
               const settings = trackerSettings(await transport.trackerRead());
-              if (validTrackerRequest(generation, connectionId)) updateTracker({ settings, incarnations: workspaceIncarnations() });
+              if (validPrivateRequest(generation, connectionId, epoch)) updateTracker({ settings, incarnations: workspaceIncarnations() });
             } catch { /* Remain invalid until an explicit reload succeeds. */ }
           }
-        } finally { if (validTrackerRequest(generation, connectionId)) updateTracker({ busy: false, mutating: false }); }
+        } finally {
+          trackerMutationPending = false;
+          if (validTrackerRequest(generation, connectionId)) updateTracker({ busy: false, mutating: false, ...(privacyEpoch !== epoch ? { error: 'trackerUncertain' } : {}) });
+          else if (memory.tracker.mutating) {
+            updateTracker({ busy: false, mutating: false, settings: null, error: 'trackerUncertain' });
+            if (trackerActive() && connectionSource.getSnapshot()) void loadTracker();
+          }
+        }
       }
       async function readTrackerBoard(target, id) {
         const settings = memory.tracker.settings, connectionId = connectionSource.getSnapshot()?.id;
         if (memory.tracker.busy || connectionId === undefined || !currentWorkspace(target) || !settings || settings.needsReselect.includes(target) || !settings.workspaces[target]?.includes(id)) return;
-        const incarnation = memory.tracker.incarnations[target], generation = memory.tracker.generation + 1;
-        updateTracker({ busy: true, error: '', settings: null, listing: null, board: null, generation });
-        const accepts = () => validTrackerRequest(generation, connectionId) && currentWorkspace(target, incarnation) && memory.provider === 'tracker' && memory.workspaceId === target && memory.boardId === id;
+        const incarnation = memory.tracker.incarnations[target], generation = memory.tracker.generation + 1, epoch = privacyEpoch;
+        const current = memory.tracker, draftWorkspace = current.pickerWorkspace || current.draftWorkspace;
+        const draftPicked = current.pickerWorkspace ? [...current.picked] : current.draftPicked;
+        updateTracker({ busy: true, error: '', settings: null, listing: null, pickerWorkspace: '', draftWorkspace, draftPicked, reviewRequired: Boolean(draftWorkspace), board: null, boardUpdatedAt: null, generation });
+        const accepts = () => validPrivateRequest(generation, connectionId, epoch) && currentWorkspace(target, incarnation) && memory.provider === 'tracker' && !memory.overview && !memory.showContext && memory.workspaceId === target && memory.boardId === id;
         try {
           const fresh = trackerSettings(await transport.trackerRead());
           if (!accepts()) return;
           updateTracker({ settings: fresh });
           if (fresh.needsReselect.includes(target) || !fresh.workspaces[target]?.includes(id)) { updateTracker({ error: 'trackerReselect' }); return; }
           const board = trackerBoard(await transport.trackerCommand({ op: 'board.read', workspaceId: target, boardId: id, issueKeys: [] }), id);
-          if (accepts()) updateTracker({ board });
+          if (accepts()) updateTracker({ board, boardUpdatedAt: Date.now() });
         } catch (err) {
-          if (validTrackerRequest(generation, connectionId)) {
+          if (validPrivateRequest(generation, connectionId, epoch)) {
             const error = trackerError(err), targetActive = accepts();
             if (['trackerReselect', 'trackerConflict', 'trackerNotSelected', 'trackerCredentials'].includes(error)) updateTracker({ settings: null, listing: null, board: null });
             if (targetActive) updateTracker({ error, board: null });
@@ -412,7 +497,7 @@ window.__ModuleLoader__.load({
       }
       function openTrackerBoard(board) {
         if (memory.pending || memory.uncertain || memory.tracker.busy || !setForm(null)) return;
-        updateMemory({ workspaceId: board.workspaceId, boardId: board.id, provider: 'tracker', statusFilter: '', query: '', overview: false, showContext: false });
+        updateMemory({ workspaceId: board.workspaceId, boardId: board.id, provider: 'tracker', statusFilter: '', query: '', assigneeFilter: '["all"]', sessionFilter: 'all', overview: false, showContext: false });
         readTrackerBoard(board.workspaceId, board.id);
       }
       async function submit(command) {
@@ -451,27 +536,30 @@ window.__ModuleLoader__.load({
         if (!form || (form.kind !== 'board' && !selected)) return;
         if (form.kind === 'board') submit({ op: 'board.create', workspaceId, name: form.name.trim() });
         if (form.kind === 'status') submit({ op: 'status.save', workspaceId, boardId, status: { ...(form.id ? { id: form.id } : {}), name: form.name.trim(), ...(form.position !== undefined ? { position: form.position } : {}) } });
-        if (form.kind === 'task') submit({ op: 'task.save', workspaceId, boardId, task: { ...(form.id ? { id: form.id } : {}), title: form.title.trim(), description: form.description, statusId: form.statusId } });
+        if (form.kind === 'task') submit({ op: 'task.save', workspaceId, boardId, task: { ...(form.id ? { id: form.id } : {}), title: form.title.trim(), description: form.description, statusId: form.statusId, ...(form.assigneeEdited ? { assignee: form.assignee.trim() || null } : {}) } });
       }
       function changeWorkspace(event) {
         const value = event.target.value;
+        const tracker = memory.tracker;
+        const draftWorkspace = tracker.pickerWorkspace || tracker.draftWorkspace;
+        if (value !== memory.workspaceId && draftWorkspace && !window.confirm(t('discardDraft'))) { event.target.value = memory.workspaceId; return; }
         if (!setForm(null)) { event.target.value = memory.workspaceId; return; }
-        updateMemory({ workspaceId: value, boardId: '', provider: 'local', statusFilter: '', query: '', overview: true, tracker: { ...memory.tracker, pickerWorkspace: '', picked: [], board: null } });
+        updateMemory({ workspaceId: value, boardId: '', provider: 'local', statusFilter: '', query: '', assigneeFilter: '["all"]', sessionFilter: 'all', overview: true, tracker: { ...memory.tracker, pickerWorkspace: '', picked: [], draftWorkspace: '', draftPicked: [], draftIncarnation: undefined, reviewRequired: false, listing: null, board: null } });
       }
       function changeBoard(event) {
         const value = event.target.value;
         if (!setForm(null)) { event.target.value = memory.boardId; return; }
-        updateMemory({ boardId: value, provider: 'local', statusFilter: '', query: '', overview: !value });
+        updateMemory({ boardId: value, provider: 'local', statusFilter: '', query: '', assigneeFilter: '["all"]', sessionFilter: 'all', overview: !value });
       }
       function openBoard(board) {
         if (memory.pending || memory.uncertain || !setForm(null)) return;
-        updateMemory({ workspaceId: board.workspaceId, boardId: board.id, provider: 'local', statusFilter: '', query: '', overview: false });
+        updateMemory({ workspaceId: board.workspaceId, boardId: board.id, provider: 'local', statusFilter: '', query: '', assigneeFilter: '["all"]', sessionFilter: 'all', overview: false });
       }
       function showBoards() {
         if (!setForm(null)) return;
-        updateMemory({ workspaceId: '', boardId: '', provider: 'local', statusFilter: '', query: '', overview: true });
+        updateMemory({ workspaceId: '', boardId: '', provider: 'local', statusFilter: '', query: '', assigneeFilter: '["all"]', sessionFilter: 'all', overview: true });
       }
-      function editTask(task) { setForm({ kind: 'task', id: task.id, title: task.title, description: task.description || '', statusId: task.statusId }); }
+      function editTask(task) { setForm({ kind: 'task', id: task.id, title: task.title, description: task.description || '', statusId: task.statusId, assignee: task.assignee ?? '', assigneeEdited: false }); }
       function open(id) { if (sessionState(id, sessions, workspaces) === 'available') openSession(id); }
       function link(id, linked, taskId) {
         if (memory.form && memory.form.kind !== 'links' && memory.dirty && !window.confirm(t('discardDraft'))) return;
@@ -487,6 +575,7 @@ window.__ModuleLoader__.load({
             h('button', { className: 'dsh-board-card-title', type: 'button', disabled: busy || uncertain, onClick: () => editTask(task), 'aria-label': t('editTask') + ': ' + task.title, style: { flex: 1, minWidth: 0, justifyContent: 'flex-start', overflowWrap: 'anywhere', textAlign: 'left' } }, task.title),
             mode === 'list' && h('span', { className: 'dsh-board-card-status' }, statuses.find((s) => s.id === task.statusId)?.name || t('statusMissing')),
             h('button', { className: 'dsh-board-card-action dsh-board-card-action-links dsh-board-count', type: 'button', disabled: busy || uncertain, onClick: () => setForm({ kind: 'links', id: task.id, title: task.title }), 'aria-label': t('sessions') + ': ' + task.title, title: t('sessions'), style: { flex: 'none' } }, h(Icon, { name: 'sessions' }), String(taskLinks.length))),
+          task.assignee && h('span', { className: 'dsh-board-muted' }, t('assignee'), ': ', task.assignee),
           showContext && contextSessionId && (membership || isLinked) && h('button', { className: 'dsh-board-card-current' + (isLinked ? ' is-linked' : ''), type: 'button', disabled: busy || loading || uncertain || !snapshot || !selected || (!isLinked && unavailable), 'aria-label': t(isLinked ? 'unlinkCurrent' : 'linkCurrent') + ': ' + task.title, onClick: () => link(contextSessionId, !isLinked, task.id) }, t(isLinked ? 'unlinkCurrent' : 'linkCurrent')));
       }
       function formView() {
@@ -515,31 +604,39 @@ window.__ModuleLoader__.load({
           form.kind === 'task' && h(React.Fragment, null,
             h('label', null, t('title'), h('input', { required: true, readOnly: busy || uncertain, maxLength: 200, value: form.title, onChange: (event) => setField('title', event.target.value) })),
             h('label', null, t('description'), h('textarea', { readOnly: busy || uncertain, maxLength: 48 * 1024, value: form.description, onChange: (event) => setField('description', event.target.value) })),
+            h('label', null, t('assignee'), h('input', { readOnly: busy || uncertain, maxLength: 256, value: form.assignee || '', onChange: (event) => { if (!memory.form || memory.pending || memory.uncertain) return; updateMemory({ form: { ...memory.form, assignee: event.target.value, assigneeEdited: true }, dirty: true }); } })),
             h('label', null, t('status'), h('select', { required: true, disabled: busy || uncertain, value: form.statusId, onChange: (event) => setField('statusId', event.target.value) }, statuses.map((status) => h('option', { key: status.id, value: status.id }, status.name))))),
           h('div', { className: 'dsh-board-row' }, h('button', { type: 'submit', disabled: busy || loading || uncertain || !snapshot || (form.kind !== 'board' && !selected) || ((form.kind === 'board' || form.kind === 'status') && !form.name.trim()) || (form.kind === 'task' && (!form.title.trim() || !form.statusId)) }, busy ? t('saving') : t('save')),
             h('button', { type: 'button', disabled: busy || uncertain, onClick: () => setForm(null) }, t('cancel'))));
       }
       function trackerView() {
-        if (memory.provider !== 'tracker' || overview || showContext || !connection || !workspaceReady || !trackerLive(workspaceId)) return null;
-        const value = workspaceReady && trackerLive(workspaceId) && tracker.settings.workspaces[workspaceId]?.includes(boardId) ? tracker.board : null;
+        if (memory.provider !== 'tracker' || overview || showContext) return null;
+        const value = connection && workspaceReady && trackerLive(workspaceId) && tracker.settings.workspaces[workspaceId]?.includes(boardId) ? tracker.board : null;
         const statusOwners = new Map();
         for (const column of value?.columns || []) for (const key of new Set(column.statuses.map((s) => s.key))) {
           const owners = statusOwners.get(key) || []; owners.push(column.id); statusOwners.set(key, owners);
         }
-        const grouped = (value?.columns || []).map((column) => ({ id: column.id, name: column.name, issues: value.issues.filter((issue) => { const owners = statusOwners.get(issue.status.key) || []; return owners.length === 1 && owners[0] === column.id; }) }));
-        const unmapped = (value?.issues || []).filter((issue) => (statusOwners.get(issue.status.key) || []).length !== 1);
+        const assignees = new Map();
+        for (const issue of value?.issues || []) if (issue.assigneeKnown && issue.assignee && !assignees.has(issue.assignee.id)) assignees.set(issue.assignee.id, issue.assignee.display);
+        const issues = (value?.issues || []).filter((issue) => assigneeMatches(assigneeFilter, issue.assigneeKnown, issue.assignee?.id ?? null));
+        const grouped = (value?.columns || []).map((column) => ({ id: column.id, name: column.name, issues: issues.filter((issue) => { const owners = statusOwners.get(issue.status.key) || []; return owners.length === 1 && owners[0] === column.id; }) }));
+        const unmapped = issues.filter((issue) => (statusOwners.get(issue.status.key) || []).length !== 1);
         if (unmapped.length) grouped.push({ id: null, name: t('trackerUnmapped'), issues: unmapped });
         return h('section', { 'aria-label': t('tracker') },
           h('div', { className: 'dsh-board-section-head' }, h('div', null,
             h('button', { className: 'dsh-board-back', type: 'button', disabled: busy || uncertain, onClick: showBoards }, '← ', t('returnToBoards')),
-            h('div', { className: 'dsh-board-section-title' }, h('h2', null, value?.board.name || `${t('tracker')} #${boardId}`)),
+            h('div', { className: 'dsh-board-section-title' }, h('h2', null, value?.board.name || (connection && trackerLive(workspaceId) ? `${t('tracker')} #${boardId}` : t('tracker')))),
             h('p', { className: 'dsh-board-muted' }, t('tracker'), ' · ', t('trackerReadOnly'), ' · ', t('trackerPartialBadge'))),
             h('button', { type: 'button', disabled: tracker.busy || !trackerLive(workspaceId), onClick: () => readTrackerBoard(workspaceId, boardId) }, t('trackerRefreshBoard'))),
           h('p', { className: 'dsh-board-alert', role: 'status' }, t('trackerPartial'), ' ', t('trackerContext')),
+          tracker.busy && h('p', { role: 'status' }, t('loading')),
+          value && tracker.boardUpdatedAt !== null && h('p', { className: 'dsh-board-muted', role: 'status' }, t('trackerUpdatedAt'), ' ', new Date(tracker.boardUpdatedAt).toLocaleString()),
+          value && h('label', { className: 'dsh-board-filter' }, h('select', { 'aria-label': t('assignee'), value: assigneeFilter, onChange: (event) => updateMemory({ assigneeFilter: event.target.value }) }, h('option', { value: allAssigneesValue }, t('allAssignees')), h('option', { value: unassignedValue }, t('unassigned')), h('option', { value: unknownValue }, t('assigneeUnknown')), !specialAssigneeFilter && ![...assignees.keys()].some((id) => filterValue('assignee', id) === assigneeFilter) && h('option', { value: assigneeFilter }, t('assigneeUnavailable')), [...assignees].sort((a, b) => a[1].localeCompare(b[1]) || a[0].localeCompare(b[0])).map(([id, display]) => h('option', { key: id, value: filterValue('assignee', id) }, display, ' (', id, ')')))),
           value && !value.issues.length && h('p', { className: 'dsh-board-muted' }, t('trackerEmpty')),
+          value && value.issues.length > 0 && !issues.length && h('p', { className: 'dsh-board-muted' }, t('noResults')),
           value && h('div', { className: 'dsh-board-kanban' }, grouped.map((column) => h('section', { className: 'dsh-board-column', key: column.id || '__unmapped', 'aria-label': column.name },
             h('div', { className: 'dsh-board-column-head' }, h('div', { className: 'dsh-board-column-label' }, h('h2', null, column.name), h('span', { className: 'dsh-board-count' }, column.issues.length))),
-            column.issues.map((issue) => h('article', { className: 'dsh-board-card', key: issue.key }, h('span', { className: 'dsh-board-card-id' }, issue.key), h('h3', null, issue.summary), h('span', { className: 'dsh-board-card-status' }, issue.status.display)))))));
+            column.issues.map((issue) => h('article', { className: 'dsh-board-card', key: issue.key }, h('span', { className: 'dsh-board-card-id' }, issue.key), h('h3', null, issue.summary), h('span', { className: 'dsh-board-card-status' }, issue.status.display), h('span', { className: 'dsh-board-muted' }, t('assignee'), ': ', issue.assigneeKnown ? (issue.assignee?.display || t('unassigned')) : t('assigneeUnknown'))))))));
       }
       const colors = ['var(--dsw-alias-state-business-primary, #4176e6)', 'var(--dsw-alias-state-warn-primary, #d89548)', 'var(--dsw-alias-state-success-primary, #45a784)', 'var(--dsw-alias-state-error-primary, #d16f72)'];
       return h('main', { className: 'dsh-board' }, h('style', null, css), h('div', { className: 'dsh-board-shell' },
@@ -563,7 +660,9 @@ window.__ModuleLoader__.load({
                 !tracker.listing.complete && h('p', { className: 'dsh-board-alert' }, t('trackerListPartial')),
                 (tracker.settings.workspaces[workspaceId] || []).some((id) => !tracker.listing.boards.some((board) => board.id === id)) && h('p', { className: 'dsh-board-alert' }, t('trackerMissingSelection')),
                 tracker.listing.boards.length ? h('fieldset', { disabled: tracker.busy }, h('legend', null, t('trackerChoose')), tracker.listing.boards.map((board) => h('label', { key: board.id }, h('input', { type: 'checkbox', checked: tracker.picked.includes(board.id), onChange: (event) => updateTracker({ picked: event.target.checked ? [...memory.tracker.picked, board.id] : memory.tracker.picked.filter((id) => id !== board.id) }) }), board.name, ' #', board.id))) : h('p', null, t('trackerNoBoards')),
-                h('button', { type: 'button', disabled: tracker.busy, onClick: selectTrackerBoards }, t('trackerSelect'))))),
+                tracker.picked.filter((id) => !tracker.listing.boards.some((board) => board.id === id)).map((id) => h('label', { key: id }, h('input', { type: 'checkbox', checked: true, onChange: () => updateTracker({ picked: memory.tracker.picked.filter((value) => value !== id) }) }), t('trackerMissingSelection'), ' #', id)),
+                tracker.reviewRequired && h('label', null, h('input', { type: 'checkbox', checked: false, onChange: (event) => { if (event.target.checked) updateTracker({ reviewRequired: false }); } }), t('trackerReviewDraft')),
+                h('button', { type: 'button', disabled: tracker.busy || tracker.reviewRequired, onClick: selectTrackerBoards }, t('trackerSelect'))))),
           !tracker.settings && !tracker.busy && h('button', { type: 'button', onClick: loadTracker }, t('trackerReload'))),
         tracker.error && h('div', { className: 'dsh-board-alert', role: 'alert' }, t(tracker.error)),
         tracker.notice && h('p', { className: 'dsh-board-muted', role: 'status' }, t(tracker.notice)),
@@ -601,7 +700,7 @@ window.__ModuleLoader__.load({
               h('div', null, h('button', { className: 'dsh-board-back', type: 'button', disabled: busy || uncertain, onClick: showBoards }, '← ', t('returnToBoards')), h('div', { className: 'dsh-board-section-title' }, h('h2', null, selected.name)), h('div', { className: 'dsh-board-summary' }, h('span', null, t('taskCount'), ': ', selected.tasks.length), h('span', { className: 'dsh-board-summary-dot', 'aria-hidden': true }), h('span', null, t('statusCount'), ': ', statuses.length))),
               h('div', { className: 'dsh-board-actions' },
                 h('button', { type: 'button', disabled: busy || uncertain, onClick: () => setForm({ kind: 'status', name: '' }) }, h(Icon, { name: 'plus' }), t('addStatus')),
-                h('button', { className: 'dsh-board-primary', type: 'button', disabled: busy || uncertain || !statuses.length, onClick: () => setForm({ kind: 'task', title: '', description: '', statusId: statuses[0].id }) }, h(Icon, { name: 'plus' }), t('addTask')))),
+                h('button', { className: 'dsh-board-primary', type: 'button', disabled: busy || uncertain || !statuses.length, onClick: () => setForm({ kind: 'task', title: '', description: '', statusId: statuses[0].id, assignee: '', assigneeEdited: false }) }, h(Icon, { name: 'plus' }), t('addTask')))),
             showContext && contextSessionId && (!workspace || !workspace.sessionIds.includes(contextSessionId)) && h('p', { className: 'dsh-board-alert', role: 'status' }, t('linkUnavailable')),
             h('div', { className: 'dsh-board-toolbar' },
               h('div', { className: 'dsh-board-switch', role: 'group', 'aria-label': t('view') },
@@ -609,7 +708,10 @@ window.__ModuleLoader__.load({
                 h('button', { type: 'button', 'aria-pressed': mode === 'list', onClick: () => setMode('list') }, t('listView'))),
               h('div', { className: 'dsh-board-toolbar-spacer' }),
               h('label', { className: 'dsh-board-search' }, h(Icon, { name: 'search' }), h('input', { type: 'search', 'aria-label': t('search'), placeholder: t('search'), value: query, onChange: (event) => setQuery(event.target.value) })),
-              h('label', { className: 'dsh-board-filter' }, h(Icon, { name: 'filter' }), h('select', { 'aria-label': t('status'), value: statusFilter, onChange: (event) => setStatusFilter(event.target.value) }, h('option', { value: '' }, t('allStatuses')), statuses.map((status) => h('option', { key: status.id, value: status.id }, status.name))))),
+              h('label', { className: 'dsh-board-filter' }, h(Icon, { name: 'filter' }), h('select', { 'aria-label': t('status'), value: statusFilter, onChange: (event) => setStatusFilter(event.target.value) }, h('option', { value: '' }, t('allStatuses')), statuses.map((status) => h('option', { key: status.id, value: status.id }, status.name)))),
+              h('label', { className: 'dsh-board-filter' }, h('select', { 'aria-label': t('assignee'), value: assigneeFilter, onChange: (event) => updateMemory({ assigneeFilter: event.target.value }) }, h('option', { value: allAssigneesValue }, t('allAssignees')), h('option', { value: unassignedValue }, t('unassigned')), h('option', { value: unknownValue }, t('assigneeUnknown')), !specialAssigneeFilter && !localAssignees.some((name) => filterValue('assignee', name) === assigneeFilter) && h('option', { value: assigneeFilter }, t('assigneeUnavailable')), localAssignees.map((name) => h('option', { key: name, value: filterValue('assignee', name) }, name === name.trim() && !/\s{2,}/u.test(name) ? name : JSON.stringify(name))))),
+              h('label', { className: 'dsh-board-filter' }, h('select', { 'aria-label': t('sessionFilter'), value: sessionFilter, disabled: !sessionMembershipReady, onChange: (event) => updateMemory({ sessionFilter: event.target.value }) }, h('option', { value: 'all' }, t('allSessions')), h('option', { value: 'linked' }, t('withSession')), h('option', { value: 'unlinked' }, t('withoutSession'))))),
+            !sessionMembershipReady && h('p', { className: 'dsh-board-muted', role: 'status' }, t('sessionFilterUnavailable')),
             !statuses.length && h('p', { className: 'dsh-board-empty' }, t('noStatuses'))),
           form && formView(),
           selected && statuses.length > 0 && h(React.Fragment, null,
@@ -656,7 +758,7 @@ window.__ModuleLoader__.load({
         };
         ctx.slots.inject('main', () => ctx.slots.register({
           name: 'main', key: PANEL, locale: NS,
-          inject: () => ({ transport, sessionContext, connectionSource, workspacesSource: ctx.workspaces.list, sessionsSource: ctx.sessions.list, openSession: (id) => ctx.uiWorkspace.openSession(id) }),
+          inject: () => ({ transport, sessionContext, connectionSource, panelSource: ctx.layout.panelInfo, workspacesSource: ctx.workspaces.list, sessionsSource: ctx.sessions.list, openSession: (id) => ctx.uiWorkspace.openSession(id) }),
         }, Page));
         ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id: PANEL, order: 15, locale: NS, label: () => t('panel') }, BoardIcon));
         ctx.effect(() => ctx.commandUi.register({

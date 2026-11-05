@@ -31,6 +31,8 @@
     "tracker-settings.test.mjs",
     "client.js",
     "client.test.mjs",
+    "filters.test.mjs",
+    "refresh-race.test.mjs",
     "slash-guard.test.mjs",
     "cordis.patch.yml",
     "locale/*.json",
@@ -40,7 +42,7 @@
   "scripts": {
     "build": "node ./scripts/build.mjs",
     "check": "node ./scripts/build.mjs --check",
-    "test": "node --test core.test.mjs service.test.mjs sqlite-store.test.mjs client.test.mjs slash-guard.test.mjs tracker-api.test.mjs tracker-fetch.test.mjs tracker-service.test.mjs tracker-settings.test.mjs"
+    "test": "node --test core.test.mjs service.test.mjs sqlite-store.test.mjs client.test.mjs filters.test.mjs refresh-race.test.mjs slash-guard.test.mjs tracker-api.test.mjs tracker-fetch.test.mjs tracker-service.test.mjs tracker-settings.test.mjs"
   },
   "dsh": {
     "bundle": {

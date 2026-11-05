@@ -59,10 +59,33 @@ test('explicit keys use closed search, verify exact membership and track uncerta
   assert.equal(result.issuesComplete, false); assert.equal(result.issuesReason, 'explicit_keys_only');
   const search = calls[2]; const url = new URL(search.url);
   assert.equal(url.origin, 'https://api.tracker.yandex.net'); assert.equal(url.pathname, '/v3/issues/_search');
-  assert.equal(url.searchParams.get('fields'), 'key,summary,status,boards');
+  assert.equal(url.searchParams.get('fields'), 'key,summary,status,boards,assignee');
   assert.deepEqual(JSON.parse(search.init.body), { keys: ['TEST-1', 'TEST-2', 'TEST-3', 'TEST-4'] });
   assert.equal(search.init.method, 'POST'); assert.equal(search.init.redirect, 'error');
   assert.doesNotMatch(JSON.stringify(result), /synthetic-token|synthetic-org|evil\.invalid/);
+});
+
+test('assignee projection distinguishes unknown, unassigned and stable identities', async () => {
+  const rows = [
+    makeIssue('TEST-1', [{ id: 42 }]),
+    { ...makeIssue('TEST-2', [{ id: 42 }]), assignee: null },
+    { ...makeIssue('TEST-3', [{ id: 42 }]), assignee: { id: 'user-1', display: 'Same name', email: 'private@example.invalid', self: 'https://evil.invalid' } },
+    { ...makeIssue('TEST-4', [{ id: 42 }]), assignee: { id: 'user-2', display: 'Same name' } },
+    ...[{}, { id: '', display: 'Name' }, { id: '1', display: '' }, { id: '1', display: 'Bad\nName' },
+      { id: '1', display: '\u202espoof' }, { id: 'x'.repeat(129), display: 'Name' }, 'user', []]
+      .map((value, i) => ({ ...makeIssue(`TEST-${i + 5}`, [{ id: 42 }]), assignee: value })),
+  ];
+  const { client, calls } = harness([json(makeBoard(42)), json(makeColumns()), json(rows)]);
+  const result = await client.getBoardOverview(42, { searchByBoard: true });
+  const projected = result.issues.map(({ assigneeKnown, assignee }) => ({ assigneeKnown, assignee }));
+  assert.deepEqual(projected.slice(0, 4), [
+    { assigneeKnown: false, assignee: null }, { assigneeKnown: true, assignee: null },
+    { assigneeKnown: true, assignee: { id: 'user-1', display: 'Same name' } },
+    { assigneeKnown: true, assignee: { id: 'user-2', display: 'Same name' } },
+  ]);
+  assert.ok(projected.slice(4).every(value => !value.assigneeKnown && value.assignee === null));
+  assert.doesNotMatch(JSON.stringify(result), /private@example\.invalid|evil\.invalid/);
+  assert.equal(new URL(calls[2].url).searchParams.get('fields'), 'key,summary,status,boards,assignee');
 });
 
 test('all input paths and key search are closed to injection', async () => {

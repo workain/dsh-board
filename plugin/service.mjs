@@ -42,7 +42,7 @@ function snapshot(value) {
       const board = value.state.boards.find(b => b.id === boardId);
       const view = { id: board.id, workspaceId: workspace.id, name: board.name,
         statuses: board.columns.filter(c => !c.archived).map((c, position) => ({ id: c.id, name: c.name, position })),
-        tasks: board.tasks.map(t => ({ id: t.id, title: t.title, description: t.description, statusId: t.columnId })) };
+        tasks: board.tasks.map(t => ({ id: t.id, title: t.title, description: t.description, statusId: t.columnId, assignee: t.assignee })) };
       bytes += Buffer.byteLength(JSON.stringify(view)) + 1;
       if (bytes > MAX_SNAPSHOT_BYTES) throw new InputError('too_large', 413);
       boards.push(view);
@@ -71,9 +71,10 @@ function commandShape(c) {
     if (own(c.status, 'position') && (!Number.isSafeInteger(c.status.position) || c.status.position < 0)) invalid();
   }
   if (c.op === 'task.save') {
-    shape(c.task, ['id', 'title', 'description', 'statusId'], ['title', 'description', 'statusId']);
+    shape(c.task, ['id', 'title', 'description', 'statusId', 'assignee'], ['title', 'description', 'statusId']);
     if (own(c.task, 'id')) id(c.task.id);
     text(c.task.title); text(c.task.description, 48 * 1024, true); id(c.task.statusId);
+    if (own(c.task, 'assignee') && c.task.assignee !== null) text(c.task.assignee, 256);
   }
   if (c.op === 'link.set') { id(c.taskId); id(c.sessionId); if (typeof c.linked !== 'boolean') invalid(); }
 }
@@ -104,7 +105,8 @@ function applyCommand(value, c, registry) {
       }
     } else if (c.op === 'task.save') {
       const t = c.task;
-      state = t.id ? core.updateTask(state, c.boardId, t.id, { title: t.title, description: t.description, columnId: t.statusId }) : core.createTask(state, c.boardId, { id: randomUUID(), title: t.title, description: t.description, columnId: t.statusId });
+      const fields = { title: t.title, description: t.description, columnId: t.statusId, ...(own(t, 'assignee') ? { assignee: t.assignee } : {}) };
+      state = t.id ? core.updateTask(state, c.boardId, t.id, fields) : core.createTask(state, c.boardId, { id: randomUUID(), ...fields });
     } else {
       if (!board.tasks.some(t => t.id === c.taskId)) throw new InputError('not_found', 404);
       const exists = links.some(l => l.boardId === c.boardId && l.taskId === c.taskId && l.sessionId === c.sessionId);

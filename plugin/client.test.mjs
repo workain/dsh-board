@@ -48,6 +48,7 @@ function harness(sessionFixture, initialCommands = []) {
   const ws = source({ phase: 'ready', state: 'ready', items: (sessionFixture?.workspaces || [{ workspaceId: 'w', title: 'Workspace', sessionIds: sessionFixture?.ids || [] }]).map(item => ({ createdAt: '2026-01-01T00:00:00Z', ...item })), archivedSessionIds: sessionFixture?.archived || [] });
   const sessions = source({ phase: 'ready', ids: sessionFixture?.ids || [], byId: sessionFixture?.byId || {} });
   const generation = source({ id: 1, host: { home: '/' } });
+  const panelInfo = source({ activePanelId: 'dsh-board' });
   const ctx = {
     effect(fn) { const dispose = fn(); if (typeof dispose === 'function') pluginEffects.push(dispose); }, locale: { register() {}, bind: () => key => key },
     slots: { inject(_name, fn) { fn(); }, register(spec, component) { slotNames.push(spec.name); if (spec.name === 'main') slot = { spec, component }; } },
@@ -57,7 +58,7 @@ function harness(sessionFixture, initialCommands = []) {
       return () => { if (commands.get(command.name) === command) commands.delete(command.name); };
     } },
     inputTriggers: { registerSource() { return () => {}; } },
-    connection: { generation }, workspaces: { list: ws }, sessions: { list: sessions }, uiWorkspace: { openSession(id) { openedSessions.push(id); } }, layout: { selectPanel(id) { panels.push(id); } },
+    connection: { generation }, workspaces: { list: ws }, sessions: { list: sessions }, uiWorkspace: { openSession(id) { openedSessions.push(id); } }, layout: { panelInfo, selectPanel(id) { panels.push(id); panelInfo.set({ activePanelId: id }); } },
   };
   plugin.apply(ctx);
   const props = { t: key => key, ...slot.spec.inject() };
@@ -94,7 +95,7 @@ function harness(sessionFixture, initialCommands = []) {
     const found = nodes('button').filter(n => n.props.className === 'dsh-board-tile' && n.props['aria-label'] === label);
     assert.equal(found.length, 1, `board tile ${label}`); return found[0];
   }
-  return { requests, events, documentEvents, document, timers, confirms, panels, openedSessions, commands, slotNames, plugin, ctx, generation, ws, disposePlugin, window, nodes, text, button, click, change, mount, unmount, resolve, choose, editDraft, submit, openContext, tile };
+  return { requests, events, documentEvents, document, timers, confirms, panels, openedSessions, commands, slotNames, plugin, ctx, generation, panelInfo, ws, disposePlugin, window, nodes, text, button, click, change, mount, unmount, resolve, choose, editDraft, submit, openContext, tile };
 }
 
 async function ready() {
@@ -305,7 +306,7 @@ test('Tracker configuration, explicit workspace selection, and read-only partial
   h.click('trackerSelect'); assert.deepEqual(JSON.parse(h.requests[4].options.body), { op: 'workspace.select', expectedRevision: 1, workspaceId: 'w', boardIds: ['1', '2'] });
   await h.resolve(4, { revision: 2, workspaceId: 'w', boardIds: ['1', '2'] });
   assert.equal(h.requests[5].path, 'api/dsh-board.tracker'); await h.resolve(5, trackerSettings(2, true, { w: ['1', '2'] }));
-  h.click('trackerClose'); h.tile('External — Workspace — tracker').props.onClick();
+  h.click('trackerClose'); h.tile('tracker #1 — Workspace — tracker').props.onClick();
   await h.resolve(6, trackerSettings(2, true, { w: ['1', '2'] }));
   assert.deepEqual(JSON.parse(h.requests[7].options.body), { op: 'board.read', workspaceId: 'w', boardId: '1', issueKeys: [] });
   await h.resolve(7, trackerBoard);
@@ -447,4 +448,73 @@ test('empty Tracker issue result remains partial and never presents a confirmed 
   assert.ok(h.nodes('p').some(n => h.text(n) === 'trackerEmpty'));
   assert.ok(h.nodes('p').some(n => h.text(n).includes('trackerPartial')));
   assert.ok(!h.nodes('p').some(n => h.text(n) === 'noTasks')); h.unmount();
+});
+
+test('foreground refresh coalesces events, fences hidden results and clears on panel switch', async () => {
+  const h = harness({ manualTracker: true }); h.mount(); await h.resolve(0, base());
+  await h.resolve(1, trackerSettings(1, true, { w: ['1'] }));
+  h.tile('tracker #1 — Workspace — tracker').props.onClick();
+  await h.resolve(2, trackerSettings(1, true, { w: ['1'] })); await h.resolve(3, trackerBoard);
+  assert.equal(h.nodes('article').length, 3);
+  [...h.timers][0](); h.events.get('focus')(); h.documentEvents.get('visibilitychange')();
+  assert.equal(h.requests.length, 5); assert.equal(h.nodes('article').length, 0);
+  h.document.visibilityState = 'hidden'; h.documentEvents.get('visibilitychange')();
+  await h.resolve(4, trackerSettings(1, true, { w: ['1'] }));
+  assert.equal(h.requests.length, 5); assert.equal(h.nodes('article').length, 0);
+  [...h.timers][0](); assert.equal(h.requests.length, 5);
+  h.document.visibilityState = 'visible'; h.documentEvents.get('visibilitychange')();
+  assert.equal(h.requests.length, 6); await h.resolve(5, trackerSettings(1, true, { w: ['1'] }));
+  assert.equal(h.requests.length, 7); h.panelInfo.set({ activePanelId: null });
+  await h.resolve(6, trackerBoard); assert.equal(h.nodes('article').length, 0);
+  [...h.timers][0](); assert.equal(h.requests.length, 7);
+  h.panelInfo.set({ activePanelId: 'dsh-board' }); assert.equal(h.requests.length, 8);
+  await h.resolve(7, trackerSettings(1, true, { w: ['1'] })); await h.resolve(8, trackerBoard);
+  assert.equal(h.nodes('article').length, 3);
+  assert.ok(h.nodes('p').some(n => h.text(n).includes('trackerUpdatedAt')));
+  h.unmount(); assert.equal(h.timers.size, 0);
+});
+
+test('refresh preserves picker IDs but requires relist and explicit review', async () => {
+  const h = harness({ manualTracker: true }); h.mount(); await h.resolve(0, base());
+  await h.resolve(1, trackerSettings(1, true, { w: ['1'] }));
+  h.tile('tracker #1 — Workspace — tracker').props.onClick();
+  await h.resolve(2, trackerSettings(1, true, { w: ['1'] })); await h.resolve(3, trackerBoard);
+  h.click('trackerConnect'); await h.resolve(4, trackerSettings(1, true, { w: ['1'] })); await h.resolve(5, trackerBoard);
+  h.click('trackerList'); await h.resolve(6, { boards: [{ id: '1', name: 'A' }, { id: '2', name: 'B' }], complete: true });
+  h.nodes('input').filter(n => n.props.type === 'checkbox')[1].props.onChange({ target: { checked: true } });
+  [...h.timers][0](); assert.equal(h.nodes('input').filter(n => n.props.type === 'checkbox').length, 0);
+  await h.resolve(7, trackerSettings(1, true, { w: ['1'] })); await h.resolve(8, trackerBoard);
+  h.click('trackerList'); await h.resolve(9, { boards: [{ id: '1', name: 'A' }, { id: '2', name: 'B' }], complete: true });
+  const checks = h.nodes('input').filter(n => n.props.type === 'checkbox');
+  assert.equal(checks[0].props.checked, true); assert.equal(checks[1].props.checked, true);
+  assert.equal(h.button('trackerSelect').props.disabled, true);
+  checks[2].props.onChange({ target: { checked: true } }); h.click('trackerSelect');
+  assert.deepEqual(JSON.parse(h.requests[10].options.body).boardIds, ['1', '2']); h.unmount();
+});
+
+test('selection receipt clears old picker draft before the next list', async () => {
+  const h = harness({ manualTracker: true }); h.mount(); await h.resolve(0, base());
+  await h.resolve(1, trackerSettings(1, true, { w: ['1'] })); h.click('trackerConnect');
+  await h.resolve(2, trackerSettings(1, true, { w: ['1'] }));
+  h.change(h.nodes('select').find(n => n.children.some(c => c?.props?.value === 'w')), 'w');
+  const listing = { boards: [{ id: '1', name: 'A' }, { id: '2', name: 'B' }], complete: true };
+  h.click('trackerList'); await h.resolve(3, listing);
+  h.nodes('input').filter(n => n.props.type === 'checkbox')[1].props.onChange({ target: { checked: true } });
+  h.click('trackerSelect'); await h.resolve(4, { revision: 2, workspaceId: 'w', boardIds: ['1', '2'] });
+  await h.resolve(5, trackerSettings(2, true, { w: ['1', '2'] }));
+  h.click('trackerList'); await h.resolve(6, listing);
+  const checks = h.nodes('input').filter(n => n.props.type === 'checkbox');
+  assert.equal(checks.length, 2); assert.ok(checks.every(n => n.props.checked)); h.unmount();
+});
+
+test('workspace change asks before discarding picker selection', async () => {
+  const h = harness({ manualTracker: true, workspaces: [{ workspaceId: 'w', title: 'One', sessionIds: [] }, { workspaceId: 'w2', title: 'Two', sessionIds: [] }] });
+  h.mount(); await h.resolve(0, base()); await h.resolve(1, trackerSettings(1, true, { w: ['1'] }));
+  h.click('trackerConnect'); await h.resolve(2, trackerSettings(1, true, { w: ['1'] }));
+  const workspace = () => h.nodes('select').find(n => n.children.some(c => c?.props?.value === 'w2'));
+  h.change(workspace(), 'w'); h.click('trackerList'); await h.resolve(3, { boards: [{ id: '1', name: 'A' }, { id: '2', name: 'B' }], complete: true });
+  h.nodes('input').filter(n => n.props.type === 'checkbox')[1].props.onChange({ target: { checked: true } });
+  h.window.confirmResult = false; h.change(workspace(), 'w2');
+  assert.equal(workspace().props.value, 'w'); assert.equal(h.nodes('input').filter(n => n.props.type === 'checkbox')[1].props.checked, true);
+  h.window.confirmResult = true; h.change(workspace(), 'w2'); assert.equal(workspace().props.value, 'w2'); h.unmount();
 });
