@@ -169,7 +169,8 @@ function safeError(error, signal) {
   if (error?.name === 'TrackerError') {
     const statuses = { invalid_input: 400, invalid_credentials: 503, credentials_unavailable: 503, unauthorized: 401,
       forbidden: 403, not_found: 404, rate_limited: 429, client_rate_limited: 429, timeout: 504,
-      cancelled: 499, network_error: 502, invalid_response: 502, response_too_large: 502, redirect: 502, http_error: 502 };
+      cancelled: 499, network_error: 502, invalid_response: 502, response_too_large: 502, redirect: 502, http_error: 502,
+      board_default_queue_unavailable: 409 };
     if (Object.hasOwn(statuses, error.code)) return { code: error.code, status: statuses[error.code] };
   }
   if (error?.name === 'TrackerSettingsError' && error.code === 'too_large') return { code: 'settings_too_large', status: 413 };
@@ -652,12 +653,60 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
   function makeToolScope(options) {
     return makeWorkspaceScope(options, true);
   }
+  // Resolve from the host registry only. Never infer ownership from a path or
+  // select among ambiguous owners. Recheck the same incarnation after the
+  // asynchronous account/selection authorization performed by toolScope.
+  function currentWorkspace(options) {
+    try {
+      shape(options, ['sessionId', 'signal']);
+      const { sessionId: sid, signal: callerSignal } = options;
+      sessionId(sid);
+      if (callerSignal !== undefined && !(callerSignal instanceof AbortSignal)) invalid();
+      return run(async signal => {
+        function resolve() {
+          signal.throwIfAborted();
+          if (typeof workspaceRegistry.list !== 'function') fail('unavailable', 503);
+          const items = workspaceRegistry.list(), archived = workspaceRegistry.archivedSessionIds;
+          if (!Array.isArray(items) || (archived != null && !Array.isArray(archived))) fail('unavailable', 503);
+          if (archived?.includes(sid)) fail('workspace_not_found', 404);
+          const owners = [];
+          for (const item of items) {
+            if (!item || !Array.isArray(item.sessionIds) || item.sessionIds.length > 100_000 ||
+                (item.archivedSessionIds != null && !Array.isArray(item.archivedSessionIds))) fail('unavailable', 503);
+            if (item.sessionIds.includes(sid) && !item.archivedSessionIds?.includes(sid)) owners.push(item);
+          }
+          if (!owners.length) fail('workspace_not_found', 404);
+          if (owners.length !== 1) fail('workspace_ambiguous', 409);
+          const owner = owners[0], id = owner.id, incarnation = owner.createdAt;
+          if (typeof id !== 'string' || !ID.test(id) || typeof incarnation !== 'string' || !incarnation ||
+              incarnation.length > 256 || !incarnation.isWellFormed() || /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(incarnation)) fail('unavailable', 503);
+          const live = workspaceRegistry.get(id);
+          if (!live || live.id !== id || live.createdAt !== incarnation || !Array.isArray(live.sessionIds) || !live.sessionIds.includes(sid) ||
+              (live.archivedSessionIds != null && (!Array.isArray(live.archivedSessionIds) || live.archivedSessionIds.includes(sid)))) fail('unavailable', 503);
+          return { id, incarnation };
+        }
+        const before = resolve();
+        const scope = toolScope({ workspaceId: before.id, sessionId: sid, signal });
+        const ids = await scope.selectedBoards();
+        const after = resolve();
+        if (after.id !== before.id || after.incarnation !== before.incarnation) fail('needs_reselect', 409);
+        signal.throwIfAborted();
+        return { workspaceId: before.id, boardIds: ids };
+      }, callerSignal).catch(error => {
+        const safe = safeError(error, callerSignal ?? lifecycle.signal);
+        throw new ServiceError(safe.code, safe.status);
+      });
+    } catch (error) {
+      const safe = safeError(error, lifecycle.signal);
+      return Promise.reject(new ServiceError(safe.code, safe.status));
+    }
+  }
   // Only the owner's authenticated HTTP command dispatcher may omit a session.
   // Session tools always use the wrapper above and retain all session checks.
   function makeWorkspaceScope(options, requireSession) {
     shape(options, requireSession ? ['workspaceId', 'sessionId', 'signal'] : ['workspaceId', 'boardId', 'signal']);
     const { workspaceId: wid, sessionId: sid, boardId: requestedBoard, signal: callerSignal } = options;
-    workspaceId(wid); if (requireSession) workspaceId(sid); else boardId(requestedBoard);
+    workspaceId(wid); if (requireSession) sessionId(sid); else boardId(requestedBoard);
     if (callerSignal !== undefined && !(callerSignal instanceof AbortSignal)) invalid();
     const initial = current(), incarnation = workspace(wid), binding = bindings.get(wid);
     configured(initial);
@@ -809,8 +858,9 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
       }
       if (!links) fail('unavailable', 503);
     }
-    // A queue is only evidence of the board's live default, never a caller grant.
-    // Keep the adapter's actual capability object separate from this projection.
+    // A queue capability proves the exact lookup, not board membership. An
+    // explicit queue need not be related to the board. Keep it separate from
+    // the safe projection used for approval.
     function safeQueue(value, input = false) {
       const bad = () => input ? invalid() : fail('invalid_tracker_response', 502);
       if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) bad();
@@ -832,12 +882,14 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
       boardId(id);
       if (!selected.includes(id)) fail('board_not_selected', 403);
     }
-    async function creationQueue(a, id, signal) {
-      if (typeof a.getBoardCreationQueue !== 'function') fail('invalid_tracker_response', 502);
+    async function creationQueue(a, id, queueKey, signal) {
+      const explicit = queueKey !== undefined;
+      if (typeof a[explicit ? 'getExplicitCreationQueue' : 'getBoardCreationQueue'] !== 'function') fail('invalid_tracker_response', 502);
       check(signal);
-      const capability = await raceAbort(() => a.getBoardCreationQueue(id, { signal }), signal);
+      const capability = await raceAbort(() => explicit ? a.getExplicitCreationQueue(id, queueKey, { signal }) : a.getBoardCreationQueue(id, { signal }), signal);
       check(signal);
       const queue = safeQueue(capability);
+      if (explicit && queue.key !== queueKey) fail('invalid_tracker_response', 502);
       // The API capability is an immutable object bound to this account session.
       // A mutable substitute could change after its validation but before POST.
       if (!Object.isFrozen(capability)) fail('invalid_tracker_response', 502);
@@ -901,26 +953,31 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
     }
     return Object.freeze({
       ...(requireSession ? {
-        // The caller supplies board selection only. The returned projection is safe
-        // to display in an approval prompt and is not itself a write capability.
+        // The projection is safe for approval and is not itself a capability.
         previewCreate: input => {
-          try { shape(input, ['boardId']); creationBoard(input.boardId); input = Object.freeze({ boardId: input.boardId }); }
-          catch (error) { return Promise.reject(error); }
+          try {
+            fields(input, ['boardId'], ['queueKey']); creationBoard(input.boardId);
+            if (Object.hasOwn(input, 'queueKey') && (typeof input.queueKey !== 'string' || !/^[A-Z][A-Z0-9_]{0,31}$/.test(input.queueKey))) invalid();
+            input = Object.freeze({ boardId: input.boardId, ...(Object.hasOwn(input, 'queueKey') ? { queueKey: input.queueKey } : {}) });
+          } catch (error) { return Promise.reject(error); }
           return execute(async signal => {
             const a = await account(signal);
-            const { queue } = await creationQueue(a, input.boardId, signal);
+            const { queue } = await creationQueue(a, input.boardId, input.queueKey, signal);
             await account(signal); check(signal);
             return { queue };
           });
         },
         createIssue: input => {
           try {
-            fields(input, ['boardId', 'expectedQueue', 'summary'], ['description']);
+            fields(input, ['boardId', 'expectedQueue', 'summary'], ['description', 'queueKey']);
             creationBoard(input.boardId);
             const expectedQueue = safeQueue(input.expectedQueue, true);
+            if (Object.hasOwn(input, 'queueKey') && (typeof input.queueKey !== 'string' || !/^[A-Z][A-Z0-9_]{0,31}$/.test(input.queueKey))) invalid();
+            if (Object.hasOwn(input, 'queueKey') && input.queueKey !== expectedQueue.key) fail('conflict', 409);
             inputText(input.summary, 4096);
             if (Object.hasOwn(input, 'description')) inputText(input.description, MAX_COMMENT, { empty: true, multiline: true });
             input = Object.freeze({ boardId: input.boardId, expectedQueue, summary: input.summary,
+              ...(Object.hasOwn(input, 'queueKey') ? { queueKey: input.queueKey } : {}),
               ...(Object.hasOwn(input, 'description') ? { description: input.description } : {}) });
           } catch (error) { return Promise.reject(error); }
           return execute(async signal => {
@@ -929,7 +986,7 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
             // happens after approval and immediately before dispatch.
             const a = await account(signal);
             if (typeof a.createIssue !== 'function') fail('invalid_tracker_response', 502);
-            const { capability, queue } = await creationQueue(a, input.boardId, signal);
+            const { capability, queue } = await creationQueue(a, input.boardId, input.queueKey, signal);
             if (!sameQueue(queue, input.expectedQueue)) fail('conflict', 409);
             // Detect rotation while fetching the queue, while retaining a's exact
             // credential-bound capability for the eventual call.
@@ -1114,5 +1171,5 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
       },
     });
   }
-  return Object.freeze({ read, command, fetch, close, toolScope });
+  return Object.freeze({ read, command, fetch, close, toolScope, currentWorkspace });
 }

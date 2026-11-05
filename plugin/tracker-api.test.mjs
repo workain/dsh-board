@@ -746,15 +746,26 @@ test('board creation queue is a minimal frozen projection and creation uses only
     ['https://api.tracker.yandex.net/v3/boards/42', 'GET'],
     ['https://api.tracker.yandex.net/v3/issues?notify=false', 'POST'],
   ]);
-  assert.deepEqual(JSON.parse(h.calls[1].init.body), { queue: 'DOC', summary: 'New issue', description: 'first\nsecond', unique: 'synthetic-unique' });
+  assert.deepEqual(JSON.parse(h.calls[1].init.body), { queue: 3, summary: 'New issue', description: 'first\nsecond', unique: 'synthetic-unique' });
   assert.equal(h.calls[1].init.redirect, 'error');
   assert.equal(h.calls[1].init.headers['Content-Type'], 'application/json');
   assert.doesNotMatch(JSON.stringify(queue), /evil\.invalid|secret/);
 });
 
+test('missing or null board default queue is unavailable, not a malformed response', async () => {
+  for (const raw of [makeBoard(42), boardWithQueue(42, null)]) {
+    const h = harness([json(raw)]), s = await h.client.openSession();
+    await rejects(s.getBoardCreationQueue(42), 'board_default_queue_unavailable');
+    assert.equal(h.calls.length, 1);
+    assert.equal(h.calls[0].url, 'https://api.tracker.yandex.net/v3/boards/42');
+  }
+  const wrongBoard = await harness([json(makeBoard(43))]).client.openSession();
+  await rejects(wrongBoard.getBoardCreationQueue(42), 'invalid_response');
+});
+
 test('board creation queue requires exact board id and documented defaultQueue fields', async () => {
   const invalid = [
-    makeBoard(42), boardWithQueue(43), boardWithQueue(42, null), boardWithQueue(42, {}),
+    boardWithQueue(43), boardWithQueue(42, {}), boardWithQueue(42, false), boardWithQueue(42, []),
     boardWithQueue(42, { id: 3, key: 'DOC' }), boardWithQueue(42, { id: '03', key: 'DOC' }),
     boardWithQueue(42, { id: '9007199254740992', key: 'DOC' }),
     boardWithQueue(42, { id: '3', key: 'doc' }), boardWithQueue(42, { id: '3', key: 'DOC/other' }),
@@ -769,6 +780,68 @@ test('board creation queue requires exact board id and documented defaultQueue f
   for (const id of ['42?evil', '042', '42/other']) await rejects(s.getBoardCreationQueue(id), 'invalid_input');
   assert.deepEqual(await s.getBoardCreationQueue(42), { id: '3', key: 'DOC' });
   assert.equal(h.calls.length, 1);
+});
+
+test('explicit queue uses documented fixed lookup, minimal frozen same-session capability and single create POST', async () => {
+  const h = harness([json({ id: '3', key: 'DOC', name: 'Documents', self: 'https://evil.invalid', description: 'private', lead: { id: 'secret' } }),
+    json({ id: 'issue-id', key: 'DOC-2', version: 3, secret: 'private' }, 201)]);
+  const s = await h.client.openSession(), other = await h.client.openSession();
+  const queue = await s.getExplicitCreationQueue('42', 'DOC');
+  assert.deepEqual(queue, { id: '3', key: 'DOC', display: 'Documents' });
+  assert.equal(Object.isFrozen(queue), true);
+  assert.throws(() => { queue.key = 'OTHER'; }, TypeError);
+  await rejects(other.createIssue({ queue, summary: 'Issue' }), 'invalid_input');
+  await rejects(s.createIssue({ queue: { ...queue }, summary: 'Issue' }), 'invalid_input');
+  assert.deepEqual(await s.createIssue({ queue, summary: 'Issue' }), { id: 'issue-id', key: 'DOC-2', version: 3 });
+  assert.deepEqual(h.calls.map(c => [c.url, c.init.method]), [
+    ['https://api.tracker.yandex.net/v3/queues/DOC', 'GET'],
+    ['https://api.tracker.yandex.net/v3/issues?notify=false', 'POST'],
+  ]);
+  assert.equal(h.calls[0].init.body, undefined);
+  assert.deepEqual(JSON.parse(h.calls[1].init.body), { queue: 3, summary: 'Issue' });
+  assert.ok(h.calls.every(c => c.init.redirect === 'error'));
+  assert.doesNotMatch(JSON.stringify(queue), /evil\.invalid|private|secret|synthetic-token|synthetic-org/);
+});
+
+test('explicit queue validates exact case-sensitive key, canonical id and optional name', async () => {
+  for (const id of ['3', 3, '999999999999999', 999999999999999]) {
+    const s = await harness([json({ id, key: 'DOC' })]).client.openSession();
+    assert.deepEqual(await s.getExplicitCreationQueue(42, 'DOC'), { id: String(id), key: 'DOC' });
+  }
+  for (const raw of [null, {}, { id: '3', key: 'OTHER' }, { id: '3', key: 'doc' },
+    ...['', '03', '0', '-1', '1.0', '1e2', '9007199254740992', 0, -1, 1.5, 9007199254740992, null].map(id => ({ id, key: 'DOC' })),
+    ...[null, '', ' ', 'bad\nname', 'x'.repeat(257)].map(name => ({ id: '3', key: 'DOC', name }))]) {
+    const h = harness([json(raw)]), s = await h.client.openSession();
+    await rejects(s.getExplicitCreationQueue('42', 'DOC'), 'invalid_response');
+    assert.equal(h.calls.length, 1);
+  }
+  for (const raw of ['{"id":3.0000000000000001,"key":"DOC"}', '{"id":3e0,"key":"DOC"}', '{"id":999999999999999.01,"key":"DOC"}']) {
+    const s = await harness([new Response(raw)]).client.openSession();
+    await rejects(s.getExplicitCreationQueue(42, 'DOC'), 'invalid_response');
+  }
+  const h = harness([]), s = await h.client.openSession();
+  for (const id of ['042', '42/other', 0, null]) await rejects(s.getExplicitCreationQueue(id, 'DOC'), 'invalid_input');
+  for (const key of ['', 'doc', 'Doc', 'DOC/other', '../DOC', 'DOC?x=1', 'DOC\n', 'A'.repeat(33), 42, null])
+    await rejects(s.getExplicitCreationQueue(42, key), 'invalid_input');
+  await rejects(s.getExplicitCreationQueue(42, 'DOC', { signal: {} }), 'invalid_input');
+  assert.equal(h.calls.length, 0);
+});
+
+test('explicit queue forbidden, abort and timeout fail safely without creation or retries', async t => {
+  const denied = harness([new Response('secret body', { status: 403 })]);
+  await rejects((await denied.client.openSession()).getExplicitCreationQueue('42', 'DOC'), 'forbidden');
+  assert.equal(denied.calls.length, 1);
+  const h = harness([() => new Promise(() => {}), () => new Promise(() => {})]), s = await h.client.openSession();
+  const already = new AbortController(); already.abort();
+  await rejects(s.getExplicitCreationQueue(42, 'DOC', { signal: already.signal }), 'cancelled');
+  assert.equal(h.calls.length, 0);
+  const ac = new AbortController(), pending = s.getExplicitCreationQueue(42, 'DOC', { signal: ac.signal });
+  ac.abort(); await rejects(pending, 'cancelled'); assert.equal(h.calls.length, 1);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const timed = s.getExplicitCreationQueue(42, 'DOC'), checked = rejects(timed, 'timeout');
+  t.mock.timers.tick(10_000); await checked;
+  assert.equal(h.calls.length, 2);
+  assert.ok(h.calls.every(c => c.init.method === 'GET' && c.url === 'https://api.tracker.yandex.net/v3/queues/DOC'));
 });
 
 test('issue creation rejects queue spoofing, foreign sessions and unsafe payloads before dispatch', async () => {

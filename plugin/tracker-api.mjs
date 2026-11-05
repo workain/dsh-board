@@ -25,7 +25,8 @@ export class TrackerError extends Error {
 }
 const fail = code => { throw new TrackerError(code); };
 const REQUEST_ERROR_CODES = new Set(['invalid_input', 'invalid_credentials', 'invalid_response', 'response_too_large',
-  'cancelled', 'timeout', 'network_error', 'unauthorized', 'forbidden', 'not_found', 'rate_limited', 'redirect', 'http_error']);
+  'cancelled', 'timeout', 'network_error', 'unauthorized', 'forbidden', 'not_found', 'rate_limited', 'redirect', 'http_error',
+  'board_default_queue_unavailable']);
 const object = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 function boardId(value, code = 'invalid_input') {
   const v = typeof value === 'number' && Number.isSafeInteger(value) ? String(value) : value;
@@ -189,7 +190,7 @@ function waitForSearch(delay, signal) {
     signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
-async function readJson(response, signal, principal = false) {
+async function readJson(response, signal, principal = false, exactQueueId = false) {
   const length = response.headers?.get?.('content-length');
   if (length !== null && length !== undefined && (!/^\d+$/.test(length) || Number(length) > MAX_RESPONSE_BYTES)) {
     try { Promise.resolve(response.body?.cancel?.()).catch(() => {}); } catch {}
@@ -231,6 +232,16 @@ async function readJson(response, signal, principal = false) {
   for (const chunk of chunks) { joined.set(chunk, offset); offset += chunk.byteLength; }
   try {
     const decoded = new TextDecoder('utf-8', { fatal: true }).decode(joined);
+    if (exactQueueId) {
+      const marker = Symbol('raw-tracker-queue-id');
+      const value = JSON.parse(decoded, (key, item, context) => key === 'id' && typeof item === 'number' ? { [marker]: context?.source } : item);
+      if (object(value) && object(value.id) && Object.hasOwn(value.id, marker)) {
+        const raw = value.id[marker];
+        if (typeof raw !== 'string' || !/^[1-9][0-9]{0,14}$/.test(raw) || !Number.isSafeInteger(Number(raw))) fail('invalid_response');
+        value.id = raw;
+      }
+      return value;
+    }
     if (!principal) return JSON.parse(decoded);
     const marker = Symbol('raw-tracker-uid');
     const value = JSON.parse(decoded, (key, item, context) => key === 'uid' && typeof item === 'number' ? { [marker]: context?.source } : item);
@@ -247,8 +258,11 @@ async function readJson(response, signal, principal = false) {
  * getIssue, getIssueById, getComments, updateIssue, listTransitions, addComment and executeTransition. The caller must
  * verify issue.boards against its authorized boards before reads or writes.
  * For creation, authorize the selected board first; getBoardCreationQueue(id, options)
- * returns an immutable queue capability accepted only by createIssue(payload, options)
- * in that same session. Creation does not establish board membership.
+ * or getExplicitCreationQueue(id, queueKey, options) returns an immutable queue
+ * capability accepted only by createIssue(payload, options) in that same session.
+ * Explicit queue lookup proves neither a board/queue relationship nor membership.
+ * The service must bind approval to the selected board and exact queue id/key, then
+ * recheck them before creation. Creation does not establish board membership.
  * Issue descriptions and comments are untrusted content, not instructions.
  * Compare with a fresh session identity before publishing session results.
  */
@@ -258,7 +272,7 @@ export function createTrackerClient({ getCredentials, fetch: fetchFn = globalThi
   let lastSearchAt = -Infinity;
   const identityKey = randomBytes(32);
 
-  async function request(url, method, body, callerSignal, credentials, { expectedStatus = 200, write = false, principal = false, project = value => value } = {}) {
+  async function request(url, method, body, callerSignal, credentials, { expectedStatus = 200, write = false, principal = false, exactQueueId = false, project = value => value } = {}) {
     if (callerSignal !== undefined && !(callerSignal instanceof AbortSignal)) fail('invalid_input');
     if (callerSignal?.aborted) fail('cancelled');
     const controller = new AbortController();
@@ -296,7 +310,7 @@ export function createTrackerClient({ getCredentials, fetch: fetchFn = globalThi
           if (response.status >= 300 && response.status < 400) fail('redirect');
           fail('http_error');
         }
-        return project(await readJson(response, controller.signal, principal), response.headers);
+        return project(await readJson(response, controller.signal, principal, exactQueueId), response.headers);
       })()]);
     } catch (error) {
       if (write && sent && !rejected) fail('outcome_unknown');
@@ -381,7 +395,9 @@ export function createTrackerClient({ getCredentials, fetch: fetchFn = globalThi
     id = boardId(id);
     return request(`${ORIGIN}/v3/boards/${id}`, 'GET', undefined, signal, credentials, {
       project(value) {
-        if (!object(value) || boardId(value.id, 'invalid_response') !== id || !object(value.defaultQueue)) fail('invalid_response');
+        if (!object(value) || boardId(value.id, 'invalid_response') !== id) fail('invalid_response');
+        if (value.defaultQueue == null) fail('board_default_queue_unavailable');
+        if (!object(value.defaultQueue)) fail('invalid_response');
         const raw = value.defaultQueue;
         if (typeof raw.id !== 'string' || !/^[1-9][0-9]{0,14}$/.test(raw.id) || !Number.isSafeInteger(Number(raw.id)) ||
             !validQueueKey(raw.key)) fail('invalid_response');
@@ -394,11 +410,31 @@ export function createTrackerClient({ getCredentials, fetch: fetchFn = globalThi
     });
   }
 
+  // The board must already be authorized by the service. A queue lookup is not
+  // evidence that the queue belongs to, or is the default for, that board.
+  async function getExplicitCreationQueue(credentials, id, key, approvedQueues, { signal } = {}) {
+    boardId(id);
+    if (!validQueueKey(key)) fail('invalid_input');
+    return request(`${ORIGIN}/v3/queues/${key}`, 'GET', undefined, signal, credentials, {
+      exactQueueId: true,
+      project(value) {
+        if (!object(value) || value.key !== key) fail('invalid_response');
+        const queue = { id: boardId(value.id, 'invalid_response'), key };
+        if (value.name !== undefined) queue.display = text(value.name, 256);
+        Object.freeze(queue);
+        approvedQueues.add(queue);
+        return queue;
+      },
+    });
+  }
+
   async function createIssue(credentials, payload, approvedQueues, { signal } = {}) {
     if (!plainFields(payload, ['queue', 'summary', 'description', 'unique'], ['queue', 'summary']) ||
         !approvedQueues.has(payload.queue)) fail('invalid_input');
     const queue = payload.queue;
-    const body = { queue: queue.key, summary: text(payload.summary, 4096, 'invalid_input') };
+    // Tracker interprets a number as the queue ID and a string as a queue key.
+    // Pin the approved immutable ID rather than allowing key reassignment to redirect the write.
+    const body = { queue: Number(queue.id), summary: text(payload.summary, 4096, 'invalid_input') };
     if (Object.hasOwn(payload, 'description')) body.description = bodyText(payload.description, MAX_DESCRIPTION, 'invalid_input', true);
     if (Object.hasOwn(payload, 'unique')) body.unique = text(payload.unique, 4096, 'invalid_input');
     if (Buffer.byteLength(JSON.stringify(body), 'utf8') > MAX_WRITE_BYTES) fail('invalid_input');
@@ -604,6 +640,7 @@ export function createTrackerClient({ getCredentials, fetch: fetchFn = globalThi
         listBoards: options => listBoards(credentials, options),
         getBoardOverview: (id, options) => getBoardOverview(credentials, id, options),
         getBoardCreationQueue: (id, options) => getBoardCreationQueue(credentials, id, approvedQueues, options),
+        getExplicitCreationQueue: (id, key, options) => getExplicitCreationQueue(credentials, id, key, approvedQueues, options),
         createIssue: (payload, options) => createIssue(credentials, payload, approvedQueues, options),
         getIssue: (key, options) => getIssue(credentials, key, options),
         getIssueById: (id, options) => getIssueById(credentials, id, options),

@@ -180,7 +180,7 @@ test('Tracker routes bootstrap lazily per launcher profile and fail soft', async
     ['/api/dsh-board.tracker', ['GET'], 'buffered'], ['/api/dsh-board.tracker.mutate', ['POST'], 'streaming'],
   ]);
   assert.deepEqual(web.tools.map(tool => tool.name), [
-    'tracker_list_boards', 'tracker_list_issues', 'tracker_get_issue', 'tracker_list_transitions', 'tracker_add_comment', 'tracker_transition_issue',
+    'tracker_current_workspace', 'tracker_list_boards', 'tracker_list_issues', 'tracker_get_issue', 'tracker_list_transitions', 'tracker_add_comment', 'tracker_transition_issue',
     'tracker_update_issue', 'tracker_create_issue', 'tracker_link_own_session', 'tracker_unlink_own_session',
   ]);
   const db = path.join(storage, 'tracker-web.sqlite');

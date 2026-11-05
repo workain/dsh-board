@@ -15,6 +15,7 @@ function fixture(options = {}) {
   };
   const registry = new Map([['ws', { id: 'ws', createdAt: 'one', sessionIds: ['session-1'] }], ['ws2', { id: 'ws2', createdAt: 'two', sessionIds: ['session-2'] }]]);
   registry.archivedSessionIds = [];
+  registry.list = () => [...registry.values()];
   const tracker = {
     identity: 'identity-A',
     async listBoards() { return { boards: [{ id: '1', name: 'First' }, { id: '2', name: 'Second' }], complete: true, reason: null }; },
@@ -29,11 +30,13 @@ function fixture(options = {}) {
     async updateIssue(_key, changes) { return { version: changes.expectedVersion + 1 }; },
     async executeTransition() { return {}; },
     async getBoardCreationQueue() { return Object.freeze({ id: '3', key: 'DOC', display: 'Documents' }); },
+    async getExplicitCreationQueue(_board, key) { return Object.freeze({ id: '8', key, display: 'Other queue' }); },
     async createIssue() { return { id: 'issue-1', key: 'DOC-1', version: 1 }; },
     async openSession() {
       const capabilities = new WeakSet();
       return { identity: this.identity, listBoards: (...args) => this.listBoards(...args), getBoardOverview: (...args) => this.getBoardOverview(...args), getIssue: (...args) => this.getIssue(...args), getIssueById: (...args) => this.getIssueById(...args), getComments: (...args) => this.getComments(...args), getComment: (...args) => this.getComment(...args), editComment: (...args) => this.editComment(...args), updateIssue: (...args) => this.updateIssue(...args), listTransitions: (...args) => this.listTransitions(...args), addComment: (...args) => this.addComment(...args), executeTransition: (...args) => this.executeTransition(...args),
         getBoardCreationQueue: async (...args) => { const queue = await this.getBoardCreationQueue(...args); if (queue && typeof queue === 'object') capabilities.add(queue); return queue; },
+        getExplicitCreationQueue: async (...args) => { const queue = await this.getExplicitCreationQueue(...args); if (queue && typeof queue === 'object') capabilities.add(queue); return queue; },
         createIssue: (...args) => { assert.ok(capabilities.has(args[0].queue), 'capability must come from same account session'); return this.createIssue(...args); } };
     },
   };
@@ -1107,8 +1110,102 @@ test('agent update pins issue identity twice and snapshots input', async () => {
   assert.deepEqual(captured, { key: 'ABC-1', expectedVersion: 1, summary: 'new' });
 });
 
+test('current workspace requires one live unarchived owner and active selected-board binding', async () => {
+  const f = await prepareScope(), current = (sid = 'session-1', signal = undefined) => f.service.currentWorkspace({ sessionId: sid, signal });
+  assert.deepEqual(await current(), { workspaceId: 'ws', boardIds: ['1'] });
+  await rejected(current('unknown'), 'workspace_not_found');
+  f.registry.get('ws2').sessionIds.push('session-1');
+  await rejected(current(), 'workspace_ambiguous');
+  f.registry.get('ws2').archivedSessionIds = ['session-1'];
+  assert.deepEqual(await current(), { workspaceId: 'ws', boardIds: ['1'] });
+  f.registry.archivedSessionIds.push('session-1');
+  await rejected(current(), 'workspace_not_found');
+  f.registry.archivedSessionIds = [];
+  f.registry.get('ws2').sessionIds = ['session-2'];
+  f.registry.get('ws').archivedSessionIds = ['session-1'];
+  await rejected(current(), 'workspace_not_found');
+  f.registry.get('ws').archivedSessionIds = [];
+  f.registry.get('ws').id = '../bad'; await rejected(current(), 'unavailable');
+  f.registry.get('ws').id = 'ws'; f.registry.get('ws').createdAt = ''; await rejected(current(), 'unavailable');
+  f.registry.get('ws').createdAt = 'one';
+  const fresh = createTrackerService({ settings: f.settings, tracker: f.tracker, workspaceRegistry: f.registry });
+  await rejected(fresh.currentWorkspace({ sessionId: 'session-1', signal: undefined }), 'needs_reselect');
+  await fresh.close(); await f.service.close();
+});
+
+test('current workspace re-resolves uniqueness and immutable incarnation after authorization', async () => {
+  for (const change of ['multiple', 'moved', 'incarnation', 'removed', 'archived', 'identity', 'abort', 'close']) {
+    const f = await prepareScope(), ac = new AbortController();
+    let release, started;
+    const ready = new Promise(resolve => { started = resolve; });
+    const open = f.tracker.openSession;
+    f.tracker.openSession = async function () { started(); await new Promise(resolve => { release = resolve; }); return open.call(this); };
+    const pending = f.service.currentWorkspace({ sessionId: 'session-1', signal: ac.signal });
+    await ready;
+    if (change === 'multiple') f.registry.get('ws2').sessionIds.push('session-1');
+    if (change === 'moved') { f.registry.get('ws').sessionIds = []; f.registry.get('ws2').sessionIds.push('session-1'); }
+    if (change === 'incarnation') f.registry.get('ws').createdAt = 'new';
+    if (change === 'removed') f.registry.get('ws').sessionIds = [];
+    if (change === 'archived') f.registry.archivedSessionIds.push('session-1');
+    if (change === 'identity') f.tracker.identity = 'rotated';
+    if (change === 'abort') ac.abort();
+    if (change === 'close') void f.service.close();
+    release();
+    await assert.rejects(pending, error => ['workspace_ambiguous', 'workspace_not_found', 'needs_reselect', 'session_not_in_workspace', 'aborted', 'unavailable'].includes(error.code), change);
+    await f.service.close();
+  }
+});
+
+test('explicit creation queues are exact, independently approved, and never imply board membership', async () => {
+  const f = await prepareScope(), scope = scopeFor(f), calls = []; let writes = 0;
+  f.tracker.getBoardCreationQueue = async () => { throw Object.assign(new Error('private'), { name: 'TrackerError', code: 'board_default_queue_unavailable' }); };
+  f.tracker.getExplicitCreationQueue = async (board, key, { signal }) => {
+    calls.push([board, key]); signal.throwIfAborted();
+    return Object.freeze({ id: '8', key, display: 'Other queue' });
+  };
+  f.tracker.createIssue = async ({ queue }) => { writes++; assert.equal(queue.key, 'OTHER'); return { id: 'i', key: 'OTHER-1', version: 1 }; };
+  await rejected(scope.previewCreate({ boardId: '1' }), 'board_default_queue_unavailable');
+  const preview = await scope.previewCreate({ boardId: '1', queueKey: 'OTHER' });
+  assert.deepEqual(preview, { queue: { id: '8', key: 'OTHER', display: 'Other queue' } });
+  await rejected(scope.createIssue({ boardId: '1', queueKey: 'DOC', expectedQueue: preview.queue, summary: 'Task' }), 'conflict');
+  await rejected(scope.previewCreate({ boardId: '2', queueKey: 'OTHER' }), 'board_not_selected');
+  for (const key of ['', 'other', '../OTHER', undefined, null]) await rejected(scope.previewCreate({ boardId: '1', queueKey: key }), 'invalid');
+  assert.deepEqual(await scope.createIssue({ boardId: '1', queueKey: 'OTHER', expectedQueue: preview.queue, summary: 'Task' }), { id: 'i', key: 'OTHER-1', version: 1 });
+  assert.deepEqual(calls, [['1', 'OTHER'], ['1', 'OTHER']]); assert.equal(writes, 1);
+  f.tracker.getExplicitCreationQueue = async () => Object.freeze({ id: '9', key: 'OTHER', display: 'Other queue' });
+  await rejected(scope.createIssue({ boardId: '1', queueKey: 'OTHER', expectedQueue: preview.queue, summary: 'Task' }), 'conflict');
+  f.tracker.getExplicitCreationQueue = async () => Object.freeze({ id: '8', key: 'WRONG' });
+  await rejected(scope.previewCreate({ boardId: '1', queueKey: 'OTHER' }), 'invalid_tracker_response');
+  assert.equal(writes, 1); await f.service.close();
+});
+
 const createQueue = Object.freeze({ id: '3', key: 'DOC', display: 'Documents' });
 const createInput = (overrides = {}) => ({ boardId: '1', expectedQueue: { ...createQueue }, summary: 'Original', description: 'Details\nmore', ...overrides });
+
+test('explicit creation checks revocation while fetching the queue and never writes', async () => {
+  for (const change of ['identity', 'principal', 'revision', 'incarnation', 'archived', 'removed', 'abort', 'close']) {
+    const links = linkStore(), control = { scope: 'a'.repeat(64) };
+    const f = fixture({ links, resolveAccountScope: async () => control.scope });
+    await config(f.service); await f.service.command({ op: 'boards.list' }); await select(f.service);
+    const ac = new AbortController(), scope = scopeFor(f, { signal: ac.signal }); let writes = 0, started, release;
+    const ready = new Promise(resolve => { started = resolve; });
+    f.tracker.getExplicitCreationQueue = () => new Promise(resolve => { release = () => resolve(Object.freeze({ id: '8', key: 'OTHER' })); started(); });
+    f.tracker.createIssue = async () => { writes++; return { id: 'i', key: 'OTHER-1', version: 1 }; };
+    const pending = scope.createIssue({ boardId: '1', queueKey: 'OTHER', expectedQueue: { id: '8', key: 'OTHER' }, summary: 'Task' });
+    await ready;
+    if (change === 'identity') f.tracker.identity = 'other';
+    if (change === 'principal') control.scope = 'b'.repeat(64);
+    if (change === 'revision') { const state = f.settings.read(); f.settings.compareAndSet(state.revision, state.settings); }
+    if (change === 'incarnation') f.registry.get('ws').createdAt = 'new';
+    if (change === 'archived') f.registry.archivedSessionIds.push('session-1');
+    if (change === 'removed') f.registry.get('ws').sessionIds = [];
+    if (change === 'abort') ac.abort();
+    if (change === 'close') void f.service.close();
+    release();
+    await assert.rejects(pending, e => ['needs_reselect', 'session_not_in_workspace', 'aborted', 'unavailable'].includes(e.code), change);
+    assert.equal(writes, 0, change); await f.service.close();
+  }
+});
 
 test('creation preview and write authorize board and copy exact inputs', async () => {
   const f = await prepareScope(), scope = scopeFor(f); let queueCalls = 0, writes = 0, captured;
@@ -1300,7 +1397,7 @@ test('creation uses same-session API capability and a single synthetic POST', as
   const { queue } = await scope.previewCreate({ boardId: '1' });
   assert.deepEqual(await scope.createIssue(createInput({ expectedQueue: queue })), { id: 'i-1', key: 'DOC-1', version: 1 });
   assert.deepEqual(calls.map(c => c.method), ['GET', 'GET', 'GET', 'POST']);
-  assert.deepEqual(JSON.parse(calls.at(-1).body), { queue: 'DOC', summary: 'Original', description: 'Details\nmore' });
+  assert.deepEqual(JSON.parse(calls.at(-1).body), { queue: 3, summary: 'Original', description: 'Details\nmore' });
   assert.doesNotMatch(JSON.stringify(calls), /LOCAL_FAKE_TOKEN|fake_org/);
 });
 

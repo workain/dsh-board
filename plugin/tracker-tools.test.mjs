@@ -10,7 +10,10 @@ const issue = { key: 'ABC-1', summary: 'Title', status, assigneeKnown: true, ass
 const exec = (controller = new AbortController()) => ({ agent: { id: 'session-1', session: { id: 'session-1' } }, signal: controller.signal, callId: 'call-1' });
 function fixture(overrides = {}) {
   const registry = new Map(), events = [], scopes = [];
-  const service = { toolScope(options) {
+  const service = { async currentWorkspace(options) {
+    events.push(['currentWorkspace', options]);
+    return overrides.currentWorkspace ? overrides.currentWorkspace(options) : { workspaceId: 'w', boardIds: ['1'] };
+  }, toolScope(options) {
     scopes.push(options); events.push('scope');
     return {
       async selectedBoards() { events.push('boards'); return overrides.selectedBoards ? overrides.selectedBoards() : ['1']; },
@@ -39,7 +42,16 @@ const code = expected => error => { assert.equal(error.code, expected); assert.m
 
 test('registers tools, real output schema, rendering, lifecycle disposal', async () => {
   const f = fixture();
-  assert.deepEqual([...f.registry.keys()], ['tracker_list_boards', 'tracker_list_issues', 'tracker_get_issue', 'tracker_list_transitions', 'tracker_add_comment', 'tracker_transition_issue', 'tracker_update_issue', 'tracker_create_issue', 'tracker_link_own_session', 'tracker_unlink_own_session']);
+  assert.deepEqual([...f.registry.keys()], ['tracker_current_workspace', 'tracker_list_boards', 'tracker_list_issues', 'tracker_get_issue', 'tracker_list_transitions', 'tracker_add_comment', 'tracker_transition_issue', 'tracker_update_issue', 'tracker_create_issue', 'tracker_link_own_session', 'tracker_unlink_own_session']);
+  const current = f.registry.get('tracker_current_workspace');
+  assert.deepEqual(current.parameters.required, []);
+  assert.deepEqual(current.parameters.properties, {});
+  assert.equal(current.parameters.additionalProperties, false);
+  const create = f.registry.get('tracker_create_issue');
+  assert.deepEqual(create.parameters.required, ['workspaceId', 'boardId', 'summary']);
+  assert.ok(create.parameters.properties.queueKey);
+  assert.match(create.description, /board_default_queue_unavailable/);
+  assert.match(create.description, /confirmed queueKey/);
   const d = f.registry.get('tracker_list_boards');
   assert.equal(d.parameters.additionalProperties, false);
   assert.deepEqual(d.output.schema.required, ['untrusted', 'json']);
@@ -72,6 +84,31 @@ test('read tools expose only bounded projected untrusted JSON', async () => {
   assert.equal(f.events.filter(e => Array.isArray(e) && e[0] === 'approval').length, 0);
   await f.call('tracker_list_issues', { workspaceId: 'w', boardId: '1', issueKeys: ['ABC-1'] });
   assert.deepEqual(f.events.filter(e => Array.isArray(e) && e[0] === 'board')[1][1].issueKeys, ['ABC-1']);
+});
+
+test('current workspace resolves only trusted caller, projects strict scope, and fails closed', async () => {
+  const f = fixture(); const context = exec();
+  assert.deepEqual(await f.call('tracker_current_workspace', {}, context), { untrusted: true, json: '{"workspaceId":"w","boardIds":["1"]}' });
+  assert.deepEqual(f.events[0], ['currentWorkspace', { sessionId: 'session-1', signal: context.signal }]);
+  assert.equal(f.scopes.length, 0);
+  for (const args of [null, [], { sessionId: 'session-2' }, { workspaceId: 'w' }]) await assert.rejects(f.call('tracker_current_workspace', args), code('invalid_input'));
+  const other = exec(); other.agent.session.id = 'session-2';
+  await assert.rejects(f.call('tracker_current_workspace', {}, other), code('invalid_caller'));
+  assert.equal(f.events.length, 1);
+  for (const response of [null, {}, { workspaceId: '', boardIds: [] }, { workspaceId: 'w', boardIds: ['01'] },
+    { workspaceId: 'w', boardIds: ['1', '1'] }, { workspaceId: 'w', boardIds: Array(501).fill('1') },
+    { workspaceId: 'w', boardIds: ['1'], credential: 'secret' }, { workspaceId: 'w', boardIds: new Array(1) }]) {
+    await assert.rejects(fixture({ currentWorkspace: () => response }).call('tracker_current_workspace', {}), code('invalid_response'));
+  }
+  let touched = 0;
+  const response = { workspaceId: 'w', get boardIds() { touched++; return []; } };
+  await assert.rejects(fixture({ currentWorkspace: () => response }).call('tracker_current_workspace', {}), code('invalid_response'));
+  assert.equal(touched, 0);
+  for (const expected of ['session_not_found', 'workspace_not_found', 'workspace_ambiguous']) {
+    const missing = fixture({ currentWorkspace: () => { throw Object.assign(Error('private'), { code: expected }); } });
+    await assert.rejects(missing.call('tracker_current_workspace', {}), code(expected));
+    assert.equal(missing.scopes.length, 0);
+  }
 });
 
 test('strict own plain input, caller self session, issue/board and comment validation', async () => {
@@ -261,6 +298,52 @@ test('create approves exact queue and fields and warns board membership is not g
   assert.deepEqual(sent, { boardId: '1', expectedQueue: { id: '7', key: 'ABC', display: 'Queue' }, summary: 'New task', description: 'Details\nline' });
   assert.equal(Object.isFrozen(sent.expectedQueue), true);
   assert.deepEqual(f.events.map(e => Array.isArray(e) ? e[0] : e), ['scope', 'previewCreate', 'approval', 'scope', 'previewCreate', 'create']);
+});
+
+test('explicit queue is canonical, approved exactly, and repeated at revalidation and dispatch', async () => {
+  const f = fixture();
+  assert.deepEqual(parsed(await f.call('tracker_create_issue', { ...createArgs, queueKey: 'ABC' })), { id: 'issue-2', key: 'ABC-2', version: 1 });
+  const previews = f.events.filter(e => Array.isArray(e) && e[0] === 'previewCreate');
+  assert.deepEqual(previews.map(e => e[1]), [{ boardId: '1', queueKey: 'ABC' }, { boardId: '1', queueKey: 'ABC' }]);
+  const reason = f.events.find(e => Array.isArray(e) && e[0] === 'approval')[1].reason;
+  assert.match(reason, /exact explicit queue/);
+  assert.ok(reason.includes(JSON.stringify({ id: '7', key: 'ABC', display: 'Queue' })));
+  assert.deepEqual(f.events.at(-1)[1], { boardId: '1', expectedQueue: { id: '7', key: 'ABC', display: 'Queue' }, summary: 'New task', description: 'Details\nline', queueKey: 'ABC' });
+  for (const queueKey of ['', 'abc', 'ABC-1', 'ABC ', 'A'.repeat(33), null]) {
+    const invalid = fixture();
+    await assert.rejects(invalid.call('tracker_create_issue', { ...createArgs, queueKey }), code('invalid_input'));
+    assert.equal(invalid.events.length, 0);
+  }
+  const mismatch = fixture({ previewCreate: () => ({ queue: { id: '7', key: 'OTHER' } }) });
+  await assert.rejects(mismatch.call('tracker_create_issue', { ...createArgs, queueKey: 'ABC' }), code('invalid_response'));
+  assert.equal(mismatch.events.some(e => Array.isArray(e) && ['approval', 'create'].includes(e[0])), false);
+  let n = 0;
+  const altered = fixture({ previewCreate: () => ({ queue: ++n === 1 ? { id: '7', key: 'ABC' } : { id: '8', key: 'ABC' } }) });
+  await assert.rejects(altered.call('tracker_create_issue', { ...createArgs, queueKey: 'ABC' }), code('conflict'));
+  assert.equal(altered.events.some(e => Array.isArray(e) && e[0] === 'create'), false);
+});
+
+test('unavailable default queue and known never policy fail before approval or write', async () => {
+  const unavailable = fixture({ previewCreate: () => { throw Object.assign(Error('private'), { code: 'board_default_queue_unavailable' }); } });
+  await assert.rejects(unavailable.call('tracker_create_issue', createArgs), code('board_default_queue_unavailable'));
+  assert.equal(unavailable.events.some(e => Array.isArray(e) && ['approval', 'create'].includes(e[0])), false);
+  for (const [config, override] of [[{ policy: 'never' }, undefined], [{ policy: 'ask' }, 'never']]) {
+    const f = fixture(); f.ctx.approval.config = config;
+    f.ctx.approval.overrideOf = session => { assert.equal(session.id, 'session-1'); return override; };
+    await assert.rejects(f.call('tracker_create_issue', createArgs), code('approval_policy_never'));
+    assert.equal(f.events.some(e => Array.isArray(e) && ['previewCreate', 'approval', 'create'].includes(e[0])), false);
+  }
+  for (const setup of [
+    approval => { approval.config = { policy: 'never' }; },
+    approval => { approval.config = { policy: 'never' }; approval.overrideOf = () => 'ask'; },
+    approval => { approval.config = { policy: 'never' }; approval.overrideOf = () => { throw Error('unknown'); }; },
+    approval => { approval.config = {}; approval.overrideOf = () => undefined; },
+  ]) {
+    const f = fixture({ approval: () => 'rejected' }); setup(f.ctx.approval);
+    await assert.rejects(f.call('tracker_create_issue', createArgs), code('approval_denied'));
+    assert.equal(f.events.filter(e => Array.isArray(e) && e[0] === 'approval').length, 1);
+    assert.equal(f.events.some(e => Array.isArray(e) && e[0] === 'create'), false);
+  }
 });
 
 test('own link and unlink approve scoped immutable target and use link CAS', async () => {
