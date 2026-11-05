@@ -30,6 +30,7 @@ function harness(language = 'ru') {
     slots: { inject() {}, register() {} },
     connection: { generation: snapshot }, workspaces: { list: snapshot }, sessions: { list: snapshot },
     uiWorkspace: { openSession() {} }, layout: { selectPanel() {} },
+    sidebarRight: { mounted: snapshot, openTab() {} }, sidebarRightTabs: { register() { return () => {}; } },
     commandUi: { register(command) { commands.push(command); return () => {}; } },
     inputTriggers: { registerSource(source) { sources.push(source); return () => { const i = sources.indexOf(source); if (i !== -1) sources.splice(i, 1); }; } },
     remote: new Proxy({}, { get() { networkCalls++; throw Error('unexpected host RPC'); } }),

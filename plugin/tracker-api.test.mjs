@@ -440,12 +440,12 @@ test('write stream failure and hanging body are outcome unknown with no retry', 
   await checked; assert.equal(calls.length, 2);
 });
 
-test('comments return only bounded allowlisted fields and never claim completeness', async () => {
+test('comments return only bounded allowlisted fields and short pages complete', async () => {
   const raw = { id: 42, text: '', version: 0, createdBy: { id: 'u1', display: 'User', self: 'https://evil.invalid' },
     createdAt: '2020-11-03T13:24:52.575+0000', self: 'https://evil.invalid', private: 'secret' };
   const { client, calls } = harness([json([raw])]);
   const result = await (await client.openSession()).getComments('TEST-1');
-  assert.deepEqual(result, { comments: [{ id: '42', text: '', version: 0, createdBy: { id: 'u1', display: 'User' }, createdAt: raw.createdAt }], complete: false });
+  assert.deepEqual(result, { comments: [{ id: '42', text: '', version: 0, createdBy: { id: 'u1', display: 'User' }, createdAt: raw.createdAt }], complete: true, nextCursor: null });
   assert.equal(calls[0].url, 'https://api.tracker.yandex.net/v3/issues/TEST-1/comments?perPage=100');
   assert.equal(calls[0].init.method, 'GET'); assert.equal(calls[0].init.redirect, 'error');
   assert.doesNotMatch(JSON.stringify(result), /evil\.invalid|secret/);
@@ -462,6 +462,105 @@ test('comments return only bounded allowlisted fields and never claim completene
   await rejects(session.getComments('TEST-1?url=https://evil.invalid'), 'invalid_input');
   await rejects(session.getComments('TEST-1', { signal: {} }), 'invalid_input');
   assert.equal(h.calls.length, 0);
+});
+
+const comment = id => ({ id, text: 'content', version: 0, createdBy: { id: 'u', display: 'User' }, createdAt: '2020-11-03T13:24:52Z' });
+const commentsBase = 'https://api.tracker.yandex.net/v3/issues/TEST-1/comments?perPage=100';
+const linkTo = (url, rel) => `<${url}>; rel="${rel}"`;
+
+test('comment pagination reconstructs explicit next and permits cursor unlike last returned ID', async () => {
+  const h = harness([
+    json([comment(1), comment(2)], 200, { link: `${linkTo(commentsBase, 'first')}, ${linkTo(`${commentsBase}&id=5`, 'next')}` }),
+    json([comment(6)], 200, { link: linkTo(commentsBase, 'first') }),
+  ]);
+  const s = await h.client.openSession();
+  const first = await s.getComments('TEST-1');
+  assert.deepEqual({ ids: first.comments.map(c => c.id), complete: first.complete, nextCursor: first.nextCursor },
+    { ids: ['1', '2'], complete: false, nextCursor: '5' });
+  const second = await s.getComments('TEST-1', { cursor: first.nextCursor });
+  assert.deepEqual({ ids: second.comments.map(c => c.id), complete: second.complete, nextCursor: second.nextCursor },
+    { ids: ['6'], complete: true, nextCursor: null });
+  assert.deepEqual(h.calls.map(c => c.url), [commentsBase, `${commentsBase}&id=5`]);
+});
+
+test('comment Link may omit perPage without changing reconstructed requests', async () => {
+  const base = commentsBase.replace('?perPage=100', '');
+  const h = harness([
+    json([comment(1)], 200, { link: `${linkTo(base, 'first')}, ${linkTo(`${base}?id=2`, 'next')}` }),
+    json([comment(3)], 200, { link: linkTo(`${base}?id=2`, 'first') }),
+  ]);
+  const s = await h.client.openSession();
+  const first = await s.getComments('TEST-1');
+  assert.equal(first.complete, false); assert.equal(first.nextCursor, '2');
+  const second = await s.getComments('TEST-1', { cursor: first.nextCursor });
+  assert.equal(second.complete, true); assert.equal(second.nextCursor, null);
+  assert.deepEqual(h.calls.map(c => c.url), [commentsBase, `${commentsBase}&id=2`]);
+});
+
+test('full page without Link has indeterminate completion, first-only Link ends', async () => {
+  const page = Array.from({ length: 100 }, (_, i) => comment(i + 1));
+  const h = harness([json(page), json([comment(101)]), json(page, 200, { link: linkTo(commentsBase, 'first') }), json([])]);
+  const s = await h.client.openSession();
+  const first = await s.getComments('TEST-1');
+  assert.equal(first.complete, false); assert.equal(first.nextCursor, null);
+  const second = await s.getComments('TEST-1', { cursor: '100' });
+  assert.equal(second.complete, true); assert.equal(second.nextCursor, null);
+  const explicitEnd = await s.getComments('TEST-1');
+  assert.equal(explicitEnd.complete, true); assert.equal(explicitEnd.nextCursor, null);
+  const empty = await s.getComments('TEST-1');
+  assert.equal(empty.complete, true); assert.equal(empty.nextCursor, null);
+  assert.deepEqual(h.calls.map(c => c.url), [commentsBase, `${commentsBase}&id=100`, commentsBase, commentsBase]);
+});
+
+test('comment pagination validates caller cursor and response IDs', async () => {
+  const h = harness([]), s = await h.client.openSession();
+  for (const cursor of ['', '01', '-1', '+1', '1.0', '1e2', '9007199254740992', '1&perPage=1', 1, null])
+    await rejects(s.getComments('TEST-1', { cursor }), 'invalid_input');
+  assert.equal(h.calls.length, 0);
+  for (const id of ['01', '-1', '1e2', '9007199254740992', 'abc', '', -1, 1.5, 9007199254740992, null]) {
+    const session = await harness([json([comment(id)])]).client.openSession();
+    await rejects(session.getComments('TEST-1'), 'invalid_response');
+  }
+  for (const rows of [[comment('1'), comment(1)], [comment(5)]]) {
+    const session = await harness([json(rows)]).client.openSession();
+    await rejects(session.getComments('TEST-1', rows.length === 1 ? { cursor: '5' } : {}), 'invalid_response');
+  }
+  const valid = await (await harness([json([comment(0), comment('9007199254740991')])]).client.openSession()).getComments('TEST-1');
+  assert.deepEqual(valid.comments.map(c => c.id), ['0', '9007199254740991']);
+});
+
+test('comment pagination rejects unsafe or ambiguous Link metadata without following it', async () => {
+  const badLinks = [
+    '', 'x'.repeat(8193), 'not-a-link', `${linkTo(`${commentsBase}&id=2`, 'next')},`,
+    linkTo('https://evil.invalid/v3/issues/TEST-1/comments?perPage=100&id=2', 'next'),
+    linkTo('https://api.tracker.yandex.net.evil.invalid/v3/issues/TEST-1/comments?perPage=100&id=2', 'next'),
+    linkTo('https://api.tracker.yandex.net/v3/issues/OTHER-1/comments?perPage=100&id=2', 'next'),
+    linkTo(`${commentsBase}&id=2#fragment`, 'next'), linkTo(`${commentsBase}&id=2&evil=1`, 'next'),
+    linkTo(`${commentsBase}&id=2&id=3`, 'next'), linkTo(`${commentsBase}&id=02`, 'next'),
+    linkTo(`${commentsBase}&id=9007199254740992`, 'next'), linkTo(commentsBase, 'next'),
+    linkTo(commentsBase.replace('100', '99') + '&id=2', 'next'),
+    `${linkTo(`${commentsBase}&id=2`, 'next')}, ${linkTo(`${commentsBase}&id=3`, 'next')}`,
+    `${linkTo(commentsBase, 'first')}, ${linkTo(commentsBase, 'first')}`,
+    linkTo(commentsBase, 'last'), `${linkTo(`${commentsBase}&id=2`, 'next')}; title="extra"`,
+  ];
+  for (const link of badLinks) {
+    const h = harness([json([comment(1)], 200, { link })]);
+    await rejects((await h.client.openSession()).getComments('TEST-1'), 'invalid_response');
+    assert.equal(h.calls.length, 1); assert.equal(h.calls[0].url, commentsBase);
+  }
+});
+
+test('comment pagination rejects non-advancing cursors and empty pages with next', async () => {
+  for (const next of ['4', '5']) {
+    const h = harness([json([comment(6)], 200, { link: linkTo(`${commentsBase}&id=${next}`, 'next') })]);
+    await rejects((await h.client.openSession()).getComments('TEST-1', { cursor: '5' }), 'invalid_response');
+    assert.equal(h.calls.length, 1);
+  }
+  const empty = harness([json([], 200, { link: linkTo(`${commentsBase}&id=6`, 'next') })]);
+  await rejects((await empty.client.openSession()).getComments('TEST-1', { cursor: '5' }), 'invalid_response');
+  const noLink = harness([json(Array.from({ length: 100 }, (_, i) => comment(i + 1)))]);
+  const indeterminate = await (await noLink.client.openSession()).getComments('TEST-1', { cursor: '101' });
+  assert.equal(indeterminate.complete, false); assert.equal(indeterminate.nextCursor, null);
 });
 
 test('issue PATCH is optimistic, exact, bounded and projects only safe receipt', async () => {
@@ -550,6 +649,110 @@ test('comment edit unknown responses and cancellation are never retried', async 
   const h = harness([() => new Promise(() => {})]), s = await h.client.openSession(), ac = new AbortController();
   const pending = s.editComment('TEST-1', { id: '1', text: 'x' }, { signal: ac.signal });
   ac.abort(); await rejects(pending, 'outcome_unknown'); assert.equal(h.calls.length, 1);
+});
+
+const boardWithQueue = (boardId = 42, queue = { id: '3', key: 'DOC', display: 'Documenting', self: 'https://evil.invalid' }) =>
+  ({ ...makeBoard(boardId), defaultQueue: queue, private: 'secret' });
+
+test('board creation queue is a minimal frozen projection and creation uses only fixed endpoint', async () => {
+  const h = harness([json(boardWithQueue()), json({ id: 'abc123', key: 'DOC-99', version: 1, self: 'https://evil.invalid', secret: 'private' }, 201)]);
+  const s = await h.client.openSession();
+  const queue = await s.getBoardCreationQueue('42');
+  assert.deepEqual(queue, { id: '3', key: 'DOC', display: 'Documenting' });
+  assert.equal(Object.isFrozen(queue), true);
+  assert.throws(() => { queue.key = 'OTHER'; }, TypeError);
+  assert.deepEqual(await s.createIssue({ queue, summary: 'New issue', description: 'first\nsecond', unique: 'synthetic-unique' }),
+    { id: 'abc123', key: 'DOC-99', version: 1 });
+  assert.deepEqual(h.calls.map(c => [c.url, c.init.method]), [
+    ['https://api.tracker.yandex.net/v3/boards/42', 'GET'],
+    ['https://api.tracker.yandex.net/v3/issues?notify=false', 'POST'],
+  ]);
+  assert.deepEqual(JSON.parse(h.calls[1].init.body), { queue: 'DOC', summary: 'New issue', description: 'first\nsecond', unique: 'synthetic-unique' });
+  assert.equal(h.calls[1].init.redirect, 'error');
+  assert.equal(h.calls[1].init.headers['Content-Type'], 'application/json');
+  assert.doesNotMatch(JSON.stringify(queue), /evil\.invalid|secret/);
+});
+
+test('board creation queue requires exact board id and documented defaultQueue fields', async () => {
+  const invalid = [
+    makeBoard(42), boardWithQueue(43), boardWithQueue(42, null), boardWithQueue(42, {}),
+    boardWithQueue(42, { id: 3, key: 'DOC' }), boardWithQueue(42, { id: '03', key: 'DOC' }),
+    boardWithQueue(42, { id: '9007199254740992', key: 'DOC' }),
+    boardWithQueue(42, { id: '3', key: 'doc' }), boardWithQueue(42, { id: '3', key: 'DOC/other' }),
+    boardWithQueue(42, { id: '3', key: 'DOC', display: null }), boardWithQueue(42, { id: '3', key: 'DOC', display: 'bad\nname' }),
+  ];
+  for (const raw of invalid) {
+    const h = harness([json(raw)]), s = await h.client.openSession();
+    await rejects(s.getBoardCreationQueue(42), 'invalid_response');
+    assert.equal(h.calls.length, 1);
+  }
+  const h = harness([json(boardWithQueue(42, { id: '3', key: 'DOC' }))]), s = await h.client.openSession();
+  for (const id of ['42?evil', '042', '42/other']) await rejects(s.getBoardCreationQueue(id), 'invalid_input');
+  assert.deepEqual(await s.getBoardCreationQueue(42), { id: '3', key: 'DOC' });
+  assert.equal(h.calls.length, 1);
+});
+
+test('issue creation rejects queue spoofing, foreign sessions and unsafe payloads before dispatch', async () => {
+  const h = harness([json(boardWithQueue())]), s = await h.client.openSession();
+  const queue = await s.getBoardCreationQueue(42);
+  const foreign = await h.client.openSession();
+  const invalid = [
+    null, {}, { queue: { ...queue }, summary: 'x' }, { queue: { id: '3', key: 'OTHER' }, summary: 'x' },
+    { queue, summary: '' }, { queue, summary: ' '.repeat(10) }, { queue, summary: 'x'.repeat(4097) },
+    { queue, summary: 'bad\ntext' }, { queue, summary: 'x', description: null },
+    { queue, summary: 'x', description: '\u0000' }, { queue, summary: 'x', description: 'x'.repeat(48 * 1024 + 1) },
+    { queue, summary: 'x', description: '😀'.repeat(24576) }, { queue, summary: 'x', unique: '' },
+    { queue, summary: 'x', unique: 'a\nb' }, { queue, summary: 'x', status: 'done' },
+    Object.assign(Object.create({ injected: true }), { queue, summary: 'x' }),
+    Object.defineProperty({ queue }, 'summary', { get() { throw new Error('secret'); }, enumerable: true }),
+    { queue, summary: 'x', [Symbol('extra')]: true },
+  ];
+  for (const payload of invalid) await rejects(s.createIssue(payload), 'invalid_input');
+  await rejects(foreign.createIssue({ queue, summary: 'x' }), 'invalid_input');
+  await rejects(s.createIssue({ queue, summary: 'x' }, { signal: {} }), 'invalid_input');
+  assert.equal(h.calls.length, 1);
+});
+
+test('issue creation accepts bounded optional fields and strips nothing into extra requests', async () => {
+  const h = harness([json(boardWithQueue()), json({ id: 'id', key: 'DOC-1', version: 0 }, 201)]);
+  const s = await h.client.openSession(), queue = await s.getBoardCreationQueue(42);
+  assert.deepEqual(await s.createIssue({ queue, summary: 'x'.repeat(4096), description: 'x'.repeat(48 * 1024), unique: 'y'.repeat(4096) }),
+    { id: 'id', key: 'DOC-1', version: 0 });
+  assert.equal(h.calls.length, 2);
+  assert.deepEqual(Object.keys(JSON.parse(h.calls[1].init.body)), ['queue', 'summary', 'description', 'unique']);
+});
+
+test('creation failures classify explicit rejections and malformed receipts without retry', async () => {
+  for (const [response, code] of [
+    [new Response('', { status: 409 }), 'conflict'], [new Response('', { status: 403 }), 'forbidden'],
+    [new Response('', { status: 500 }), 'outcome_unknown'], [json({ id: 'id', key: 'DOC-1', version: 1 }), 'outcome_unknown'],
+    [json({ id: '', key: 'DOC-1', version: 1 }, 201), 'outcome_unknown'],
+    [json({ id: 'id', key: 'OTHER-1', version: 1 }, 201), 'outcome_unknown'],
+    [json({ id: 'id', key: 'DOC-0', version: 1 }, 201), 'outcome_unknown'],
+    [json({ id: 'id', key: 'DOC-1', version: '1' }, 201), 'outcome_unknown'],
+    [json({ id: 'id', key: 'DOC-1', version: -1 }, 201), 'outcome_unknown'],
+    [new Response('bad', { status: 201 }), 'outcome_unknown'],
+  ]) {
+    const h = harness([json(boardWithQueue()), response]), s = await h.client.openSession();
+    const queue = await s.getBoardCreationQueue(42);
+    await rejects(s.createIssue({ queue, summary: 'x' }), code);
+    assert.equal(h.calls.length, 2);
+  }
+});
+
+test('creation cancellation, transport failure and timeout never trigger retry', async t => {
+  const h = harness([json(boardWithQueue()), () => { throw new Error('secret'); }, () => new Promise(() => {}), () => new Promise(() => {})]);
+  const s = await h.client.openSession(), queue = await s.getBoardCreationQueue(42);
+  const before = new AbortController(); before.abort();
+  await rejects(s.createIssue({ queue, summary: 'x' }, { signal: before.signal }), 'cancelled');
+  assert.equal(h.calls.length, 1);
+  await rejects(s.createIssue({ queue, summary: 'x' }), 'outcome_unknown');
+  const active = new AbortController(), pending = s.createIssue({ queue, summary: 'x' }, { signal: active.signal });
+  active.abort(); await rejects(pending, 'outcome_unknown');
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const timed = s.createIssue({ queue, summary: 'x' }); const checked = rejects(timed, 'outcome_unknown');
+  t.mock.timers.tick(10_000); await checked;
+  assert.equal(h.calls.length, 4);
 });
 
 test('response arriving after abort still has its body cancelled', async () => {

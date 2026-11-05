@@ -39,6 +39,8 @@
     "tracker-markup.test.mjs",
     "tracker-statuses.mjs",
     "tracker-statuses.test.mjs",
+    "session-card.mjs",
+    "session-card.test.mjs",
     "client.js",
     "client.test.mjs",
     "filters.test.mjs",
@@ -52,7 +54,7 @@
   "scripts": {
     "build": "node ./scripts/build.mjs",
     "check": "node ./scripts/build.mjs --check",
-    "test": "node --test core.test.mjs service.test.mjs sqlite-store.test.mjs client.test.mjs filters.test.mjs refresh-race.test.mjs slash-guard.test.mjs tracker-api.test.mjs tracker-fetch.test.mjs tracker-service.test.mjs tracker-tools.test.mjs tracker-account.test.mjs tracker-links.test.mjs tracker-settings.test.mjs tracker-markup.test.mjs tracker-statuses.test.mjs"
+    "test": "node --test core.test.mjs service.test.mjs sqlite-store.test.mjs client.test.mjs filters.test.mjs refresh-race.test.mjs slash-guard.test.mjs tracker-api.test.mjs tracker-fetch.test.mjs tracker-service.test.mjs tracker-tools.test.mjs tracker-account.test.mjs tracker-links.test.mjs tracker-settings.test.mjs tracker-markup.test.mjs tracker-statuses.test.mjs session-card.test.mjs"
   },
   "dsh": {
     "bundle": {
@@ -67,6 +69,7 @@
         "@deepseek-ai/dsh-client-ui-commands",
         "@deepseek-ai/dsh-client-ui-layout",
         "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-sidebar-right",
         "@deepseek-ai/dsh-client-ui-workspace",
         "@deepseek-ai/dsh-client-ui-conversation",
         "@deepseek-ai/dsh-client-ui-session",

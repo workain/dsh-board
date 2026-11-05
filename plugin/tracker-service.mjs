@@ -10,6 +10,7 @@ const ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 const BOARD = /^[1-9][0-9]{0,14}$/;
 const ISSUE = /^[A-Z][A-Z0-9_]{0,31}-[1-9][0-9]{0,14}$/;
 const TRANSITION = /^[A-Za-z0-9_-]{1,128}$/;
+const validCommentCursor = value => typeof value === 'string' && /^(?:0|[1-9][0-9]{0,15})$/.test(value) && Number.isSafeInteger(Number(value));
 const TOOL_SCOPE_TTL_MS = 60_000;
 const MAX_COMMENT = 48 * 1024;
 
@@ -83,8 +84,9 @@ function checkCommand(c) {
       if (typeof c.issueId !== 'string' || !TRANSITION.test(c.issueId)) invalid();
       if (typeof c.linked !== 'boolean') invalid(); break;
     case 'issue.read': case 'issue.comments': case 'issue.transitions':
-      shape(c, ['op', 'workspaceId', 'boardId', 'issueKey', 'issueId']); workspaceId(c.workspaceId); boardId(c.boardId); issueKey(c.issueKey);
-      if (typeof c.issueId !== 'string' || !TRANSITION.test(c.issueId)) invalid(); break;
+      fields(c, ['op', 'workspaceId', 'boardId', 'issueKey', 'issueId'], c.op === 'issue.comments' ? ['cursor'] : []); workspaceId(c.workspaceId); boardId(c.boardId); issueKey(c.issueKey);
+      if (typeof c.issueId !== 'string' || !TRANSITION.test(c.issueId)) invalid();
+      if (Object.hasOwn(c, 'cursor') && !validCommentCursor(c.cursor)) invalid(); break;
     case 'issue.comment':
       shape(c, ['op', 'workspaceId', 'boardId', 'issueKey', 'issueId', 'text']); workspaceId(c.workspaceId); boardId(c.boardId); issueKey(c.issueKey); inputText(c.text, MAX_COMMENT, { multiline: true });
       if (typeof c.issueId !== 'string' || !TRANSITION.test(c.issueId)) invalid(); break;
@@ -255,7 +257,7 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
       const issueKey = c.issueKey;
       switch (c.op) {
         case 'issue.read': return scope.getIssue({ issueKey, issueId: c.issueId });
-        case 'issue.comments': return scope.getComments({ issueKey, issueId: c.issueId });
+        case 'issue.comments': return scope.getComments({ issueKey, issueId: c.issueId, ...(Object.hasOwn(c, 'cursor') ? { cursor: c.cursor } : {}) });
         case 'issue.transitions': return scope.listTransitions({ issueKey, issueId: c.issueId });
         case 'issue.update': return scope.updateIssue({ issueKey, changes: c.changes, issueId: c.issueId });
         case 'issue.comment': return scope.addComment({ issueKey, text: c.text, issueId: c.issueId });
@@ -514,7 +516,7 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
     if (!requireSession && !ids.includes(requestedBoard)) fail('board_not_selected', 403);
     if (!binding || binding.incarnation !== incarnation || binding.revision !== initial.revision) fail('needs_reselect', 409);
     const selected = Object.freeze([...ids]);
-    const selectedIdentity = binding.identity;
+    const selectedIdentity = binding.identity, selectedAccountScope = binding.accountScope;
     const expires = Date.now() + TOOL_SCOPE_TTL_MS;
 
     function check(signal) {
@@ -528,7 +530,7 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
           (item.archivedSessionIds != null && (!Array.isArray(item.archivedSessionIds) || item.archivedSessionIds.includes(sid))))) fail('session_not_in_workspace', 403);
       const state = current();
       if (state.revision !== initial.revision || !state.settings.connection || bindings.get(wid) !== binding ||
-          binding.revision !== initial.revision || binding.incarnation !== incarnation || binding.identity !== selectedIdentity ||
+          binding.revision !== initial.revision || binding.incarnation !== incarnation || binding.identity !== selectedIdentity || binding.accountScope !== selectedAccountScope ||
           !Array.isArray(state.settings.workspaces[wid]) || state.settings.workspaces[wid].length !== selected.length ||
           selected.some((id, index) => state.settings.workspaces[wid][index] !== id)) fail('needs_reselect', 409);
     }
@@ -540,7 +542,7 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
       try { result = await session(signal); scope = await accountScope(result, signal); }
       catch (error) { check(signal); throw error; }
       check(signal);
-      if (result.identity !== selectedIdentity || scope !== binding.accountScope) revokeAccount();
+      if (result.identity !== selectedIdentity || scope !== selectedAccountScope) revokeAccount();
       return result;
     }
     async function checkedAwait(work, signal) {
@@ -633,6 +635,63 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
         throw new ServiceError(safe.code, safe.status);
       });
     }
+    // Own-link operations never accept a workspace, session or account namespace
+    // from their input. Board membership is checked by exact issue GET, not search.
+    async function ownLinkIssue(key, board, signal, expectedId) {
+      const a = await account(signal);
+      if (typeof a.getIssue !== 'function') fail('invalid_tracker_response', 502);
+      const value = await checkedAwait(() => a.getIssue(key, { signal }), signal);
+      if (!value || value.key !== key || !Array.isArray(value.boards) || value.boards.length > 500 ||
+          value.boards.some(b => !b || typeof b.id !== 'string' || !BOARD.test(b.id) || !Number.isSafeInteger(Number(b.id))) ||
+          !value.boards.some(b => b.id === board)) fail('issue_not_in_selected_boards', 403);
+      if (typeof value.id !== 'string' || !TRANSITION.test(value.id)) fail('issue_id_required', 409);
+      if (expectedId !== undefined && value.id !== expectedId) fail('conflict', 409);
+      return value.id;
+    }
+    function ownLinkArgs(input, mutation) {
+      shape(input, mutation ? ['boardId', 'issueKey', 'issueId', 'linked', 'expectedRevision'] : ['boardId', 'issueKey']);
+      boardId(input.boardId); keyArg(input.issueKey);
+      if (!selected.includes(input.boardId)) fail('board_not_selected', 403);
+      if (mutation) {
+        if (typeof input.issueId !== 'string' || !TRANSITION.test(input.issueId) || typeof input.linked !== 'boolean') invalid();
+        revision(input.expectedRevision);
+      }
+      if (!links) fail('unavailable', 503);
+    }
+    // A queue is only evidence of the board's live default, never a caller grant.
+    // Keep the adapter's actual capability object separate from this projection.
+    function safeQueue(value, input = false) {
+      const bad = () => input ? invalid() : fail('invalid_tracker_response', 502);
+      if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) bad();
+      const keys = Reflect.ownKeys(value);
+      if (!keys.includes('id') || !keys.includes('key') || keys.some(k => typeof k !== 'string' || !['id', 'key', 'display'].includes(k))) bad();
+      for (const key of keys) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) bad();
+      }
+      if (typeof value.id !== 'string' || !BOARD.test(value.id) || !Number.isSafeInteger(Number(value.id)) ||
+          typeof value.key !== 'string' || !/^[A-Z][A-Z0-9_]{0,31}$/.test(value.key)) bad();
+      if (Object.hasOwn(value, 'display') && (typeof value.display !== 'string' || !value.display.trim() || value.display.length > 256 || /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(value.display))) bad();
+      return Object.freeze({ id: value.id, key: value.key, ...(Object.hasOwn(value, 'display') ? { display: value.display } : {}) });
+    }
+    function sameQueue(a, b) {
+      return a.id === b.id && a.key === b.key && Object.hasOwn(a, 'display') === Object.hasOwn(b, 'display') && a.display === b.display;
+    }
+    function creationBoard(id) {
+      boardId(id);
+      if (!selected.includes(id)) fail('board_not_selected', 403);
+    }
+    async function creationQueue(a, id, signal) {
+      if (typeof a.getBoardCreationQueue !== 'function') fail('invalid_tracker_response', 502);
+      check(signal);
+      const capability = await raceAbort(() => a.getBoardCreationQueue(id, { signal }), signal);
+      check(signal);
+      const queue = safeQueue(capability);
+      // The API capability is an immutable object bound to this account session.
+      // A mutable substitute could change after its validation but before POST.
+      if (!Object.isFrozen(capability)) fail('invalid_tracker_response', 502);
+      return { capability, queue };
+    }
     async function write(signal, key, kind, value, expectedTo, issueId) {
       const initialIssue = await issue(key, signal);
       if (issueId !== undefined && initialIssue.id !== issueId) fail('conflict', 409);
@@ -690,6 +749,115 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
       return { ok: true };
     }
     return Object.freeze({
+      ...(requireSession ? {
+        // The caller supplies board selection only. The returned projection is safe
+        // to display in an approval prompt and is not itself a write capability.
+        previewCreate: input => {
+          try { shape(input, ['boardId']); creationBoard(input.boardId); input = Object.freeze({ boardId: input.boardId }); }
+          catch (error) { return Promise.reject(error); }
+          return execute(async signal => {
+            const a = await account(signal);
+            const { queue } = await creationQueue(a, input.boardId, signal);
+            await account(signal); check(signal);
+            return { queue };
+          });
+        },
+        createIssue: input => {
+          try {
+            fields(input, ['boardId', 'expectedQueue', 'summary'], ['description']);
+            creationBoard(input.boardId);
+            const expectedQueue = safeQueue(input.expectedQueue, true);
+            inputText(input.summary, 4096);
+            if (Object.hasOwn(input, 'description')) inputText(input.description, MAX_COMMENT, { empty: true, multiline: true });
+            input = Object.freeze({ boardId: input.boardId, expectedQueue, summary: input.summary,
+              ...(Object.hasOwn(input, 'description') ? { description: input.description } : {}) });
+          } catch (error) { return Promise.reject(error); }
+          return execute(async signal => {
+            // Resolve account first and use the capability obtained from this exact
+            // immutable account session for the POST. The final live queue check
+            // happens after approval and immediately before dispatch.
+            const a = await account(signal);
+            if (typeof a.createIssue !== 'function') fail('invalid_tracker_response', 502);
+            const { capability, queue } = await creationQueue(a, input.boardId, signal);
+            if (!sameQueue(queue, input.expectedQueue)) fail('conflict', 409);
+            // Detect rotation while fetching the queue, while retaining a's exact
+            // credential-bound capability for the eventual call.
+            await account(signal); check(signal);
+            let dispatched = false, returned = false, result;
+            try {
+              result = await raceAbort(() => {
+                check(signal); dispatched = true;
+                return a.createIssue({ queue: capability, summary: input.summary,
+                  ...(Object.hasOwn(input, 'description') ? { description: input.description } : {}) }, { signal });
+              }, signal);
+              returned = true;
+              check(signal); await account(signal); check(signal);
+            } catch (error) {
+              if (!dispatched) throw error;
+              // A definitive Tracker rejection may be reported only while the
+              // original scope and credentials still hold. Never retry a POST.
+              if (!returned && !signal.aborted && error?.name === 'TrackerError' && ['unauthorized', 'forbidden', 'not_found', 'conflict', 'precondition_failed', 'unprocessable', 'rate_limited', 'invalid_input'].includes(error.code)) {
+                try { check(signal); await account(signal); check(signal); }
+                catch { fail('outcome_unknown', 502); }
+                const statuses = { unauthorized: 401, forbidden: 403, not_found: 404, conflict: 409, precondition_failed: 412, unprocessable: 422, rate_limited: 429, invalid_input: 400 };
+                fail(error.code, statuses[error.code]);
+              }
+              fail('outcome_unknown', 502);
+            }
+            if (!result || typeof result.id !== 'string' || !TRANSITION.test(result.id) ||
+                typeof result.key !== 'string' || !ISSUE.test(result.key) || !result.key.startsWith(`${queue.key}-`) ||
+                !Number.isSafeInteger(result.version) || result.version < 0) fail('outcome_unknown', 502);
+            return { id: result.id, key: result.key, version: result.version };
+          });
+        },
+        previewOwnLink: input => {
+          // Capture exact inputs before any asynchronous boundary.
+          try { ownLinkArgs(input, false); input = Object.freeze({ boardId: input.boardId, issueKey: input.issueKey }); }
+          catch (error) { return Promise.reject(error); }
+          return execute(async signal => {
+            const id = await ownLinkIssue(input.issueKey, input.boardId, signal);
+            await account(signal); check(signal);
+            let result;
+            try { result = links.read({ accountScope: binding.accountScope, workspaceId: wid, workspaceCreatedAt: incarnation }); }
+            catch { fail('internal', 500); }
+            if (!result || !Number.isSafeInteger(result.revision) || result.revision < 0 || !Array.isArray(result.links) || result.links.length > 5000) fail('internal', 500);
+            let linked = false; const seen = new Set();
+            for (const row of result.links) {
+              if (!row || typeof row.issueId !== 'string' || !TRANSITION.test(row.issueId) || !validSessionId(row.sessionId)) fail('internal', 500);
+              const pair = JSON.stringify([row.issueId, row.sessionId]);
+              if (seen.has(pair)) fail('internal', 500);
+              seen.add(pair);
+              if (row.issueId === id && row.sessionId === sid) linked = true;
+            }
+            check(signal);
+            return { issueId: id, linked, revision: result.revision };
+          });
+        },
+        setOwnLink: input => {
+          try {
+            ownLinkArgs(input, true);
+            input = Object.freeze({ boardId: input.boardId, issueKey: input.issueKey, issueId: input.issueId, linked: input.linked, expectedRevision: input.expectedRevision });
+          } catch (error) { return Promise.reject(error); }
+          return execute(async signal => {
+            await ownLinkIssue(input.issueKey, input.boardId, signal, input.issueId);
+            await ownLinkIssue(input.issueKey, input.boardId, signal, input.issueId);
+            await account(signal); check(signal);
+            // Synchronous host store CAS; any throw or malformed response could
+            // follow commit. There is no retry and board is not part of the key.
+            let result;
+            try {
+              const raw = links.mutate({ accountScope: binding.accountScope, workspaceId: wid, workspaceCreatedAt: incarnation,
+                expectedRevision: input.expectedRevision, issueId: input.issueId, sessionId: sid, linked: input.linked });
+              result = { ok: raw?.ok, revision: raw?.revision };
+              if (typeof result.ok !== 'boolean' || !Number.isSafeInteger(result.revision) || result.revision < 0 ||
+                  (result.ok && result.revision !== input.expectedRevision && result.revision !== input.expectedRevision + 1)) fail('outcome_unknown', 502);
+            } catch { fail('outcome_unknown', 502); }
+            if (!result.ok) fail('conflict', 409);
+            try { check(signal); await account(signal); check(signal); } catch { fail('outcome_unknown', 502); }
+            return { revision: result.revision };
+          });
+        },
+      } : {}),
       selectedBoards: () => execute(async signal => { await account(signal); return [...selected]; }),
       boardRead: input => execute(async signal => {
         shape(input, ['boardId', 'issueKeys']); boardId(input.boardId); issueKeys(input.issueKeys);
@@ -720,13 +888,21 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
       }),
       getIssue: input => execute(async signal => { issueInput(input, ['issueKey']); return issue(input.issueKey, signal, input.issueId); }),
       getComments: input => execute(async signal => {
-        issueInput(input, ['issueKey']);
+        if (requireSession) issueInput(input, ['issueKey']);
+        else {
+          fields(input, ['issueKey', 'issueId'], ['cursor']);
+          keyArg(input.issueKey);
+          if (typeof input.issueId !== 'string' || !TRANSITION.test(input.issueId) ||
+              (Object.hasOwn(input, 'cursor') && !validCommentCursor(input.cursor))) invalid();
+        }
         await issue(input.issueKey, signal, input.issueId);
         const a = await account(signal);
         if (typeof a.getComments !== 'function') fail('invalid_tracker_response', 502);
-        const result = await checkedAwait(() => a.getComments(input.issueKey, { signal }), signal);
+        const result = await checkedAwait(() => a.getComments(input.issueKey, { signal, ...(Object.hasOwn(input, 'cursor') ? { cursor: input.cursor } : {}) }), signal);
         await issue(input.issueKey, signal, input.issueId);
-        if (!result || !Array.isArray(result.comments) || result.comments.length > 100 || result.complete !== false) fail('invalid_tracker_response', 502);
+        if (!result || !Array.isArray(result.comments) || result.comments.length > 100 || typeof result.complete !== 'boolean' ||
+            (result.complete && result.nextCursor !== null) ||
+            (result.nextCursor !== null && (!validCommentCursor(result.nextCursor) || (Object.hasOwn(input, 'cursor') && Number(result.nextCursor) <= Number(input.cursor))))) fail('invalid_tracker_response', 502);
         const seen = new Set();
         const comments = result.comments.map(comment => {
           if (!comment || typeof comment.id !== 'string' || !TRANSITION.test(comment.id) || seen.has(comment.id) ||
@@ -738,23 +914,34 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
           return { id: comment.id, text: resultText(comment.text, MAX_COMMENT, true), version: comment.version,
             createdBy: { id: resultText(comment.createdBy.id, 128), display: resultText(comment.createdBy.display, 256) }, createdAt };
         });
-        return { comments, complete: false };
+        // Completeness describes this traversal only, not a stable snapshot.
+        // A null cursor with incomplete metadata is unknown, not an end or a cursor.
+        // Agent tools retain their original non-paginated response contract.
+        return requireSession ? { comments, complete: false } : { comments, complete: result.complete, nextCursor: result.nextCursor };
       }),
-      updateIssue: input => execute(async signal => {
-        issueInput(input, ['issueKey', 'changes']);
-        fields(input.changes, ['expectedVersion'], ['summary', 'description', 'assignee']); revision(input.changes.expectedVersion);
-        if (!['summary', 'description', 'assignee'].some(k => Object.hasOwn(input.changes, k))) invalid();
-        if (Object.hasOwn(input.changes, 'summary')) inputText(input.changes.summary, 4096);
-        if (Object.hasOwn(input.changes, 'description')) inputText(input.changes.description, 48 * 1024, { empty: true, multiline: true });
-        if (Object.hasOwn(input.changes, 'assignee') && input.changes.assignee !== null) inputText(input.changes.assignee, 128);
-        return write(signal, input.issueKey, 'updateIssue', input.changes, undefined, input.issueId);
-      }),
+      updateIssue: input => {
+        try {
+          shape(input, ['issueKey', 'issueId', 'changes']); keyArg(input.issueKey);
+          if (typeof input.issueId !== 'string' || !TRANSITION.test(input.issueId)) invalid();
+          fields(input.changes, ['expectedVersion'], ['summary', 'description', 'assignee']); revision(input.changes.expectedVersion);
+          if (!['summary', 'description', 'assignee'].some(k => Object.hasOwn(input.changes, k))) invalid();
+          if (Object.hasOwn(input.changes, 'summary')) inputText(input.changes.summary, 4096);
+          if (Object.hasOwn(input.changes, 'description')) inputText(input.changes.description, 48 * 1024, { empty: true, multiline: true });
+          if (Object.hasOwn(input.changes, 'assignee') && input.changes.assignee !== null) inputText(input.changes.assignee, 128);
+          input = Object.freeze({ issueKey: input.issueKey, issueId: input.issueId, changes: Object.freeze({ ...input.changes }) });
+        } catch (error) { return Promise.reject(error); }
+        return execute(signal => write(signal, input.issueKey, 'updateIssue', input.changes, undefined, input.issueId));
+      },
       listTransitions: input => execute(async signal => { issueInput(input, ['issueKey']); return transitions(input.issueKey, signal, input.issueId); }),
-      addComment: input => execute(async signal => {
-        issueInput(input, ['issueKey', 'text']);
-        if (typeof input.text !== 'string' || !input.text.trim() || input.text.length > MAX_COMMENT || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(input.text)) invalid();
-        return write(signal, input.issueKey, 'addComment', input.text, undefined, input.issueId);
-      }),
+      addComment: input => {
+        try {
+          shape(input, ['issueKey', 'issueId', 'text']); keyArg(input.issueKey);
+          if (typeof input.issueId !== 'string' || !TRANSITION.test(input.issueId)) invalid();
+          inputText(input.text, MAX_COMMENT, { multiline: true });
+          input = Object.freeze({ issueKey: input.issueKey, issueId: input.issueId, text: input.text });
+        } catch (error) { return Promise.reject(error); }
+        return execute(signal => write(signal, input.issueKey, 'addComment', input.text, undefined, input.issueId));
+      },
       // Editing is owner-GUI only; do not add it to agent tool scopes.
       ...(!requireSession ? { editComment: input => execute(async signal => {
         issueInput(input, ['issueKey', 'commentId', 'expectedVersion', 'text']);
@@ -762,15 +949,18 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
         revision(input.expectedVersion); inputText(input.text, MAX_COMMENT, { multiline: true });
         return write(signal, input.issueKey, 'editComment', { id: input.commentId, expectedVersion: input.expectedVersion, text: input.text }, undefined, input.issueId);
       }) } : {}),
-      executeTransition: input => execute(async signal => {
-        issueInput(input, ['issueKey', 'transitionId', 'expectedTo']);
-        if (typeof input.transitionId !== 'string' || !TRANSITION.test(input.transitionId)) invalid();
-        shape(input.expectedTo, ['id', 'key', 'display']);
-        for (const [name, max] of [['id', 128], ['key', 128], ['display', 256]]) {
-          if (typeof input.expectedTo[name] !== 'string' || !input.expectedTo[name].trim() || input.expectedTo[name].length > max || /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(input.expectedTo[name])) invalid();
-        }
-        return write(signal, input.issueKey, 'executeTransition', input.transitionId, input.expectedTo, input.issueId);
-      }),
+      executeTransition: input => {
+        try {
+          shape(input, ['issueKey', 'issueId', 'transitionId', 'expectedTo']); keyArg(input.issueKey);
+          if (typeof input.issueId !== 'string' || !TRANSITION.test(input.issueId) ||
+              typeof input.transitionId !== 'string' || !TRANSITION.test(input.transitionId)) invalid();
+          shape(input.expectedTo, ['id', 'key', 'display']);
+          inputText(input.expectedTo.id, 128); inputText(input.expectedTo.key, 128); inputText(input.expectedTo.display, 256);
+          input = Object.freeze({ issueKey: input.issueKey, issueId: input.issueId, transitionId: input.transitionId,
+            expectedTo: Object.freeze({ ...input.expectedTo }) });
+        } catch (error) { return Promise.reject(error); }
+        return execute(signal => write(signal, input.issueKey, 'executeTransition', input.transitionId, input.expectedTo, input.issueId));
+      },
     });
   }
   return Object.freeze({ read, command, fetch, close, toolScope });

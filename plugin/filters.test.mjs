@@ -12,7 +12,7 @@ assert.ok(start >= 0 && end > start, 'client harness declarations not found');
 const declarations = tests.slice(start, end).replace("new URL('./client.js', import.meta.url)", "new URL('./client.js', baseUrl)");
 const client = await readFile(new URL('./client.js', import.meta.url), 'utf8');
 const prelude = declarations.replace(/^const client = .*?;\n/m, '');
-const { harness, base, settle } = vm.runInNewContext(`(function () { ${prelude}\n return { harness, base, settle }; })()`, { client, vm, TextEncoder, URL, AbortController, assert, baseUrl: import.meta.url });
+const { harness, base } = vm.runInNewContext(`(function () { ${prelude}\n return { harness, base }; })()`, { client, vm, TextEncoder, URL, AbortController, assert, baseUrl: import.meta.url });
 
 const all = JSON.stringify(['all']);
 const unassigned = JSON.stringify(['unassigned']);
@@ -74,13 +74,22 @@ async function local() {
     { boardId: 'b', taskId: 'other', sessionId: 'member' },
     { boardId: 'b', taskId: 'query', sessionId: 'member' },
   ];
-  h.mount(); await h.resolve(0, snapshot); h.tile('Board — One').props.onClick(); await settle();
+  assert.ok(h.plugin.inject.includes('sidebarRight'));
+  assert.ok(h.plugin.inject.includes('sidebarRightTabs'));
+  assert.deepEqual(Array.from(h.slotNames), ['conversation.session.header.utilities', 'sidebar.right.pane.tab', 'main', 'sidebar.panellist']);
+  h.mount(); await h.resolve(0, snapshot); h.tile('Board — One').props.onClick();
+  // Entering the board starts a silent local refresh; settle it before mutations.
+  h.nodes('select');
+  const refresh = h.requests.length - 1;
+  assert.equal(refresh, 1);
+  await h.resolveSupplementalLocal(refresh);
   return { h, snapshot };
 }
 
 test('local assignee and workspace session filters intersect status and query in board and list views', async () => {
   const { h } = await local();
   try {
+    const requestCount = h.requests.length;
     assert.equal(select(h, 'assignee').props.value, all);
     assert.equal(select(h, 'sessionFilter').props.value, 'all');
     filter(h, 'assignee', assigned('Alex'));
@@ -97,7 +106,7 @@ test('local assignee and workspace session filters intersect status and query in
     assert.deepEqual(localTitles(h), ['Needle foreign', 'Needle member', 'Needle no link']);
     h.click('boardView');
     assert.deepEqual(localTitles(h), ['Needle foreign', 'Needle member', 'Needle no link']);
-    assert.equal(h.requests.length, 1, 'filtering and changing views never write');
+    assert.equal(h.requests.length, requestCount, 'filtering and changing views never request or write');
   } finally { h.unmount(); }
 });
 
@@ -118,24 +127,31 @@ test('editing and clearing assignee sends only explicitly changed fields', async
   try {
     edit(h, 'Unknown assignee');
     assert.equal(assigneeInput(h).props.value, '');
+    let requestIndex = h.requests.length;
     h.submit();
-    let task = JSON.parse(h.requests[1].options.body).task;
+    assert.equal(h.requests[requestIndex].path, 'api/dsh-board.mutate');
+    assert.equal(h.requests[requestIndex].options.method, 'POST');
+    let task = JSON.parse(h.requests[requestIndex].options.body).task;
     assert.equal(task.id, 'missing'); assert.equal(Object.hasOwn(task, 'assignee'), false, 'untouched missing value must stay missing');
-    await h.resolve(1, { ...snapshot, revision: 5 });
+    await h.resolve(requestIndex, { ...snapshot, revision: 5 });
 
     edit(h, 'Needle member');
     assert.equal(assigneeInput(h).props.value, 'Alex');
-    h.change(assigneeInput(h), '  '); h.submit();
-    task = JSON.parse(h.requests[2].options.body).task;
+    h.change(assigneeInput(h), '  '); requestIndex = h.requests.length; h.submit();
+    assert.equal(h.requests[requestIndex].path, 'api/dsh-board.mutate');
+    assert.equal(h.requests[requestIndex].options.method, 'POST');
+    task = JSON.parse(h.requests[requestIndex].options.body).task;
     assert.equal(task.assignee, null, 'clearing explicitly unassigns');
     const cleared = { ...snapshot, revision: 6, boards: snapshot.boards.map(board => ({ ...board, tasks: board.tasks.map(item => item.id === 'both' ? { ...item, assignee: null } : item) })) };
-    await h.resolve(2, cleared);
+    await h.resolve(requestIndex, cleared);
 
     edit(h, 'Explicitly unassigned');
-    h.change(assigneeInput(h), '  Casey  '); h.submit();
-    task = JSON.parse(h.requests[3].options.body).task;
+    h.change(assigneeInput(h), '  Casey  '); requestIndex = h.requests.length; h.submit();
+    assert.equal(h.requests[requestIndex].path, 'api/dsh-board.mutate');
+    assert.equal(h.requests[requestIndex].options.method, 'POST');
+    task = JSON.parse(h.requests[requestIndex].options.body).task;
     assert.equal(task.assignee, 'Casey', 'explicit edit is trimmed');
-    await h.resolve(3, { ...cleared, revision: 7 });
+    await h.resolve(requestIndex, { ...cleared, revision: 7 });
   } finally { h.unmount(); }
 });
 
@@ -143,9 +159,12 @@ test('selected local assignee remains visible when the last matching task change
   const { h, snapshot } = await local();
   try {
     filter(h, 'assignee', assigned('Blair'));
-    edit(h, 'Needle other'); h.change(assigneeInput(h), 'New synthetic owner'); h.submit();
+    edit(h, 'Needle other'); h.change(assigneeInput(h), 'New synthetic owner');
+    const requestIndex = h.requests.length; h.submit();
+    assert.equal(h.requests[requestIndex].path, 'api/dsh-board.mutate');
+    assert.equal(h.requests[requestIndex].options.method, 'POST');
     const updated = { ...snapshot, revision: 5, boards: snapshot.boards.map(board => ({ ...board, tasks: board.tasks.map(task => task.id === 'other' ? { ...task, assignee: 'New synthetic owner' } : task) })) };
-    await h.resolve(1, updated);
+    await h.resolve(requestIndex, updated);
     const node = select(h, 'assignee');
     assert.equal(node.props.value, assigned('Blair'));
     const selected = node.children.find(option => option?.props?.value === assigned('Blair'));

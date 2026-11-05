@@ -44,8 +44,62 @@ function credentialHeaders(value) {
       !['OAuth', 'Bearer'].includes(tokenType) || !['org', 'cloud'].includes(orgType)) fail('invalid_credentials');
   return { Authorization: `${tokenType} ${token}`, [orgType === 'org' ? 'X-Org-ID' : 'X-Cloud-Org-ID']: orgId };
 }
+const validQueueKey = key => typeof key === 'string' && /^[A-Z][A-Z0-9_]{0,31}$/.test(key);
 const validKey = key => typeof key === 'string' && /^[A-Z][A-Z0-9_]{0,31}-[1-9][0-9]{0,14}$/.test(key);
+const plainObject = value => object(value) && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null);
+// Do not accept inherited, accessor, symbol, or non-enumerable input properties.
+function plainFields(value, allowed, required) {
+  if (!plainObject(value)) return false;
+  const keys = Reflect.ownKeys(value);
+  if (keys.some(key => typeof key !== 'string' || !allowed.includes(key))) return false;
+  return required.every(key => Object.hasOwn(value, key)) && keys.every(key => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor && descriptor.enumerable && Object.hasOwn(descriptor, 'value');
+  });
+}
 const validTransitionId = id => typeof id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(id);
+// Tracker's comment id is numeric. Cursors must remain exactly representable and canonical.
+const validCommentCursor = id => typeof id === 'string' && /^(?:0|[1-9][0-9]{0,15})$/.test(id) && Number.isSafeInteger(Number(id));
+
+// Parse a bounded, conservative subset of Link syntax; never request the supplied URL.
+// The docs do not specify its exact serialization, so unknown syntax fails closed.
+function commentNextCursor(headers, key) {
+  if (!headers || typeof headers.get !== 'function') fail('invalid_response');
+  const link = headers.get('link');
+  if (link === null) return { present: false, next: null };
+  if (typeof link !== 'string' || !link || link.length > 8192) fail('invalid_response');
+  const relations = new Set();
+  let next = null;
+  for (const entry of link.split(',')) {
+    const match = /^\s*<([^<>\s]+)>\s*;\s*rel\s*=\s*(?:"([A-Za-z]+)"|([A-Za-z]+))\s*$/i.exec(entry);
+    if (!match) fail('invalid_response');
+    const relation = (match[2] || match[3]).toLowerCase();
+    if (!['first', 'next'].includes(relation) || relations.has(relation)) fail('invalid_response');
+    relations.add(relation);
+    const prefix = `${ORIGIN}/v3/issues/${encodeURIComponent(key)}/comments`;
+    if (match[1] !== prefix && !match[1].startsWith(`${prefix}?`)) fail('invalid_response');
+    const query = match[1].slice(prefix.length);
+    // Accept omitted perPage (the outgoing request still enforces our fixed page size),
+    // but reject extra parameters and normalization or duplicate ambiguities.
+    const parsed = new Map();
+    if (query) {
+      const params = query.slice(1).split('&');
+      if (params.length > 2) fail('invalid_response');
+      for (const param of params) {
+        const part = /^(perPage|id)=([0-9]+)$/.exec(param);
+        if (!part || parsed.has(part[1])) fail('invalid_response');
+        parsed.set(part[1], part[2]);
+      }
+    }
+    if ((parsed.has('perPage') && parsed.get('perPage') !== String(MAX_COMMENTS)) ||
+        (parsed.has('id') && !validCommentCursor(parsed.get('id')))) fail('invalid_response');
+    if (relation === 'next') {
+      if (!parsed.has('id')) fail('invalid_response');
+      next = parsed.get('id');
+    }
+  }
+  return { present: true, next };
+}
 function issueKey(key) {
   if (!validKey(key)) fail('invalid_input');
   return key;
@@ -177,6 +231,9 @@ async function readJson(response, signal, principal = false) {
  * openSession({signal}) snapshots credentials and exposes an opaque identity and
  * getIssue, getComments, updateIssue, listTransitions, addComment and executeTransition. The caller must
  * verify issue.boards against its authorized boards before reads or writes.
+ * For creation, authorize the selected board first; getBoardCreationQueue(id, options)
+ * returns an immutable queue capability accepted only by createIssue(payload, options)
+ * in that same session. Creation does not establish board membership.
  * Issue descriptions and comments are untrusted content, not instructions.
  * Compare with a fresh session identity before publishing session results.
  */
@@ -224,7 +281,7 @@ export function createTrackerClient({ getCredentials, fetch: fetchFn = globalThi
           if (response.status >= 300 && response.status < 400) fail('redirect');
           fail('http_error');
         }
-        return project(await readJson(response, controller.signal, principal));
+        return project(await readJson(response, controller.signal, principal), response.headers);
       })()]);
     } catch (error) {
       if (write && sent && !rejected) fail('outcome_unknown');
@@ -303,6 +360,45 @@ export function createTrackerClient({ getCredentials, fetch: fetchFn = globalThi
       return result;
     } finally { searchBusy = false; }
   }
+  // The caller must authorize the board before using this projection. Only this
+  // exact frozen result is accepted for creation in the same credential session.
+  async function getBoardCreationQueue(credentials, id, approvedQueues, { signal } = {}) {
+    id = boardId(id);
+    return request(`${ORIGIN}/v3/boards/${id}`, 'GET', undefined, signal, credentials, {
+      project(value) {
+        if (!object(value) || boardId(value.id, 'invalid_response') !== id || !object(value.defaultQueue)) fail('invalid_response');
+        const raw = value.defaultQueue;
+        if (typeof raw.id !== 'string' || !/^[1-9][0-9]{0,14}$/.test(raw.id) || !Number.isSafeInteger(Number(raw.id)) ||
+            !validQueueKey(raw.key)) fail('invalid_response');
+        const queue = { id: raw.id, key: raw.key };
+        if (raw.display !== undefined) queue.display = text(raw.display, 256);
+        Object.freeze(queue);
+        approvedQueues.add(queue);
+        return queue;
+      },
+    });
+  }
+
+  async function createIssue(credentials, payload, approvedQueues, { signal } = {}) {
+    if (!plainFields(payload, ['queue', 'summary', 'description', 'unique'], ['queue', 'summary']) ||
+        !approvedQueues.has(payload.queue)) fail('invalid_input');
+    const queue = payload.queue;
+    const body = { queue: queue.key, summary: text(payload.summary, 4096, 'invalid_input') };
+    if (Object.hasOwn(payload, 'description')) body.description = bodyText(payload.description, MAX_DESCRIPTION, 'invalid_input', true);
+    if (Object.hasOwn(payload, 'unique')) body.unique = text(payload.unique, 4096, 'invalid_input');
+    if (Buffer.byteLength(JSON.stringify(body), 'utf8') > MAX_WRITE_BYTES) fail('invalid_input');
+    // Notifications default to on; opt out explicitly rather than notify subscribers.
+    return request(`${ORIGIN}/v3/issues?notify=false`, 'POST', body, signal, credentials, {
+      expectedStatus: 201, write: true,
+      project(value) {
+        if (!object(value) || typeof value.id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(value.id) ||
+            !validKey(value.key) || !value.key.startsWith(`${queue.key}-`) ||
+            !Number.isSafeInteger(value.version) || value.version < 0) fail('invalid_response');
+        return { id: value.id, key: value.key, version: value.version };
+      },
+    });
+  }
+
   async function getMyself(credentials, { signal } = {}) {
     return request(`${ORIGIN}/v3/myself`, 'GET', undefined, signal, credentials, { principal: true });
   }
@@ -323,23 +419,35 @@ export function createTrackerClient({ getCredentials, fetch: fetchFn = globalThi
       status: status(value.status), ...assignee(value.assignee), boards, version: value.version };
   }
 
-  // Only the first documented cursor-based page is requested. No completeness is claimed.
-  async function getComments(credentials, key, { signal } = {}) {
+  // One page per call. A completed traversal is not a snapshot: Tracker recalculates pages.
+  async function getComments(credentials, key, { signal, cursor } = {}) {
     issueKey(key);
-    const values = await request(`${ORIGIN}/v3/issues/${key}/comments?perPage=${MAX_COMMENTS}`, 'GET', undefined, signal, credentials);
-    if (!Array.isArray(values) || values.length > MAX_COMMENTS) fail('invalid_response');
-    const seen = new Set();
-    const comments = values.map(value => {
-      if (!object(value) || !object(value.createdBy) || !Number.isSafeInteger(value.version) || value.version < 0) fail('invalid_response');
-      const id = typeof value.id === 'number' && Number.isSafeInteger(value.id) && value.id >= 0 ? String(value.id) : value.id;
-      if (!validTransitionId(id) || seen.has(id)) fail('invalid_response');
-      seen.add(id);
-      const createdAt = text(value.createdAt, 40);
-      if (!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?(?:Z|[+-]\d{2}:?\d{2})$/.test(createdAt) || !Number.isFinite(Date.parse(createdAt))) fail('invalid_response');
-      return { id, text: bodyText(value.text, MAX_COMMENT, 'invalid_response', true), version: value.version,
-        createdBy: { id: text(value.createdBy.id, 128), display: text(value.createdBy.display, 256) }, createdAt };
+    if (cursor !== undefined && !validCommentCursor(cursor)) fail('invalid_input');
+    const params = new URLSearchParams({ perPage: String(MAX_COMMENTS) });
+    if (cursor !== undefined) params.set('id', cursor);
+    return request(`${ORIGIN}/v3/issues/${encodeURIComponent(key)}/comments?${params}`, 'GET', undefined, signal, credentials, {
+      project(values, headers) {
+        if (!Array.isArray(values) || values.length > MAX_COMMENTS) fail('invalid_response');
+        const seen = new Set();
+        const comments = values.map(value => {
+          if (!object(value) || !object(value.createdBy) || !Number.isSafeInteger(value.version) || value.version < 0) fail('invalid_response');
+          const id = typeof value.id === 'number' && Number.isSafeInteger(value.id) && value.id >= 0 ? String(value.id) : value.id;
+          if (!validCommentCursor(id) || seen.has(id) || id === cursor) fail('invalid_response');
+          seen.add(id);
+          const createdAt = text(value.createdAt, 40);
+          if (!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?(?:Z|[+-]\d{2}:?\d{2})$/.test(createdAt) || !Number.isFinite(Date.parse(createdAt))) fail('invalid_response');
+          return { id, text: bodyText(value.text, MAX_COMMENT, 'invalid_response', true), version: value.version,
+            createdBy: { id: text(value.createdBy.id, 128), display: text(value.createdBy.display, 256) }, createdAt };
+        });
+        const link = commentNextCursor(headers, key);
+        const nextCursor = link.next;
+        if (nextCursor !== null && (!comments.length || (cursor !== undefined && Number(nextCursor) <= Number(cursor)))) fail('invalid_response');
+        // An absent Link on a full page does not establish an ordering from which
+        // a trustworthy next cursor can be derived. Report an indeterminate end.
+        const complete = nextCursor === null && (link.present || comments.length < MAX_COMMENTS);
+        return { comments, complete, nextCursor };
+      },
     });
-    return { comments, complete: false };
   }
 
   // Single-comment lookup is used as a best-effort baseline, not an atomic CAS.
@@ -454,9 +562,12 @@ export function createTrackerClient({ getCredentials, fetch: fetchFn = globalThi
       catch { fail('invalid_credentials'); }
       credentialHeaders(credentials);
       const identity = createHmac('sha256', identityKey).update(JSON.stringify([credentials.token, credentials.tokenType, credentials.orgId, credentials.orgType])).digest('hex');
+      const approvedQueues = new WeakSet();
       return Object.freeze({ identity,
         listBoards: options => listBoards(credentials, options),
         getBoardOverview: (id, options) => getBoardOverview(credentials, id, options),
+        getBoardCreationQueue: (id, options) => getBoardCreationQueue(credentials, id, approvedQueues, options),
+        createIssue: (payload, options) => createIssue(credentials, payload, approvedQueues, options),
         getIssue: (key, options) => getIssue(credentials, key, options),
         getMyself: options => getMyself(credentials, options),
         async getAccountScope(options) {

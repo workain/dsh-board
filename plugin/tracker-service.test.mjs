@@ -22,12 +22,19 @@ function fixture(options = {}) {
     async getIssue(key) { return { key, id: 'id-1', summary: 'Example', description: 'Description', status: { id: '1', key: 'open', display: 'Open' }, assigneeKnown: true, assignee: null, boards: [{ id: '1' }, { id: '99' }], version: 1 }; },
     async listTransitions() { return [{ id: 'start', display: 'Start', to: { id: '2', key: 'progress', display: 'In progress' } }]; },
     async addComment() { return { id: '123' }; },
-    async getComments() { return { comments: [{ id: '1', text: 'hello', version: 1, createdBy: { id: 'u', display: 'User', secret: 'hidden' }, createdAt: '2026-01-01T12:00:00Z', secret: 'hidden' }], complete: false }; },
+    async getComments() { return { comments: [{ id: '1', text: 'hello', version: 1, createdBy: { id: 'u', display: 'User', secret: 'hidden' }, createdAt: '2026-01-01T12:00:00Z', secret: 'hidden' }], complete: false, nextCursor: '1' }; },
     async getComment(_key, id) { return { id, version: 1 }; },
     async editComment(_key, value) { return { id: value.id, version: 2 }; },
     async updateIssue(_key, changes) { return { version: changes.expectedVersion + 1 }; },
     async executeTransition() { return {}; },
-    async openSession() { return { identity: this.identity, listBoards: (...args) => this.listBoards(...args), getBoardOverview: (...args) => this.getBoardOverview(...args), getIssue: (...args) => this.getIssue(...args), getComments: (...args) => this.getComments(...args), getComment: (...args) => this.getComment(...args), editComment: (...args) => this.editComment(...args), updateIssue: (...args) => this.updateIssue(...args), listTransitions: (...args) => this.listTransitions(...args), addComment: (...args) => this.addComment(...args), executeTransition: (...args) => this.executeTransition(...args) }; },
+    async getBoardCreationQueue() { return Object.freeze({ id: '3', key: 'DOC', display: 'Documents' }); },
+    async createIssue() { return { id: 'issue-1', key: 'DOC-1', version: 1 }; },
+    async openSession() {
+      const capabilities = new WeakSet();
+      return { identity: this.identity, listBoards: (...args) => this.listBoards(...args), getBoardOverview: (...args) => this.getBoardOverview(...args), getIssue: (...args) => this.getIssue(...args), getComments: (...args) => this.getComments(...args), getComment: (...args) => this.getComment(...args), editComment: (...args) => this.editComment(...args), updateIssue: (...args) => this.updateIssue(...args), listTransitions: (...args) => this.listTransitions(...args), addComment: (...args) => this.addComment(...args), executeTransition: (...args) => this.executeTransition(...args),
+        getBoardCreationQueue: async (...args) => { const queue = await this.getBoardCreationQueue(...args); if (queue && typeof queue === 'object') capabilities.add(queue); return queue; },
+        createIssue: (...args) => { assert.ok(capabilities.has(args[0].queue), 'capability must come from same account session'); return this.createIssue(...args); } };
+    },
   };
   return { settings, registry, tracker, service: createTrackerService({ settings, tracker, workspaceRegistry: registry, ...options }) };
 }
@@ -44,7 +51,7 @@ const prepareScope = async () => {
   return f;
 };
 const target = { id: '2', key: 'progress', display: 'In progress' };
-const transitionInput = { issueKey: 'ABC-1', transitionId: 'start', expectedTo: target };
+const transitionInput = { issueKey: 'ABC-1', issueId: 'id-1', transitionId: 'start', expectedTo: target };
 
 test('tool scope checks session, selected boards and in-memory activation', async () => {
   const f = await prepareScope();
@@ -114,18 +121,92 @@ test('writes revalidate membership and transition destination after approval', a
   f.tracker.executeTransition = async () => { writes++; return {}; };
   assert.deepEqual(await scope.listTransitions({ issueKey: 'ABC-1' }), [{ id: 'start', display: 'Start', to: target }]);
   f.tracker.getIssue = async key => ({ key, boards: [{ id: '99' }] });
-  await rejected(scope.addComment({ issueKey: 'ABC-1', text: 'hello' }), 'issue_not_in_selected_boards');
+  await rejected(scope.addComment({ issueKey: 'ABC-1', issueId: 'id-1', text: 'hello' }), 'issue_not_in_selected_boards');
   assert.equal(writes, 0);
-  f.tracker.getIssue = async key => ({ key, summary: 'Example', description: null, status: { id: '1', key: 'open', display: 'Open' }, assigneeKnown: true, assignee: null, boards: [{ id: '1' }], version: 1 });
+  f.tracker.getIssue = async key => ({ key, id: 'id-1', summary: 'Example', description: null, status: { id: '1', key: 'open', display: 'Open' }, assigneeKnown: true, assignee: null, boards: [{ id: '1' }], version: 1 });
   f.tracker.listTransitions = async () => [{ id: 'start', display: 'Start', to: { ...target, display: 'Changed' } }];
   await rejected(scope.executeTransition(transitionInput), 'transition_not_available');
   assert.equal(writes, 0);
   f.tracker.listTransitions = async () => [{ id: 'start', display: 'Start', to: target }];
   assert.deepEqual(await scope.executeTransition(transitionInput), { ok: true });
-  assert.deepEqual(await scope.addComment({ issueKey: 'ABC-1', text: 'hello' }), { id: '123' });
+  assert.deepEqual(await scope.addComment({ issueKey: 'ABC-1', issueId: 'id-1', text: 'hello' }), { id: '123' });
   assert.equal(writes, 2);
-  await rejected(scope.addComment({ issueKey: 'ABC-1', text: '' }), 'invalid');
+  await rejected(scope.addComment({ issueKey: 'ABC-1', issueId: 'id-1', text: '' }), 'invalid');
   await rejected(scope.executeTransition({ ...transitionInput, transitionId: '../bad' }), 'invalid');
+});
+
+test('session comment and transition require pinned IDs and reject malformed inputs', async () => {
+  const f = await prepareScope(), scope = scopeFor(f); let reads = 0, writes = 0;
+  f.tracker.getIssue = async () => { reads++; throw Error('unexpected read'); };
+  f.tracker.addComment = f.tracker.executeTransition = async () => { writes++; };
+  const comment = { issueKey: 'ABC-1', issueId: 'id-1', text: 'hello' };
+  for (const invoke of [
+    () => scope.addComment({ issueKey: 'ABC-1', text: 'hello' }),
+    () => scope.executeTransition({ issueKey: 'ABC-1', transitionId: 'start', expectedTo: target }),
+    ...[null, '', '../bad', 123, undefined].flatMap(issueId => [
+      () => scope.addComment({ ...comment, issueId }),
+      () => scope.executeTransition({ ...transitionInput, issueId }),
+    ]),
+    () => scope.addComment({ ...comment, extra: true }),
+    () => scope.executeTransition({ ...transitionInput, expectedTo: { ...target, extra: true } }),
+    () => scope.addComment(Object.defineProperty({ issueKey: 'ABC-1', text: 'hello' }, 'issueId', { enumerable: true, get: () => 'id-1' })),
+    () => scope.executeTransition({ ...transitionInput, [Symbol('extra')]: true }),
+  ]) await rejected(invoke(), 'invalid');
+  assert.equal(reads, 0); assert.equal(writes, 0);
+});
+
+test('session writes check approved issue ID and selected board before dispatch', async () => {
+  for (const kind of ['addComment', 'executeTransition']) {
+    for (const change of ['initial-id', 'missing-id', 'reused-key', 'revoked-board']) {
+      const f = await prepareScope(), scope = scopeFor(f); let reads = 0, writes = 0;
+      const original = f.tracker.getIssue.bind(f.tracker);
+      f.tracker.getIssue = async key => {
+        const value = await original(key); reads++;
+        if (change === 'initial-id' || (change === 'reused-key' && reads > 1)) value.id = 'id-2';
+        if (change === 'missing-id') delete value.id;
+        if (change === 'revoked-board' && reads > 1) value.boards = [{ id: '2' }];
+        return value;
+      };
+      f.tracker.addComment = f.tracker.executeTransition = async () => { writes++; return { id: 'comment-1' }; };
+      const promise = kind === 'addComment'
+        ? scope.addComment({ issueKey: 'ABC-1', issueId: 'id-1', text: 'hello' })
+        : scope.executeTransition(transitionInput);
+      await rejected(promise, change === 'revoked-board' ? 'issue_not_in_selected_boards' : 'conflict');
+      assert.equal(writes, 0, `${kind}: ${change}`);
+      assert.equal(reads, change === 'reused-key' || change === 'revoked-board' ? 2 : 1, `${kind}: ${change}`);
+    }
+  }
+});
+
+test('session writes preserve independent Tracker profile settings', async () => {
+  const first = await prepareScope(), second = await prepareScope();
+  const beforeFirst = first.settings.read(), beforeSecond = second.settings.read();
+  let otherWrites = 0;
+  second.tracker.addComment = second.tracker.executeTransition = async () => { otherWrites++; };
+  const scope = scopeFor(first);
+  assert.deepEqual(await scope.addComment({ issueKey: 'ABC-1', issueId: 'id-1', text: 'hello' }), { id: '123' });
+  assert.deepEqual(await scope.executeTransition(transitionInput), { ok: true });
+  await rejected(scope.addComment({ issueKey: 'ABC-1', issueId: 'reused', text: 'hello' }), 'conflict');
+  await rejected(scope.executeTransition({ ...transitionInput, issueId: 'reused' }), 'conflict');
+  assert.deepEqual(first.settings.read(), beforeFirst);
+  assert.deepEqual(second.settings.read(), beforeSecond);
+  assert.equal(otherWrites, 0);
+});
+
+test('session write arguments are captured before asynchronous checks', async () => {
+  for (const kind of ['addComment', 'executeTransition']) {
+    const f = await prepareScope(), scope = scopeFor(f); let captured;
+    f.tracker[kind] = async (key, value) => { captured = { key, value }; return { id: 'comment-1' }; };
+    const input = kind === 'addComment'
+      ? { issueKey: 'ABC-1', issueId: 'id-1', text: 'original' }
+      : { ...transitionInput, expectedTo: { ...target } };
+    const pending = scope[kind](input);
+    input.issueKey = 'EVIL-1'; input.issueId = 'id-2';
+    if (kind === 'addComment') input.text = 'changed';
+    else { input.transitionId = 'changed'; input.expectedTo.display = 'changed'; }
+    await pending;
+    assert.deepEqual(captured, { key: 'ABC-1', value: kind === 'addComment' ? 'original' : 'start' });
+  }
 });
 
 test('write unknown outcomes and known errors are sanitized, never retried', async () => {
@@ -137,7 +218,7 @@ test('write unknown outcomes and known errors are sanitized, never retried', asy
       if (kind === 'abort') { controller.abort(); return new Promise(() => {}); }
       throw Object.assign(new Error('SECRET http://private'), { name: 'TrackerError', code: kind === 'known' ? 'forbidden' : 'network_error' });
     };
-    await assert.rejects(scope.addComment({ issueKey: 'ABC-1', text: 'hi' }), e => {
+    await assert.rejects(scope.addComment({ issueKey: 'ABC-1', issueId: 'id-1', text: 'hi' }), e => {
       assert.equal(e.code, kind === 'known' ? 'forbidden' : 'outcome_unknown');
       assert.doesNotMatch(String(e), /SECRET|private|identity/); return true;
     });
@@ -151,12 +232,98 @@ test('owner issue commands work without session and project comments', async () 
   const send = (op, extra = {}) => f.service.command({ op, workspaceId: 'ws', boardId: '1', issueKey: 'ABC-1', issueId: 'id-1', ...extra });
   assert.equal((await send('issue.read')).summary, 'Example');
   const comments = await send('issue.comments');
-  assert.deepEqual(comments, { comments: [{ id: '1', text: 'hello', version: 1, createdBy: { id: 'u', display: 'User' }, createdAt: '2026-01-01T12:00:00Z' }], complete: false });
+  assert.deepEqual(comments, { comments: [{ id: '1', text: 'hello', version: 1, createdBy: { id: 'u', display: 'User' }, createdAt: '2026-01-01T12:00:00Z' }], complete: false, nextCursor: '1' });
   assert.deepEqual(await send('issue.transitions'), [{ id: 'start', display: 'Start', to: target }]);
   assert.deepEqual(await send('issue.update', { changes: { expectedVersion: 1, summary: 'new', description: '', assignee: null } }), { version: 2 });
   assert.deepEqual(await send('issue.comment', { text: 'hello' }), { id: '123' });
   assert.deepEqual(await send('issue.transition', { transitionId: 'start', expectedTo: target }), { ok: true });
   assert.throws(() => scopeFor(f), e => e.code === 'session_not_in_workspace');
+});
+
+const commentsCommand = (overrides = {}) => ({ op: 'issue.comments', workspaceId: 'ws', boardId: '1', issueKey: 'ABC-1', issueId: 'id-1', ...overrides });
+const testComment = (id = '1') => ({ id, text: 'hello', version: 1, createdBy: { id: 'u', display: 'User' }, createdAt: '2026-01-01T12:00:00Z' });
+
+test('owner comment pages forward only explicit cursor; legacy agent scope stays unchanged', async () => {
+  const f = await prepareScope(), calls = [];
+  f.tracker.getComments = async (key, options) => {
+    assert.equal(key, 'ABC-1'); assert.ok(options.signal instanceof AbortSignal);
+    calls.push(Object.hasOwn(options, 'cursor') ? options.cursor : null);
+    return options.cursor === undefined
+      ? { comments: [testComment('1')], complete: false, nextCursor: '1', secret: 'hidden' }
+      : { comments: [testComment('2')], complete: true, nextCursor: null, secret: 'hidden' };
+  };
+  assert.deepEqual(await f.service.command(commentsCommand()), { comments: [testComment('1')], complete: false, nextCursor: '1' });
+  assert.deepEqual(await f.service.command(commentsCommand({ cursor: '1' })), { comments: [testComment('2')], complete: true, nextCursor: null });
+  assert.deepEqual(await scopeFor(f).getComments({ issueKey: 'ABC-1' }), { comments: [testComment('1')], complete: false });
+  await rejected(scopeFor(f).getComments({ issueKey: 'ABC-1', cursor: '1' }), 'invalid');
+  assert.deepEqual(calls, [null, '1', null]);
+});
+
+test('indeterminate end passes through without an invented cursor or agent scope changes', async () => {
+  const f = await prepareScope(), calls = [];
+  const comments = Array.from({ length: 100 }, (_, i) => testComment(String(i + 2)));
+  f.tracker.getComments = async (_key, options) => {
+    calls.push(Object.hasOwn(options, 'cursor') ? options.cursor : null);
+    return { comments, complete: false, nextCursor: null, secret: 'hidden' };
+  };
+  assert.deepEqual(await f.service.command(commentsCommand()), { comments, complete: false, nextCursor: null });
+  assert.deepEqual(await f.service.command(commentsCommand({ cursor: '1' })), { comments, complete: false, nextCursor: null });
+  assert.deepEqual(await scopeFor(f).getComments({ issueKey: 'ABC-1' }), { comments, complete: false });
+  assert.deepEqual(calls, [null, '1', null]);
+});
+
+test('owner comment page cursor and response validation fail closed', async () => {
+  const f = await prepareScope(); let calls = 0;
+  f.tracker.getComments = async () => { calls++; return { comments: [], complete: true, nextCursor: null }; };
+  for (const cursor of ['', '01', '-1', '+1', '1.0', '1e2', ' 1', '1 ', '1&perPage=500', '../1', '9007199254740992', 1, null, undefined])
+    await rejected(f.service.command(commentsCommand({ cursor })), 'invalid');
+  await rejected(f.service.command(commentsCommand({ cursor: '1', extra: true })), 'invalid');
+  await rejected(f.service.command({ ...commentsCommand({ cursor: '1' }), op: 'issue.read' }), 'invalid');
+  assert.equal(calls, 0);
+  await f.service.command(commentsCommand({ cursor: '0' }));
+  await f.service.command(commentsCommand({ cursor: '9007199254740991' }));
+  f.tracker.getComments = async () => ({ comments: [testComment('0')], complete: false, nextCursor: '0' });
+  assert.deepEqual(await f.service.command(commentsCommand()), { comments: [testComment('0')], complete: false, nextCursor: '0' });
+  await rejected(f.service.command(commentsCommand({ cursor: '0' })), 'invalid_tracker_response');
+  for (const result of [
+    { comments: [], complete: false }, { comments: [], complete: true },
+    { comments: [], complete: true, nextCursor: '2' },
+    { comments: [], complete: 'true', nextCursor: null }, { comments: [], complete: false, nextCursor: '1' },
+    { comments: [], complete: false, nextCursor: '0' }, { comments: [], complete: false, nextCursor: '01' },
+    { comments: [], complete: false, nextCursor: '9007199254740992' },
+    { comments: [], complete: false, nextCursor: 'https://evil' },
+    { comments: Array.from({ length: 101 }, (_, i) => testComment(String(i))), complete: true, nextCursor: null },
+    { comments: [testComment(), testComment()], complete: true, nextCursor: null },
+    { comments: [{ ...testComment(), id: '../1' }], complete: true, nextCursor: null },
+    { comments: [{ ...testComment(), version: -1 }], complete: true, nextCursor: null },
+    { comments: [{ ...testComment(), text: 'bad\u0000text' }], complete: true, nextCursor: null },
+  ]) {
+    f.tracker.getComments = async () => result;
+    await rejected(f.service.command(commentsCommand({ cursor: '1' })), 'invalid_tracker_response');
+  }
+});
+
+test('comment page authorization is rechecked and never dispatches writes', async () => {
+  for (const change of ['scope', 'issue-id', 'board', 'workspace', 'selection']) {
+    const links = linkStore(), control = { scope: 'a'.repeat(64) };
+    const f = fixture({ links, resolveAccountScope: async () => control.scope });
+    await config(f.service); await f.service.command({ op: 'boards.list' }); await select(f.service);
+    let started, release, writes = 0;
+    for (const method of ['addComment', 'editComment', 'updateIssue', 'executeTransition']) f.tracker[method] = async () => { writes++; };
+    const ready = new Promise(resolve => { started = resolve; });
+    f.tracker.getComments = () => new Promise(resolve => { release = () => resolve({ comments: [testComment()], complete: true, nextCursor: null }); started(); });
+    const pending = f.service.command(commentsCommand({ cursor: '1' })); await ready;
+    if (change === 'scope') control.scope = 'b'.repeat(64);
+    if (change === 'issue-id' || change === 'board') {
+      const original = f.tracker.getIssue;
+      f.tracker.getIssue = async key => ({ ...(await original(key)), ...(change === 'issue-id' ? { id: 'id-2' } : { boards: [{ id: '2' }] }) });
+    }
+    if (change === 'workspace') f.registry.get('ws').createdAt = 'replacement';
+    if (change === 'selection') { const s = f.settings.read(); f.settings.compareAndSet(s.revision, { ...s.settings, workspaces: { ws: [] } }); }
+    release();
+    await assert.rejects(pending, e => ['needs_reselect', 'conflict', 'issue_not_in_selected_boards'].includes(e.code), change);
+    assert.equal(writes, 0); assert.equal(links.calls.length, 0);
+  }
 });
 
 test('owner issue commands require exact fields and positive membership', async () => {
@@ -197,7 +364,7 @@ test('owner issue reads recheck workspace, identity and membership after comment
   for (const change of ['identity', 'incarnation', 'revision', 'membership']) {
     const f = await prepareScope(); let release, started;
     const ready = new Promise(resolve => { started = resolve; });
-    f.tracker.getComments = () => new Promise(resolve => { release = () => resolve({ comments: [], complete: false }); started(); });
+    f.tracker.getComments = () => new Promise(resolve => { release = () => resolve({ comments: [], complete: true, nextCursor: null }); started(); });
     const pending = f.service.command({ op: 'issue.comments', workspaceId: 'ws', boardId: '1', issueKey: 'ABC-1', issueId: 'id-1' });
     await ready;
     if (change === 'identity') f.tracker.identity = 'other';
@@ -633,6 +800,274 @@ test('links compare the requested immutable ID on both live checks', async () =>
   assert.equal(f.links.calls.length, 0);
 });
 
+test('own links expose only caller state, use exact board and global CAS', async () => {
+  const f = await prepareLinks();
+  f.registry.get('ws').sessionIds.push('session-foreign');
+  f.links.rows.push({ accountScope: 'a'.repeat(64), workspaceId: 'ws', workspaceCreatedAt: 'one', issueId: 'id-1', sessionId: 'session-foreign' });
+  const scope = scopeFor(f), preview = { boardId: '1', issueKey: 'ABC-1' };
+  const set = { ...preview, issueId: 'id-1', linked: true, expectedRevision: 0 };
+  assert.deepEqual(await scope.previewOwnLink(preview), { issueId: 'id-1', linked: false, revision: 0 });
+  for (const extra of [{ sessionId: 'session-foreign' }, { workspaceId: 'ws2' }, { accountScope: 'a'.repeat(64) }]) {
+    await rejected(scope.previewOwnLink({ ...preview, ...extra }), 'invalid');
+    await rejected(scope.setOwnLink({ ...set, ...extra }), 'invalid');
+  }
+  await rejected(scope.previewOwnLink({ ...preview, boardId: '2' }), 'board_not_selected');
+  await rejected(scope.setOwnLink({ ...set, issueId: 'other' }), 'conflict');
+  assert.deepEqual(await scope.setOwnLink(set), { revision: 1 });
+  assert.deepEqual(await scope.previewOwnLink(preview), { issueId: 'id-1', linked: true, revision: 1 });
+  await rejected(scope.setOwnLink(set), 'conflict');
+  assert.equal(f.links.rows.length, 2);
+  await f.service.command({ op: 'boards.list' }); await select(f.service, 2, ['1', '2']);
+  f.tracker.getIssue = async key => ({ key, id: 'id-1', boards: [{ id: '1' }, { id: '2' }] });
+  const next = scopeFor(f);
+  assert.deepEqual(await next.previewOwnLink({ ...preview, boardId: '2' }), { issueId: 'id-1', linked: true, revision: 1 });
+  assert.deepEqual(await next.setOwnLink({ ...set, boardId: '2', linked: false, expectedRevision: 1 }), { revision: 2 });
+  assert.deepEqual(await next.previewOwnLink(preview), { issueId: 'id-1', linked: false, revision: 2 });
+  assert.equal(f.links.rows.length, 1);
+});
+
+test('own links fail closed on identity, membership, revocation and uncertain commit', async () => {
+  const preview = { boardId: '1', issueKey: 'ABC-1' }, set = { ...preview, issueId: 'id-1', linked: true, expectedRevision: 0 };
+  for (const change of ['id', 'board', 'scope', 'identity', 'archived', 'removed', 'workspace', 'selection']) {
+    const f = await prepareLinks(), scope = scopeFor(f); let calls = 0, started, release;
+    const ready = new Promise(resolve => { started = resolve; });
+    f.tracker.getIssue = key => {
+      calls++;
+      if (calls === 1) return Promise.resolve({ key, id: 'id-1', boards: [{ id: '1' }] });
+      return new Promise(resolve => { release = () => resolve({ key, id: change === 'id' ? 'id-2' : 'id-1', boards: [{ id: change === 'board' ? '2' : '1' }] }); started(); });
+    };
+    const pending = scope.setOwnLink(set); await ready;
+    if (change === 'scope') f.control.scope = 'b'.repeat(64);
+    if (change === 'identity') f.tracker.identity = 'changed';
+    if (change === 'archived') f.registry.archivedSessionIds.push('session-1');
+    if (change === 'removed') f.registry.get('ws').sessionIds = [];
+    if (change === 'workspace') f.registry.get('ws').createdAt = 'other';
+    if (change === 'selection') { const s = f.settings.read(); f.settings.compareAndSet(s.revision, s.settings); }
+    release(); await assert.rejects(pending, change);
+    assert.equal(f.links.calls.filter(([op]) => op === 'mutate').length, 0, change);
+  }
+  const f = await prepareLinks(), scope = scopeFor(f); let calls = 0;
+  const mutate = f.links.mutate.bind(f.links);
+  f.links.mutate = request => { calls++; mutate(request); throw Error('private'); };
+  await rejected(scope.setOwnLink(set), 'outcome_unknown'); assert.equal(calls, 1);
+  assert.deepEqual(await scope.previewOwnLink(preview), { issueId: 'id-1', linked: true, revision: 1 });
+  f.registry.archivedSessionIds.push('session-1');
+  await rejected(scope.setOwnLink({ ...set, linked: false, expectedRevision: 1 }), 'session_not_in_workspace');
+  await rejected(scope.previewOwnLink(preview), 'session_not_in_workspace');
+});
+
+test('agent update pins issue identity twice and snapshots input', async () => {
+  const f = await prepareScope(), scope = scopeFor(f); let writes = 0, reads = 0;
+  const original = f.tracker.getIssue;
+  f.tracker.getIssue = async key => ({ ...(await original(key)), id: ++reads === 1 ? 'id-1' : 'id-2' });
+  f.tracker.updateIssue = async () => { writes++; return { version: 2 }; };
+  const input = { issueKey: 'ABC-1', issueId: 'id-1', changes: { expectedVersion: 1, summary: 'new' } };
+  await rejected(scope.updateIssue(input), 'conflict'); assert.equal(writes, 0);
+  await rejected(scope.updateIssue({ issueKey: 'ABC-1', changes: input.changes }), 'invalid');
+  f.tracker.getIssue = original; let captured;
+  f.tracker.updateIssue = async (key, changes) => { writes++; captured = { key, ...changes }; return { version: 2 }; };
+  const pending = scope.updateIssue(input); input.issueId = 'other'; input.changes.summary = 'spoof';
+  assert.deepEqual(await pending, { version: 2 });
+  assert.deepEqual(captured, { key: 'ABC-1', expectedVersion: 1, summary: 'new' });
+});
+
+const createQueue = Object.freeze({ id: '3', key: 'DOC', display: 'Documents' });
+const createInput = (overrides = {}) => ({ boardId: '1', expectedQueue: { ...createQueue }, summary: 'Original', description: 'Details\nmore', ...overrides });
+
+test('creation preview and write authorize board and copy exact inputs', async () => {
+  const f = await prepareScope(), scope = scopeFor(f); let queueCalls = 0, writes = 0, captured;
+  f.tracker.getBoardCreationQueue = async id => { queueCalls++; assert.equal(id, '1'); return createQueue; };
+  f.tracker.createIssue = async payload => { writes++; captured = payload; return { id: 'i-1', key: 'DOC-1', version: 2, secret: 'hidden' }; };
+  const previewInput = { boardId: '1' }, previewPending = scope.previewCreate(previewInput);
+  previewInput.boardId = '2';
+  const preview = await previewPending;
+  assert.deepEqual(preview, { queue: createQueue });
+  assert.notEqual(preview.queue, createQueue);
+  assert.ok(Object.isFrozen(preview.queue));
+  const input = createInput(), pending = scope.createIssue(input);
+  input.boardId = '2'; input.expectedQueue.key = 'EVIL'; input.summary = 'spoof'; input.description = 'spoof';
+  assert.deepEqual(await pending, { id: 'i-1', key: 'DOC-1', version: 2 });
+  assert.equal(captured.queue, createQueue);
+  assert.deepEqual({ ...captured, queue: { ...captured.queue } }, { queue: createQueue, summary: 'Original', description: 'Details\nmore' });
+  assert.equal(queueCalls, 2); assert.equal(writes, 1);
+  await rejected(scope.previewCreate({ boardId: '2' }), 'board_not_selected');
+  await rejected(scope.createIssue(createInput({ boardId: '2' })), 'board_not_selected');
+  assert.equal(queueCalls, 2); assert.equal(writes, 1);
+});
+
+test('creation rejects malformed input and unsafe queue evidence without writes', async () => {
+  const f = await prepareScope(), scope = scopeFor(f); let writes = 0;
+  f.tracker.createIssue = async () => { writes++; return { id: 'i', key: 'DOC-1', version: 1 }; };
+  const accessor = { id: '3', key: 'DOC' }; Object.defineProperty(accessor, 'display', { enumerable: true, get() { throw Error('secret'); } });
+  for (const expectedQueue of [null, {}, { id: '03', key: 'DOC' }, { id: '9007199254740992', key: 'DOC' }, { id: '3', key: 'doc' }, { id: '3', key: 'DOC', display: '' }, { ...createQueue, display: 'bad\u0000' }, { ...createQueue, extra: 'x' }, accessor])
+    await rejected(scope.createIssue(createInput({ expectedQueue })), 'invalid');
+  for (const overrides of [{ boardId: '01' }, { summary: '' }, { summary: 'a'.repeat(4097) }, { summary: 'bad\n' }, { description: 'bad\u0000' }, { description: 'a'.repeat(48 * 1024 + 1) }, { status: 'open' }, { queue: 'EVIL' }, { workspaceId: 'ws2' }, { sessionId: 'foreign' }, { accountScope: 'a'.repeat(64) }])
+    await rejected(scope.createIssue(createInput(overrides)), 'invalid');
+  await rejected(scope.previewCreate({ boardId: '1', queue: 'EVIL' }), 'invalid');
+  for (const queue of [null, {}, { id: '03', key: 'DOC' }, { id: '3', key: 'doc' }, { ...createQueue, display: '' }, { ...createQueue, extra: 'secret' }, accessor, { ...createQueue }]) {
+    f.tracker.getBoardCreationQueue = async () => queue;
+    await rejected(scope.previewCreate({ boardId: '1' }), 'invalid_tracker_response');
+    await rejected(scope.createIssue(createInput()), 'invalid_tracker_response');
+  }
+  assert.equal(writes, 0);
+});
+
+test('creation compares queue id key and display after approval', async () => {
+  const f = await prepareScope(), scope = scopeFor(f); let writes = 0;
+  f.tracker.createIssue = async () => { writes++; return { id: 'i', key: 'DOC-1', version: 1 }; };
+  const preview = await scope.previewCreate({ boardId: '1' });
+  for (const changed of [{ ...createQueue, id: '4' }, { ...createQueue, key: 'OTHER' }, { ...createQueue, display: 'Other' }, { id: '3', key: 'DOC' }]) {
+    f.tracker.getBoardCreationQueue = async () => Object.freeze(changed);
+    await rejected(scope.createIssue(createInput({ expectedQueue: preview.queue })), 'conflict');
+  }
+  f.tracker.getBoardCreationQueue = async () => Object.freeze({ id: '3', key: 'DOC' });
+  const withoutDisplay = await scope.previewCreate({ boardId: '1' });
+  assert.deepEqual(withoutDisplay, { queue: { id: '3', key: 'DOC' } });
+  f.tracker.getBoardCreationQueue = async () => createQueue;
+  await rejected(scope.createIssue(createInput({ expectedQueue: withoutDisplay.queue })), 'conflict');
+  assert.equal(writes, 0);
+});
+
+test('creation rechecks session account and workspace during queue reads', async () => {
+  for (const op of ['preview', 'create']) for (const change of ['identity', 'principal', 'revision', 'incarnation', 'removed', 'archived', 'abort']) {
+    const links = linkStore(), control = { scope: 'a'.repeat(64) };
+    const f = fixture({ links, resolveAccountScope: async () => control.scope });
+    await config(f.service); await f.service.command({ op: 'boards.list' }); await select(f.service);
+    const controller = new AbortController(), scope = scopeFor(f, { signal: controller.signal });
+    let started, release, writes = 0;
+    const ready = new Promise(resolve => { started = resolve; });
+    f.tracker.getBoardCreationQueue = () => new Promise(resolve => { release = () => resolve(createQueue); started(); });
+    f.tracker.createIssue = async () => { writes++; return { id: 'i', key: 'DOC-1', version: 1 }; };
+    const pending = op === 'preview' ? scope.previewCreate({ boardId: '1' }) : scope.createIssue(createInput());
+    await ready;
+    if (change === 'identity') f.tracker.identity = 'rotated';
+    if (change === 'principal') control.scope = 'b'.repeat(64);
+    if (change === 'revision') { const s = f.settings.read(); f.settings.compareAndSet(s.revision, s.settings); }
+    if (change === 'incarnation') f.registry.get('ws').createdAt = 'new';
+    if (change === 'removed') f.registry.get('ws').sessionIds = [];
+    if (change === 'archived') f.registry.archivedSessionIds.push('session-1');
+    if (change === 'abort') controller.abort();
+    release();
+    await assert.rejects(pending, error => ['needs_reselect', 'session_not_in_workspace', 'aborted'].includes(error.code), `${op}: ${change}`);
+    assert.equal(writes, 0, `${op}: ${change}`);
+  }
+});
+
+test('creation fails closed when authorization changes between preview and write', async () => {
+  for (const change of ['identity', 'principal', 'revision', 'incarnation', 'removed', 'archived', 'abort']) {
+    const links = linkStore(), control = { scope: 'a'.repeat(64) };
+    const f = fixture({ links, resolveAccountScope: async () => control.scope });
+    await config(f.service); await f.service.command({ op: 'boards.list' }); await select(f.service);
+    const controller = new AbortController(), scope = scopeFor(f, { signal: controller.signal });
+    const { queue } = await scope.previewCreate({ boardId: '1' }); let writes = 0;
+    f.tracker.createIssue = async () => { writes++; return { id: 'i', key: 'DOC-1', version: 1 }; };
+    if (change === 'identity') f.tracker.identity = 'rotated';
+    if (change === 'principal') control.scope = 'b'.repeat(64);
+    if (change === 'revision') { const s = f.settings.read(); f.settings.compareAndSet(s.revision, s.settings); }
+    if (change === 'incarnation') f.registry.get('ws').createdAt = 'new';
+    if (change === 'removed') f.registry.get('ws').sessionIds = [];
+    if (change === 'archived') f.registry.archivedSessionIds.push('session-1');
+    if (change === 'abort') controller.abort();
+    await assert.rejects(scope.createIssue(createInput({ expectedQueue: queue })), error => ['needs_reselect', 'session_not_in_workspace', 'aborted'].includes(error.code), change);
+    assert.equal(writes, 0, change);
+  }
+});
+
+test('creation post-dispatch ambiguity is sanitized and never retried', async () => {
+  for (const mode of ['network', 'timeout', 'malformed', 'wrong-key', 'identity', 'principal', 'incarnation', 'removed', 'abort', 'known', 'known-rotated']) {
+    const links = linkStore(), control = { scope: 'a'.repeat(64) };
+    const f = fixture({ links, resolveAccountScope: async () => control.scope });
+    await config(f.service); await f.service.command({ op: 'boards.list' }); await select(f.service);
+    const controller = new AbortController(), scope = scopeFor(f, { signal: controller.signal }); let writes = 0;
+    f.tracker.createIssue = async () => {
+      writes++;
+      if (mode === 'identity' || mode === 'known-rotated') f.tracker.identity = 'other';
+      if (mode === 'principal') control.scope = 'b'.repeat(64);
+      if (mode === 'incarnation') f.registry.get('ws').createdAt = 'new';
+      if (mode === 'removed') f.registry.get('ws').sessionIds = [];
+      if (mode === 'abort') { controller.abort(); return new Promise(() => {}); }
+      if (mode === 'network' || mode === 'timeout' || mode === 'known' || mode === 'known-rotated')
+        throw Object.assign(new Error('SECRET https://private'), { name: 'TrackerError', code: mode.startsWith('known') ? 'forbidden' : mode === 'network' ? 'network_error' : 'timeout' });
+      if (mode === 'malformed') return { id: '../secret', key: 'DOC-1', version: 1 };
+      return { id: 'i', key: mode === 'wrong-key' ? 'EVIL-1' : 'DOC-1', version: 1 };
+    };
+    await assert.rejects(scope.createIssue(createInput()), error => {
+      assert.equal(error.code, mode === 'known' ? 'forbidden' : 'outcome_unknown', mode);
+      assert.doesNotMatch(String(error), /SECRET|private|identity|a{64}|b{64}/); return true;
+    });
+    assert.equal(writes, 1, mode);
+  }
+});
+
+test('creation checks its exact second selected board and handles absent description', async () => {
+  const f = await prepareScope();
+  await f.service.command({ op: 'boards.list' }); await select(f.service, 2, ['1', '2']);
+  const scope = scopeFor(f), boards = []; let payload;
+  f.tracker.getBoardCreationQueue = async id => { boards.push(id); return Object.freeze({ id: '8', key: 'ALT' }); };
+  f.tracker.createIssue = async value => { payload = value; return { id: 'i-2', key: 'ALT-2', version: 0 }; };
+  const { queue } = await scope.previewCreate({ boardId: '2' });
+  assert.deepEqual(await scope.createIssue({ boardId: '2', expectedQueue: queue, summary: 'Task' }), { id: 'i-2', key: 'ALT-2', version: 0 });
+  assert.deepEqual(boards, ['2', '2']);
+  assert.deepEqual(payload, { queue: { id: '8', key: 'ALT' }, summary: 'Task' });
+});
+
+test('creation post-dispatch abort and revocation cannot claim definite failure', async () => {
+  for (const mode of ['abort', 'close', 'revision', 'archived']) {
+    const f = await prepareScope(), controller = new AbortController(), scope = scopeFor(f, { signal: controller.signal });
+    let started, release, writes = 0;
+    const ready = new Promise(resolve => { started = resolve; });
+    f.tracker.createIssue = () => { writes++; return new Promise(resolve => { release = () => resolve({ id: 'i', key: 'DOC-1', version: 1 }); started(); }); };
+    const pending = scope.createIssue(createInput()); await ready;
+    if (mode === 'abort') controller.abort();
+    if (mode === 'close') void f.service.close();
+    if (mode === 'revision') { const s = f.settings.read(); f.settings.compareAndSet(s.revision, s.settings); }
+    if (mode === 'archived') f.registry.archivedSessionIds.push('session-1');
+    release(); await rejected(pending, 'outcome_unknown'); assert.equal(writes, 1);
+    if (mode === 'close') await f.service.close();
+  }
+});
+
+test('creation checks real API transport has no retry on ambiguous POST', async () => {
+  const f = fixture(), calls = [];
+  const tracker = createTrackerClient({
+    getCredentials: async () => ({ token: 'LOCAL_FAKE_TOKEN', tokenType: 'OAuth', orgId: 'fake_org', orgType: 'org' }),
+    fetch: async (url, init) => {
+      calls.push({ url, method: init.method });
+      if (url.includes('/boards/_paginate')) return new Response(JSON.stringify([{ id: '1', name: 'First' }]));
+      if (url.endsWith('/boards/1')) return new Response(JSON.stringify({ id: '1', defaultQueue: createQueue }));
+      if (init.method === 'POST') throw Error('SECRET synthetic transport failed');
+      throw Error('unexpected synthetic route');
+    },
+  });
+  const service = createTrackerService({ settings: f.settings, tracker, workspaceRegistry: f.registry });
+  await config(service); await service.command({ op: 'boards.list' }); await select(service);
+  const scope = service.toolScope({ workspaceId: 'ws', sessionId: 'session-1', signal: undefined });
+  await assert.rejects(scope.createIssue(createInput()), e => e.code === 'outcome_unknown' && !String(e).includes('SECRET'));
+  assert.equal(calls.filter(call => call.method === 'POST').length, 1);
+});
+
+test('creation uses same-session API capability and a single synthetic POST', async () => {
+  const f = fixture(), calls = [];
+  const tracker = createTrackerClient({
+    getCredentials: async () => ({ token: 'LOCAL_FAKE_TOKEN', tokenType: 'OAuth', orgId: 'fake_org', orgType: 'org' }),
+    fetch: async (url, init) => {
+      calls.push({ url, method: init.method, body: init.body });
+      if (url.includes('/boards/_paginate')) return new Response(JSON.stringify([{ id: '1', name: 'First' }]));
+      if (url.endsWith('/boards/1')) return new Response(JSON.stringify({ id: '1', name: 'First', defaultQueue: { ...createQueue } }));
+      if (url.endsWith('/issues?notify=false') && init.method === 'POST') return new Response(JSON.stringify({ id: 'i-1', key: 'DOC-1', version: 1 }), { status: 201 });
+      throw Error('unexpected synthetic route');
+    },
+  });
+  const service = createTrackerService({ settings: f.settings, tracker, workspaceRegistry: f.registry });
+  await config(service); await service.command({ op: 'boards.list' }); await select(service);
+  const scope = service.toolScope({ workspaceId: 'ws', sessionId: 'session-1', signal: undefined });
+  const { queue } = await scope.previewCreate({ boardId: '1' });
+  assert.deepEqual(await scope.createIssue(createInput({ expectedQueue: queue })), { id: 'i-1', key: 'DOC-1', version: 1 });
+  assert.deepEqual(calls.map(c => c.method), ['GET', 'GET', 'GET', 'POST']);
+  assert.deepEqual(JSON.parse(calls.at(-1).body), { queue: 'DOC', summary: 'Original', description: 'Details\nmore' });
+  assert.doesNotMatch(JSON.stringify(calls), /LOCAL_FAKE_TOKEN|fake_org/);
+});
+
 const editCommand = (overrides = {}) => ({ op: 'issue.editComment', workspaceId: 'ws', boardId: '1', issueKey: 'ABC-1', issueId: 'id-1', commentId: '1', expectedVersion: 1, text: 'Edited\ntext', ...overrides });
 
 test('owner edits existing comment after fresh baseline and issue checks', async () => {
@@ -680,6 +1115,31 @@ test('owner comment edit unknown result and cancellation do not retry', async ()
     assert.deepEqual(result, { status: 502, value: { error: { code: 'outcome_unknown' } } });
     assert.equal(patches, 1);
   }
+});
+
+test('owner comment pagination uses only synthetic Tracker GET requests', async () => {
+  const f = fixture(), calls = [];
+  const tracker = createTrackerClient({
+    getCredentials: async () => ({ token: 'LOCAL_FAKE_TOKEN', tokenType: 'OAuth', orgId: 'fake_org', orgType: 'org' }),
+    fetch: async (url, init) => {
+      calls.push({ url, method: init.method, body: init.body });
+      if (url.includes('/boards/_paginate')) return new Response(JSON.stringify([{ id: '1', name: 'First' }]));
+      if (url.includes('/issues/ABC-1?')) return new Response(JSON.stringify({ key: 'ABC-1', id: 'id-1', summary: 'Example', description: '', status: { id: '1', key: 'open', display: 'Open' }, assignee: null, boards: [{ id: '1' }], version: 1 }));
+      if (url.includes('/issues/ABC-1/comments?')) {
+        const next = new URL(url).searchParams.has('id');
+        return new Response(JSON.stringify([{ ...testComment(next ? '2' : '1') }]), { headers: next ? {} : { link: '<https://api.tracker.yandex.net/v3/issues/ABC-1/comments?perPage=100&id=1>; rel="next"' } });
+      }
+      throw Error('unexpected synthetic route');
+    },
+  });
+  const service = createTrackerService({ settings: f.settings, tracker, workspaceRegistry: f.registry });
+  await config(service); await service.command({ op: 'boards.list' }); await select(service);
+  assert.deepEqual(await service.command(commentsCommand()), { comments: [testComment('1')], complete: false, nextCursor: '1' });
+  assert.deepEqual(await service.command(commentsCommand({ cursor: '1' })), { comments: [testComment('2')], complete: true, nextCursor: null });
+  const reads = calls.filter(call => call.url.includes('/comments?'));
+  assert.equal(reads.length, 2); assert.equal(new URL(reads[0].url).searchParams.has('id'), false);
+  assert.equal(new URL(reads[1].url).searchParams.get('id'), '1');
+  assert.ok(calls.every(call => call.method === 'GET' && call.body === undefined));
 });
 
 test('comment edit integrates service and API through synthetic transport only', async () => {
