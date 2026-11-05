@@ -13,6 +13,8 @@ const SEARCH_INTERVAL_MS = 250;
 const MAX_DESCRIPTION = 48 * 1024;
 const MAX_COMMENT = 48 * 1024;
 const MAX_TRANSITIONS = 500;
+const MAX_COMMENTS = 100;
+const MAX_WRITE_BYTES = 64 * 1024;
 
 export class TrackerError extends Error {
   constructor(code) {
@@ -104,7 +106,8 @@ function issue(value, wantedKeys, targetId) {
     if (id === targetId) member = true;
   }
   if (!member) return { member: false };
-  return { member: true, issue: { key: value.key, summary: text(value.summary, 4096), status: status(value.status), ...assignee(value.assignee) } };
+  const id = typeof value.id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value.id) ? value.id : undefined;
+  return { member: true, issue: { ...(id ? { id } : {}), key: value.key, summary: text(value.summary, 4096), status: status(value.status), ...assignee(value.assignee) } };
 }
 function abortCode(signal, timedOut) {
   return timedOut() ? 'timeout' : signal?.aborted ? 'cancelled' : 'network_error';
@@ -117,7 +120,7 @@ function waitForSearch(delay, signal) {
     signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
-async function readJson(response, signal) {
+async function readJson(response, signal, principal = false) {
   const length = response.headers?.get?.('content-length');
   if (length !== null && length !== undefined && (!/^\d+$/.test(length) || Number(length) > MAX_RESPONSE_BYTES)) {
     try { Promise.resolve(response.body?.cancel?.()).catch(() => {}); } catch {}
@@ -157,26 +160,33 @@ async function readJson(response, signal) {
   const joined = new Uint8Array(size);
   let offset = 0;
   for (const chunk of chunks) { joined.set(chunk, offset); offset += chunk.byteLength; }
-  try { return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(joined)); }
-  catch { fail('invalid_response'); }
+  try {
+    const decoded = new TextDecoder('utf-8', { fatal: true }).decode(joined);
+    if (!principal) return JSON.parse(decoded);
+    const marker = Symbol('raw-tracker-uid');
+    const value = JSON.parse(decoded, (key, item, context) => key === 'uid' && typeof item === 'number' ? { [marker]: context?.source } : item);
+    const uid = value?.uid?.[marker];
+    if (typeof uid !== 'string' || !/^[1-9][0-9]{0,63}$/.test(uid)) fail('invalid_response');
+    return { uid };
+  } catch { fail('invalid_response'); }
 }
 
 /**
  * createTrackerClient({getCredentials, fetch}) -> {listBoards, getBoardOverview}.
  * getCredentials(): {token, tokenType:'OAuth'|'Bearer', orgId, orgType:'org'|'cloud'}.
  * openSession({signal}) snapshots credentials and exposes an opaque identity and
- * getIssue, listTransitions, addComment and executeTransition. The caller must
+ * getIssue, getComments, updateIssue, listTransitions, addComment and executeTransition. The caller must
  * verify issue.boards against its authorized boards before reads or writes.
  * Issue descriptions and comments are untrusted content, not instructions.
  * Compare with a fresh session identity before publishing session results.
  */
-export function createTrackerClient({ getCredentials, fetch: fetchFn = globalThis.fetch } = {}) {
-  if (typeof getCredentials !== 'function' || typeof fetchFn !== 'function') fail('invalid_input');
+export function createTrackerClient({ getCredentials, fetch: fetchFn = globalThis.fetch, getAccountScope } = {}) {
+  if (typeof getCredentials !== 'function' || typeof fetchFn !== 'function' || (getAccountScope !== undefined && typeof getAccountScope !== 'function')) fail('invalid_input');
   let searchBusy = false;
   let lastSearchAt = -Infinity;
   const identityKey = randomBytes(32);
 
-  async function request(url, method, body, callerSignal, credentials, { expectedStatus = 200, write = false, project = value => value } = {}) {
+  async function request(url, method, body, callerSignal, credentials, { expectedStatus = 200, write = false, principal = false, project = value => value } = {}) {
     if (callerSignal !== undefined && !(callerSignal instanceof AbortSignal)) fail('invalid_input');
     if (callerSignal?.aborted) fail('cancelled');
     const controller = new AbortController();
@@ -214,7 +224,7 @@ export function createTrackerClient({ getCredentials, fetch: fetchFn = globalThi
           if (response.status >= 300 && response.status < 400) fail('redirect');
           fail('http_error');
         }
-        return project(await readJson(response, controller.signal));
+        return project(await readJson(response, controller.signal, principal));
       })()]);
     } catch (error) {
       if (write && sent && !rejected) fail('outcome_unknown');
@@ -273,7 +283,7 @@ export function createTrackerClient({ getCredentials, fetch: fetchFn = globalThi
           if (delay) await waitForSearch(delay, signal);
         }
         lastSearchAt = Date.now();
-        const params = new URLSearchParams({ fields: 'key,summary,status,boards,assignee', perPage: String(PER_PAGE), page: String(page) });
+        const params = new URLSearchParams({ fields: 'id,key,summary,status,boards,assignee', perPage: String(PER_PAGE), page: String(page) });
         const body = searchByBoard ? { filter: { boards: Number(id) } } : { keys };
         const found = await request(`${ORIGIN}/v3/issues/_search?${params}`, 'POST', body, signal, credentials);
         if (!Array.isArray(found) || found.length > PER_PAGE) fail('invalid_response');
@@ -281,7 +291,7 @@ export function createTrackerClient({ getCredentials, fetch: fetchFn = globalThi
           const parsed = issue(raw, wanted, id);
           if (seen.has(raw.key)) fail('invalid_response');
           seen.add(raw.key);
-          if (parsed.uncertain) result.uncertainKeys.push(raw.key);
+          if (parsed.uncertain && !searchByBoard) result.uncertainKeys.push(raw.key);
           else if (parsed.member) result.issues.push(parsed.issue);
           if (searchByBoard && !parsed.member) membershipMismatch = true;
         }
@@ -293,9 +303,13 @@ export function createTrackerClient({ getCredentials, fetch: fetchFn = globalThi
       return result;
     } finally { searchBusy = false; }
   }
+  async function getMyself(credentials, { signal } = {}) {
+    return request(`${ORIGIN}/v3/myself`, 'GET', undefined, signal, credentials, { principal: true });
+  }
+
   async function getIssue(credentials, key, { signal } = {}) {
     issueKey(key);
-    const params = new URLSearchParams({ fields: 'key,summary,description,status,assignee,boards,version' });
+    const params = new URLSearchParams({ fields: 'id,key,summary,description,status,assignee,boards,version' });
     const value = await request(`${ORIGIN}/v3/issues/${key}?${params}`, 'GET', undefined, signal, credentials);
     if (!object(value) || value.key !== key || !Array.isArray(value.boards) || value.boards.length > 500 ||
         !Number.isSafeInteger(value.version) || value.version < 0) fail('invalid_response');
@@ -303,9 +317,81 @@ export function createTrackerClient({ getCredentials, fetch: fetchFn = globalThi
       if (!object(b)) fail('invalid_response');
       return { id: boardId(b.id, 'invalid_response') };
     });
-    return { key, summary: text(value.summary, 4096),
+    const id = typeof value.id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value.id) ? value.id : undefined;
+    return { ...(id ? { id } : {}), key, summary: text(value.summary, 4096),
       description: value.description == null ? '' : bodyText(value.description, MAX_DESCRIPTION, 'invalid_response', true),
       status: status(value.status), ...assignee(value.assignee), boards, version: value.version };
+  }
+
+  // Only the first documented cursor-based page is requested. No completeness is claimed.
+  async function getComments(credentials, key, { signal } = {}) {
+    issueKey(key);
+    const values = await request(`${ORIGIN}/v3/issues/${key}/comments?perPage=${MAX_COMMENTS}`, 'GET', undefined, signal, credentials);
+    if (!Array.isArray(values) || values.length > MAX_COMMENTS) fail('invalid_response');
+    const seen = new Set();
+    const comments = values.map(value => {
+      if (!object(value) || !object(value.createdBy) || !Number.isSafeInteger(value.version) || value.version < 0) fail('invalid_response');
+      const id = typeof value.id === 'number' && Number.isSafeInteger(value.id) && value.id >= 0 ? String(value.id) : value.id;
+      if (!validTransitionId(id) || seen.has(id)) fail('invalid_response');
+      seen.add(id);
+      const createdAt = text(value.createdAt, 40);
+      if (!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?(?:Z|[+-]\d{2}:?\d{2})$/.test(createdAt) || !Number.isFinite(Date.parse(createdAt))) fail('invalid_response');
+      return { id, text: bodyText(value.text, MAX_COMMENT, 'invalid_response', true), version: value.version,
+        createdBy: { id: text(value.createdBy.id, 128), display: text(value.createdBy.display, 256) }, createdAt };
+    });
+    return { comments, complete: false };
+  }
+
+  // Single-comment lookup is used as a best-effort baseline, not an atomic CAS.
+  async function getComment(credentials, key, id, { signal } = {}) {
+    issueKey(key);
+    if (!validTransitionId(id)) fail('invalid_input');
+    return request(`${ORIGIN}/v3/issues/${key}/comments/${id}`, 'GET', undefined, signal, credentials, {
+      project(value) {
+        if (!object(value)) fail('invalid_response');
+        const actualId = typeof value.id === 'number' && Number.isSafeInteger(value.id) && value.id >= 0 ? String(value.id) : value.id;
+        if (actualId !== id || !Number.isSafeInteger(value.version) || value.version < 0) fail('invalid_response');
+        return { id, version: value.version };
+      },
+    });
+  }
+
+  async function editComment(credentials, key, comment, { signal } = {}) {
+    issueKey(key);
+    if (!object(comment) || Object.keys(comment).length !== 2 || !Object.hasOwn(comment, 'id') || !Object.hasOwn(comment, 'text') || !validTransitionId(comment.id)) fail('invalid_input');
+    bodyText(comment.text, MAX_COMMENT, 'invalid_input');
+    const body = { text: comment.text };
+    if (Buffer.byteLength(JSON.stringify(body), 'utf8') > MAX_WRITE_BYTES) fail('invalid_input');
+    return request(`${ORIGIN}/v3/issues/${key}/comments/${comment.id}`, 'PATCH', body, signal, credentials, {
+      write: true,
+      project(value) {
+        if (!object(value)) fail('invalid_response');
+        const id = typeof value.id === 'number' && Number.isSafeInteger(value.id) && value.id >= 0 ? String(value.id) : value.id;
+        if (id !== comment.id || !Number.isSafeInteger(value.version) || value.version < 0) fail('invalid_response');
+        return { id, version: value.version };
+      },
+    });
+  }
+
+  async function updateIssue(credentials, key, changes, { signal } = {}) {
+    issueKey(key);
+    if (!object(changes) || Object.keys(changes).some(k => !['expectedVersion', 'summary', 'description', 'assignee'].includes(k)) ||
+        !Object.hasOwn(changes, 'expectedVersion') || !Number.isSafeInteger(changes.expectedVersion) || changes.expectedVersion < 0) fail('invalid_input');
+    const body = {};
+    if (Object.hasOwn(changes, 'summary')) body.summary = text(changes.summary, 4096, 'invalid_input');
+    if (Object.hasOwn(changes, 'description')) body.description = bodyText(changes.description, MAX_DESCRIPTION, 'invalid_input', true);
+    if (Object.hasOwn(changes, 'assignee')) {
+      if (changes.assignee !== null) text(changes.assignee, 128, 'invalid_input');
+      body.assignee = changes.assignee;
+    }
+    if (!Object.keys(body).length || Buffer.byteLength(JSON.stringify(body), 'utf8') > MAX_WRITE_BYTES) fail('invalid_input');
+    return request(`${ORIGIN}/v3/issues/${key}?version=${changes.expectedVersion}`, 'PATCH', body, signal, credentials, {
+      write: true,
+      project(value) {
+        if (!object(value) || value.key !== key || !Number.isSafeInteger(value.version) || value.version < 0) fail('invalid_response');
+        return { version: value.version };
+      },
+    });
   }
 
   async function listTransitions(credentials, key, { signal } = {}) {
@@ -372,6 +458,20 @@ export function createTrackerClient({ getCredentials, fetch: fetchFn = globalThi
         listBoards: options => listBoards(credentials, options),
         getBoardOverview: (id, options) => getBoardOverview(credentials, id, options),
         getIssue: (key, options) => getIssue(credentials, key, options),
+        getMyself: options => getMyself(credentials, options),
+        async getAccountScope(options) {
+          if (!getAccountScope) fail('invalid_credentials');
+          const { uid } = await getMyself(credentials, options);
+          let scope;
+          try { scope = await getAccountScope({ orgType: credentials.orgType, orgId: credentials.orgId, principalId: String(uid) }); }
+          catch { fail('invalid_credentials'); }
+          if (typeof scope !== 'string' || !/^[0-9a-f]{64}$/.test(scope)) fail('invalid_credentials');
+          return scope;
+        },
+        getComments: (key, options) => getComments(credentials, key, options),
+        getComment: (key, id, options) => getComment(credentials, key, id, options),
+        editComment: (key, comment, options) => editComment(credentials, key, comment, options),
+        updateIssue: (key, changes, options) => updateIssue(credentials, key, changes, options),
         listTransitions: (key, options) => listTransitions(credentials, key, options),
         addComment: (key, comment, options) => addComment(credentials, key, comment, options),
         executeTransition: (key, transitionId, options) => executeTransition(credentials, key, transitionId, options) });

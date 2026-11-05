@@ -13,7 +13,7 @@ export const trackerPlugin = {
   name: 'dsh-board-tracker',
   inject: ['connection', 'workspaceRegistry', 'profileContext', 'credentials', 'tools', 'approval'],
   apply(ctx) {
-    let disposed = false, initializing, settings, service, credentialFlight;
+    let disposed = false, initializing, settings, links, namespace, service, credentialFlight;
     const stop = new AbortController();
     const unavailable = request => {
       try { Promise.resolve(request.body?.cancel()).catch(() => {}); } catch {}
@@ -22,18 +22,25 @@ export const trackerPlugin = {
       } });
     };
     async function bootstrap() {
-      const [{ openTrackerSettings }, { createTrackerClient }, { createTrackerFetch }, { createTrackerService }] = await Promise.all([
+      const [{ openTrackerSettings }, { createTrackerClient }, { createTrackerFetch }, { createTrackerService },
+        { openAccountNamespace }, { openTrackerLinks }] = await Promise.all([
         import('./tracker-settings.mjs'), import('./tracker-api.mjs'), import('./tracker-fetch.mjs'), import('./tracker-service.mjs'),
+        import('./tracker-account.mjs'), import('./tracker-links.mjs'),
       ]);
       if (disposed) throw new Error('Tracker stopped');
       const { name: profileId, home } = ctx.profileContext;
       if (typeof home !== 'string' || !path.isAbsolute(home) || path.normalize(home) !== home) throw new Error('Invalid profile home');
       // Unlike local board startup, Tracker never creates or repairs the parent.
       const directory = path.join(home, 'storages', 'dsh-board');
-      let opened;
+      let opened, accountNamespace, linkStore, created;
       try {
         opened = openTrackerSettings({ directory, profileId });
-        const tracker = createTrackerClient({ fetch: createTrackerFetch(), async getCredentials() {
+        // A key must exist before its dependent database, including on first run.
+        accountNamespace = openAccountNamespace({ directory, profileId });
+        linkStore = openTrackerLinks({ directory, profileId });
+        const tracker = createTrackerClient({ fetch: createTrackerFetch(),
+          getAccountScope: identity => accountNamespace.derive(identity),
+          async getCredentials() {
           if (disposed) throw new Error('Tracker stopped');
           const state = opened.read(), orgType = state.settings.connection?.orgType;
           if (!orgType) throw new Error('Tracker not configured');
@@ -61,13 +68,22 @@ export const trackerPlugin = {
           if (!token?.value || !orgId?.value) throw new Error('Tracker credentials unavailable');
           return { token: token.value, tokenType: 'OAuth', orgId: orgId.value, orgType };
         } });
-        const created = createTrackerService({ settings: opened, tracker, workspaceRegistry: ctx.workspaceRegistry });
+        created = createTrackerService({ settings: opened, tracker, workspaceRegistry: ctx.workspaceRegistry, links: linkStore,
+          async resolveAccountScope({ account, signal }) {
+            if (typeof account?.getAccountScope !== 'function') throw new Error('Account scope unavailable');
+            return account.getAccountScope({ signal });
+          },
+        });
         if (typeof created.close !== 'function') throw new Error('Tracker service lifecycle unsupported');
         if (disposed) throw new Error('Tracker stopped');
-        settings = opened; service = created;
+        settings = opened; links = linkStore; namespace = accountNamespace; service = created;
         return created;
       } catch (error) {
-        opened?.close();
+        // Dispose every acquired resource, even if another disposer fails.
+        try { await created?.close?.(); } catch {}
+        try { linkStore?.close(); } catch {}
+        try { opened?.close(); } catch {}
+        try { accountNamespace?.close(); } catch {}
         throw error;
       }
     }
@@ -105,28 +121,30 @@ export const trackerPlugin = {
         stop.abort();
         closing = (async () => {
           if (initializing) { try { await initializing; } catch {} }
-          try { await drain; } finally { settings?.close(); }
+          try { await drain; } finally {
+            try { links?.close(); } finally {
+              try { settings?.close(); } finally { namespace?.close(); }
+            }
+          }
         })();
       }
       return closing;
     };
-    // One owning effect groups the registration effects and drains the service
-    // only after unregistering them. Cordis otherwise runs sibling cleanup in
-    // parallel, even though it starts those effects in reverse order.
+    // One owning effect starts service shutdown and unregisters all registrations
+    // together. Cordis otherwise runs sibling cleanup in parallel.
     ctx.effect(() => {
       let disposeRead, disposeWrite, disposeTools, disposal;
       const dispose = () => {
         if (!disposal) {
-          // Reject new work as soon as unload begins, including while an
-          // asynchronous route disposer is still settling.
-          disposed = true;
+          // Abort in-flight work immediately, even if an unregister never settles.
+          // Resource cleanup remains ordered after the service drain in close().
+          const drain = close();
           const pending = [];
           for (const unregister of [disposeTools, disposeWrite, disposeRead]) {
             try { pending.push(Promise.resolve(unregister?.())); } catch {}
           }
-          // Disposers normally run synchronously, but wait for asynchronous
-          // unregister operations before draining and closing the store.
-          disposal = Promise.allSettled(pending).then(close);
+          // Await both shutdown and all asynchronous unregister operations.
+          disposal = Promise.all([Promise.allSettled(pending), drain]).then(() => undefined);
         }
         return disposal;
       };

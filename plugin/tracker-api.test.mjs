@@ -19,6 +19,34 @@ function harness(results, creds = credentials) {
 }
 const rejects = (promise, code) => assert.rejects(promise, error => error instanceof TrackerError && error.code === code && error.message === `Tracker: ${code}`);
 
+test('account scope derives only from captured credentials and validated current user', async () => {
+  let seen;
+  const client = createTrackerClient({ getCredentials: () => credentials, fetch: async () => json({ uid: 123 }),
+    getAccountScope: async value => { seen = value; return 'a'.repeat(64); } });
+  const session = await client.openSession();
+  assert.equal(await session.getAccountScope(), 'a'.repeat(64));
+  assert.deepEqual(seen, { orgType: 'org', orgId: 'synthetic-org', principalId: '123' });
+  const bad = createTrackerClient({ getCredentials: () => credentials, fetch: async () => json({ uid: 123 }), getAccountScope: () => 'bad' });
+  await rejects((await bad.openSession()).getAccountScope(), 'invalid_credentials');
+});
+
+test('current user identity is read from the fixed Tracker endpoint and must be safe', async () => {
+  const { client, calls } = harness([json({ uid: 123, display: 'Private', email: 'hidden@example.invalid' })]);
+  const account = await client.openSession();
+  assert.deepEqual(await account.getMyself(), { uid: '123' });
+  assert.equal(calls[0].url, 'https://api.tracker.yandex.net/v3/myself');
+  for (const uid of [null, '123', 0, -1, 1.5]) {
+    const c = harness([json({ uid })]).client;
+    await rejects((await c.openSession()).getMyself(), 'invalid_response');
+  }
+  for (const raw of ['{"uid":1.0000000000000001}', '{"uid":9e2}', '{"uid":9007199254740990.9}']) {
+    const c = harness([new Response(raw)]).client;
+    await rejects((await c.openSession()).getMyself(), 'invalid_response');
+  }
+  const c = harness([new Response('{"uid":90071992547409931234}')]).client;
+  assert.deepEqual(await (await c.openSession()).getMyself(), { uid: '90071992547409931234' });
+});
+
 test('pagination uses only last numeric board id and ignores attacker links', async () => {
   const first = Array.from({ length: 100 }, (_, i) => makeBoard(i + 1));
   const { client, calls } = harness([json(first), json([makeBoard(101)])]);
@@ -59,7 +87,7 @@ test('explicit keys use closed search, verify exact membership and track uncerta
   assert.equal(result.issuesComplete, false); assert.equal(result.issuesReason, 'explicit_keys_only');
   const search = calls[2]; const url = new URL(search.url);
   assert.equal(url.origin, 'https://api.tracker.yandex.net'); assert.equal(url.pathname, '/v3/issues/_search');
-  assert.equal(url.searchParams.get('fields'), 'key,summary,status,boards,assignee');
+  assert.equal(url.searchParams.get('fields'), 'id,key,summary,status,boards,assignee');
   assert.deepEqual(JSON.parse(search.init.body), { keys: ['TEST-1', 'TEST-2', 'TEST-3', 'TEST-4'] });
   assert.equal(search.init.method, 'POST'); assert.equal(search.init.redirect, 'error');
   assert.doesNotMatch(JSON.stringify(result), /synthetic-token|synthetic-org|evil\.invalid/);
@@ -85,7 +113,7 @@ test('assignee projection distinguishes unknown, unassigned and stable identitie
   ]);
   assert.ok(projected.slice(4).every(value => !value.assigneeKnown && value.assignee === null));
   assert.doesNotMatch(JSON.stringify(result), /private@example\.invalid|evil\.invalid/);
-  assert.equal(new URL(calls[2].url).searchParams.get('fields'), 'key,summary,status,boards,assignee');
+  assert.equal(new URL(calls[2].url).searchParams.get('fields'), 'id,key,summary,status,boards,assignee');
 });
 
 test('all input paths and key search are closed to injection', async () => {
@@ -171,7 +199,7 @@ test('opt-in board search is closed, approximate and verifies each membership', 
   ])]);
   const result = await client.getBoardOverview(42, { searchByBoard: true });
   assert.deepEqual(result.issues.map(i => i.key), ['TEST-1']);
-  assert.deepEqual(result.uncertainKeys, ['TEST-3']);
+  assert.deepEqual(result.uncertainKeys, [], 'board search never discloses unverified issue keys');
   assert.equal(result.issuesComplete, false); assert.equal(result.issuesReason, 'membership_mismatch');
   assert.deepEqual(JSON.parse(calls[2].init.body), { filter: { boards: 42 } });
   assert.equal(calls[2].init.method, 'POST'); assert.equal(calls[2].init.redirect, 'error');
@@ -288,7 +316,7 @@ test('issue and transitions use fixed paths and minimal bounded projections', as
   assert.deepEqual(await session.getIssue('TEST-1'), { key: 'TEST-1', summary: 'Synthetic issue', description: 'First line\n\tSecond line',
     status: { id: '1', key: 'open', display: 'Open' }, assigneeKnown: true, assignee: { id: 'u', display: 'User' }, boards: [{ id: '42' }, { id: '2' }], version: 7 });
   assert.deepEqual(await session.listTransitions('TEST-1'), [{ id: 'approve_1', display: 'Approve', to: { id: '2', key: 'done', display: 'Done' } }]);
-  assert.equal(calls[0].url, 'https://api.tracker.yandex.net/v3/issues/TEST-1?fields=key%2Csummary%2Cdescription%2Cstatus%2Cassignee%2Cboards%2Cversion');
+  assert.equal(calls[0].url, 'https://api.tracker.yandex.net/v3/issues/TEST-1?fields=id%2Ckey%2Csummary%2Cdescription%2Cstatus%2Cassignee%2Cboards%2Cversion');
   assert.equal(calls[1].url, 'https://api.tracker.yandex.net/v3/issues/TEST-1/transitions');
   for (const { init } of calls) { assert.equal(init.method, 'GET'); assert.equal(init.redirect, 'error'); assert.equal(init.body, undefined); }
 });
@@ -410,6 +438,118 @@ test('write stream failure and hanging body are outcome unknown with no retry', 
   const pending = session.addComment('TEST-1', 'text'); const checked = rejects(pending, 'outcome_unknown');
   await new Promise(resolve => setImmediate(resolve)); t.mock.timers.tick(10_000);
   await checked; assert.equal(calls.length, 2);
+});
+
+test('comments return only bounded allowlisted fields and never claim completeness', async () => {
+  const raw = { id: 42, text: '', version: 0, createdBy: { id: 'u1', display: 'User', self: 'https://evil.invalid' },
+    createdAt: '2020-11-03T13:24:52.575+0000', self: 'https://evil.invalid', private: 'secret' };
+  const { client, calls } = harness([json([raw])]);
+  const result = await (await client.openSession()).getComments('TEST-1');
+  assert.deepEqual(result, { comments: [{ id: '42', text: '', version: 0, createdBy: { id: 'u1', display: 'User' }, createdAt: raw.createdAt }], complete: false });
+  assert.equal(calls[0].url, 'https://api.tracker.yandex.net/v3/issues/TEST-1/comments?perPage=100');
+  assert.equal(calls[0].init.method, 'GET'); assert.equal(calls[0].init.redirect, 'error');
+  assert.doesNotMatch(JSON.stringify(result), /evil\.invalid|secret/);
+  const full = { ...raw, text: 'x'.repeat(48 * 1024) };
+  assert.equal((await (await harness([json([full])]).client.openSession()).getComments('TEST-1')).comments[0].text.length, 48 * 1024);
+  for (const patch of [{ id: 9007199254740992 }, { id: '../bad' }, { text: 'x'.repeat(48 * 1024 + 1) },
+    { text: '\u0000' }, { version: -1 }, { version: '0' }, { createdBy: {} }, { createdAt: 'https://evil.invalid' }]) {
+    await rejects((await harness([json([{ ...raw, ...patch }])]).client.openSession()).getComments('TEST-1'), 'invalid_response');
+  }
+  for (const rows of [[raw, raw], Array(101).fill(raw), {}]) {
+    await rejects((await harness([json(rows)]).client.openSession()).getComments('TEST-1'), 'invalid_response');
+  }
+  const h = harness([]); const session = await h.client.openSession();
+  await rejects(session.getComments('TEST-1?url=https://evil.invalid'), 'invalid_input');
+  await rejects(session.getComments('TEST-1', { signal: {} }), 'invalid_input');
+  assert.equal(h.calls.length, 0);
+});
+
+test('issue PATCH is optimistic, exact, bounded and projects only safe receipt', async () => {
+  const { client, calls } = harness([json({ key: 'TEST-1', version: 8, self: 'https://evil.invalid', secret: 'private' }), json({ key: 'TEST-1', version: 9 })]);
+  const session = await client.openSession();
+  assert.deepEqual(await session.updateIssue('TEST-1', { expectedVersion: 7, summary: 'Hello', description: '', assignee: null }), { version: 8 });
+  assert.deepEqual(await session.updateIssue('TEST-1', { expectedVersion: 8, assignee: 'u1' }), { version: 9 });
+  assert.equal(calls[0].url, 'https://api.tracker.yandex.net/v3/issues/TEST-1?version=7');
+  assert.deepEqual(JSON.parse(calls[0].init.body), { summary: 'Hello', description: '', assignee: null });
+  assert.deepEqual(JSON.parse(calls[1].init.body), { assignee: 'u1' });
+  for (const { init } of calls) { assert.equal(init.method, 'PATCH'); assert.equal(init.redirect, 'error'); }
+});
+
+test('issue PATCH rejects unsafe input, status and oversized encoded body before sending', async () => {
+  const { client, calls } = harness([]); const session = await client.openSession();
+  for (const changes of [null, {}, { expectedVersion: -1, summary: 'x' }, { expectedVersion: '1', summary: 'x' },
+    { expectedVersion: 1 }, { expectedVersion: 1, status: 'done' }, { expectedVersion: 1, summary: '' },
+    { expectedVersion: 1, description: null }, { expectedVersion: 1, assignee: {} }, { expectedVersion: 1, assignee: '' },
+    { expectedVersion: 1, description: 'x'.repeat(48 * 1024 + 1) }, { expectedVersion: 1, description: '😀'.repeat(24576) }]) {
+    await rejects(session.updateIssue('TEST-1', changes), 'invalid_input');
+  }
+  await rejects(session.updateIssue('TEST-1/../../evil', { expectedVersion: 1, summary: 'x' }), 'invalid_input');
+  await rejects(session.updateIssue('TEST-1', { expectedVersion: 1, summary: 'x' }, { signal: {} }), 'invalid_input');
+  assert.equal(calls.length, 0);
+});
+
+test('issue PATCH explicit rejections, ambiguous responses, cancellation and timeout never retry', async t => {
+  for (const [status, code] of [[409, 'conflict'], [412, 'precondition_failed'], [422, 'unprocessable'], [500, 'outcome_unknown']]) {
+    const h = harness([new Response('secret', { status })]);
+    await rejects((await h.client.openSession()).updateIssue('TEST-1', { expectedVersion: 1, summary: 'x' }), code);
+    assert.equal(h.calls.length, 1);
+  }
+  for (const data of [{ key: 'OTHER-1', version: 2 }, { key: 'TEST-1', version: '2' }, { key: 'TEST-1', version: -1 }]) {
+    const h = harness([json(data)]);
+    await rejects((await h.client.openSession()).updateIssue('TEST-1', { expectedVersion: 1, summary: 'x' }), 'outcome_unknown');
+    assert.equal(h.calls.length, 1);
+  }
+  const h = harness([() => new Promise(() => {}), () => new Promise(() => {})]); const session = await h.client.openSession();
+  const ac = new AbortController(); ac.abort();
+  await rejects(session.updateIssue('TEST-1', { expectedVersion: 1, summary: 'x' }, { signal: ac.signal }), 'cancelled');
+  assert.equal(h.calls.length, 0);
+  const active = new AbortController(); const pending = session.updateIssue('TEST-1', { expectedVersion: 1, summary: 'x' }, { signal: active.signal });
+  active.abort(); await rejects(pending, 'outcome_unknown'); assert.equal(h.calls.length, 1);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const timed = session.updateIssue('TEST-1', { expectedVersion: 1, summary: 'x' }); const checked = rejects(timed, 'outcome_unknown');
+  t.mock.timers.tick(10_000); await checked; assert.equal(h.calls.length, 2);
+});
+
+test('comment lookup and PATCH use fixed documented routes and minimal receipts', async () => {
+  const h = harness([json({ id: 42, version: 3, text: 'secret' }), json({ id: 42, version: 4, text: 'secret', self: 'https://evil.invalid' })]);
+  const s = await h.client.openSession();
+  assert.deepEqual(await s.getComment('TEST-1', '42'), { id: '42', version: 3 });
+  assert.deepEqual(await s.editComment('TEST-1', { id: '42', text: 'New\ntext' }), { id: '42', version: 4 });
+  assert.deepEqual(h.calls.map(c => [c.url, c.init.method]), [
+    ['https://api.tracker.yandex.net/v3/issues/TEST-1/comments/42', 'GET'],
+    ['https://api.tracker.yandex.net/v3/issues/TEST-1/comments/42', 'PATCH'],
+  ]);
+  assert.deepEqual(JSON.parse(h.calls[1].init.body), { text: 'New\ntext' });
+  assert.equal(h.calls[1].init.redirect, 'error');
+});
+
+test('comment edit rejects injection and unsafe text without remote requests', async () => {
+  const h = harness([]), s = await h.client.openSession();
+  for (const id of ['', '../x', 'x/y', 'x?z', 'x'.repeat(129), 1]) {
+    await rejects(s.getComment('TEST-1', id), 'invalid_input');
+    await rejects(s.editComment('TEST-1', { id, text: 'x' }), 'invalid_input');
+  }
+  for (const text of ['', ' ', 'x'.repeat(48 * 1024 + 1), '😀'.repeat(24576), '\u0000', null])
+    await rejects(s.editComment('TEST-1', { id: '1', text }), 'invalid_input');
+  await rejects(s.editComment('TEST-1/evil', { id: '1', text: 'x' }), 'invalid_input');
+  await rejects(s.editComment('TEST-1', { id: '1', text: 'x', version: 3 }), 'invalid_input');
+  assert.equal(h.calls.length, 0);
+});
+
+test('comment edit unknown responses and cancellation are never retried', async () => {
+  for (const response of [new Response('', { status: 500 }), new Response('bad'), json({ id: 'wrong', version: 1 }), json({ id: '1' }), json({ id: '1', version: -1 }), json({ id: '1', version: 2 }, 201)]) {
+    const h = harness([response]);
+    await rejects((await h.client.openSession()).editComment('TEST-1', { id: '1', text: 'x' }), 'outcome_unknown');
+    assert.equal(h.calls.length, 1);
+  }
+  for (const value of [{ id: '2', version: 1 }, { id: '1', version: '1' }]) {
+    const h = harness([json(value)]);
+    await rejects((await h.client.openSession()).getComment('TEST-1', '1'), 'invalid_response');
+    assert.equal(h.calls.length, 1);
+  }
+  const h = harness([() => new Promise(() => {})]), s = await h.client.openSession(), ac = new AbortController();
+  const pending = s.editComment('TEST-1', { id: '1', text: 'x' }, { signal: ac.signal });
+  ac.abort(); await rejects(pending, 'outcome_unknown'); assert.equal(h.calls.length, 1);
 });
 
 test('response arriving after abort still has its body cancelled', async () => {

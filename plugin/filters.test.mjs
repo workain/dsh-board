@@ -185,7 +185,7 @@ test('partial Tracker board filters known identities, explicit unassigned and un
       [unassigned, ['No assignee']], [unknown, ['Malformed assignee', 'Missing assignee']],
     ]) {
       filter(h, 'assignee', value);
-      const actual = Array.from(h.nodes('h3'), node => h.text(node)).sort();
+      const actual = Array.from(h.nodes('button').filter(node => node.props['aria-label']?.startsWith('issueDetails: ')), node => h.text(node)).sort();
       assert.deepEqual(actual, expected, `Tracker filter ${value}`);
       assert.ok(h.nodes('p').some(node => h.text(node).includes('trackerPartial')), 'filter does not hide partial warning');
     }

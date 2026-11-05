@@ -1,11 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, lstatSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
+import { syncBuiltinESMExports } from 'node:module';
+import https from 'node:https';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { apply, boardDatabasePath, inject, trackerPlugin } from './index.js';
 import { openTrackerSettings } from './tracker-settings.mjs';
+import { openAccountNamespace } from './tracker-account.mjs';
 import { createBoardService, MAX_BODY_BYTES, MAX_PENDING, MAX_SNAPSHOT_BYTES } from './service.mjs';
 import { openBoardStore, StoreError } from './sqlite-store.mjs';
 import * as core from './core.mjs';
@@ -177,15 +183,20 @@ test('Tracker routes bootstrap lazily per launcher profile and fail soft', async
     'tracker_list_boards', 'tracker_list_issues', 'tracker_get_issue', 'tracker_list_transitions', 'tracker_add_comment', 'tracker_transition_issue',
   ]);
   const db = path.join(storage, 'tracker-web.sqlite');
-  assert.equal(existsSync(db), false);
+  const key = path.join(storage, 'tracker-account-web.key'), links = path.join(storage, 'tracker-links-web.sqlite');
+  assert.equal(existsSync(db), false); assert.equal(existsSync(key), false); assert.equal(existsSync(links), false);
   const [one, two] = await Promise.all([trackerGet(web), trackerGet(web)]);
   assert.deepEqual(await one.json(), { revision: 0, configured: false, orgType: null, workspaces: {}, needsReselect: [] });
   assert.equal(two.status, 200); assert.equal(calls, 0); assert.equal(existsSync(db), true);
+  for (const file of [db, key, links]) assert.equal(lstatSync(file).mode & 0o7777, 0o600);
+  assert.equal(lstatSync(key).size, 64);
   const configured = await trackerPost(web, { op: 'configuration.configure', expectedRevision: 0, orgType: 'cloud' });
   assert.equal(configured.status, 200); assert.equal(calls, 0);
   const other = trackerContext(dir, { name: 'other' });
   assert.equal((await (await trackerGet(other)).json()).configured, false);
   assert.equal(existsSync(path.join(storage, 'tracker-other.sqlite')), true);
+  assert.equal(existsSync(path.join(storage, 'tracker-account-other.key')), true);
+  assert.equal(existsSync(path.join(storage, 'tracker-links-other.sqlite')), true);
   await dispose(web); await dispose(other);
   assert.equal(web.tools.length, 0);
   assert.equal((await trackerGet(web)).status, 503);
@@ -197,6 +208,90 @@ test('Tracker routes bootstrap lazily per launcher profile and fail soft', async
   const missing = trackerContext(dir, { home: path.join(dir, 'missing') });
   assert.equal((await trackerGet(missing)).status, 503);
   assert.equal(existsSync(path.join(dir, 'missing')), false); await dispose(missing);
+});
+
+test('Tracker bootstrap fails closed for missing key or invalid links database and closes partial resources', async t => {
+  const { dir } = fixture(t), storage = trackerDirectory(dir);
+  mkdirSync(storage, { recursive: true, mode: 0o700 });
+  const links = path.join(storage, 'tracker-links-web.sqlite'), key = path.join(storage, 'tracker-account-web.key');
+  // A pre-existing dependent database must never cause creation of a replacement key.
+  writeFileSync(links, '', { mode: 0o600 });
+  const f = trackerContext(dir);
+  let response = await trackerGet(f);
+  assert.equal(response.status, 503); assert.equal(existsSync(key), false);
+  const db = path.join(storage, 'tracker-web.sqlite');
+  // A closed settings handle must not leave SQLite locks after failed bootstrap.
+  let probe = new DatabaseSync(db, { timeout: 0 });
+  probe.exec('BEGIN EXCLUSIVE; ROLLBACK'); probe.close();
+  rmSync(links);
+  // Provision a valid namespace before introducing an invalid dependent DB.
+  openAccountNamespace({ directory: storage, profileId: 'web' }).close();
+  // Now namespace opens, but a malformed existing links DB still fails closed.
+  mkdirSync(links, { mode: 0o700 });
+  response = await trackerGet(f);
+  assert.equal(response.status, 503); assert.equal(lstatSync(key).size, 64);
+  probe = new DatabaseSync(db, { timeout: 0 });
+  probe.exec('BEGIN EXCLUSIVE; ROLLBACK'); probe.close();
+  rmSync(links, { recursive: true });
+  response = await trackerGet(f);
+  assert.equal(response.status, 200); assert.equal(existsSync(links), true);
+  await dispose(f);
+  for (const file of [db, links]) {
+    probe = new DatabaseSync(file, { timeout: 0 });
+    probe.exec('BEGIN EXCLUSIVE; ROLLBACK'); probe.close();
+  }
+});
+
+test('Tracker links use the credential-bound principal and persist only opaque scope', async t => {
+  const { dir } = fixture(t), storage = trackerDirectory(dir);
+  mkdirSync(storage, { recursive: true, mode: 0o700 });
+  const token = 'synthetic-private-token', orgId = 'synthetic-tenant', principal = 87654321;
+  const calls = [], oldRequest = https.request;
+  https.request = (options, callback) => {
+    calls.push(options);
+    const req = new EventEmitter(); req.destroy = () => {}; req.end = () => {
+      const url = options.path;
+      let body;
+      if (url.startsWith('/v3/boards/_paginate')) body = [{ id: 1, name: 'Board' }];
+      else if (url === '/v3/myself') body = { uid: principal };
+      else if (url.startsWith('/v3/issues/TEAM-1?')) body = {
+        id: 'issue-123', key: 'TEAM-1', summary: 'Issue', description: '', version: 1,
+        status: { id: '1', key: 'open', display: 'Open' }, assignee: null, boards: [{ id: 1 }],
+      };
+      else throw Error(`unexpected synthetic request ${url}`);
+      queueMicrotask(() => {
+        const res = new PassThrough(); res.statusCode = 200; res.headers = {}; res.complete = true;
+        callback(res); res.end(JSON.stringify(body));
+      });
+    };
+    return req;
+  };
+  syncBuiltinESMExports();
+  t.after(() => { https.request = oldRequest; syncBuiltinESMExports(); });
+  const f = trackerContext(dir, {
+    workspaceRegistry: { get: id => id === 'w' ? { createdAt: 'synthetic-incarnation', sessionIds: ['s'] } : undefined, archivedSessionIds: [] },
+    credentials: { async resolve(ref) { return { value: ref.endsWith('TOKEN') ? token : orgId }; } },
+  });
+  t.after(() => dispose(f));
+  assert.equal((await trackerPost(f, { op: 'configuration.configure', expectedRevision: 0, orgType: 'org' })).status, 200);
+  assert.equal((await trackerPost(f, { op: 'boards.list' })).status, 200);
+  assert.equal((await trackerPost(f, { op: 'workspace.select', workspaceId: 'w', boardIds: ['1'], expectedRevision: 1 })).status, 200);
+  const command = { op: 'links.set', workspaceId: 'w', boardId: '1', issueKey: 'TEAM-1', issueId: 'issue-123', sessionId: 's', linked: true, expectedRevision: 0 };
+  const forged = await trackerPost(f, { ...command, accountScope: '0'.repeat(64) });
+  assert.equal(forged.status, 400);
+  const saved = await trackerPost(f, command); assert.equal(saved.status, 200); assert.deepEqual(await saved.json(), { revision: 1 });
+  // Principal is re-resolved across listing, selection, and before the link commit.
+  assert.equal(calls.filter(call => call.path === '/v3/myself').length, 7);
+  assert.ok(calls.every(call => call.headers.authorization === `OAuth ${token}` && call.headers['x-org-id'] === orgId));
+  await dispose(f);
+  const db = new DatabaseSync(path.join(storage, 'tracker-links-web.sqlite'), { readOnly: true });
+  const rows = db.prepare('SELECT account_scope, issue_id, session_id FROM links').all(); db.close();
+  assert.equal(rows.length, 1); assert.match(rows[0].account_scope, /^[0-9a-f]{64}$/);
+  assert.equal(rows[0].issue_id, 'issue-123'); assert.equal(rows[0].session_id, 's');
+  for (const file of readdirSync(storage)) {
+    const bytes = readFileSync(path.join(storage, file));
+    for (const secret of [token, orgId, String(principal)]) assert.equal(bytes.includes(Buffer.from(secret)), false);
+  }
 });
 
 test('Tracker tools share lazy startup, reject unauthorized callers and stay closed after unload', async t => {
@@ -222,12 +317,31 @@ test('Tracker tools share lazy startup, reject unauthorized callers and stay clo
   assert.equal(calls, 0);
 });
 
-test('Tracker shutdown unregisters tools and routes before draining the service', async t => {
+test('Tracker shutdown aborts a pending read while an unregister remains stuck', async t => {
   const { dir } = fixture(t), storage = trackerDirectory(dir); mkdirSync(storage, { recursive: true, mode: 0o700 });
-  const f = context(); let release, entered, released = false;
+  const f = context(); let release, entered, released = false, started, releaseCredentials;
   const waiting = new Promise(resolve => { release = () => { released = true; resolve(); }; });
   const unregistered = new Promise(resolve => { entered = resolve; });
-  f.ctx.profileContext = { name: 'web', home: dir }; f.ctx.credentials = { resolve() {} };
+  const credentialStarted = new Promise(resolve => { started = resolve; });
+  const stalledCredentials = new Promise(resolve => { releaseCredentials = resolve; });
+  let stall = false, calls = 0;
+  f.ctx.profileContext = { name: 'web', home: dir };
+  f.ctx.credentials = { resolve(ref) {
+    calls++;
+    if (stall) { started(); return stalledCredentials; }
+    return { value: ref.endsWith('TOKEN') ? 'synthetic-token' : 'synthetic-org' };
+  } };
+  const oldRequest = https.request;
+  https.request = (options, callback) => {
+    const req = new EventEmitter(); req.destroy = () => {}; req.end = () => {
+      const body = options.path === '/v3/myself' ? { uid: 12345 } : [{ id: 1, name: 'Board' }];
+      queueMicrotask(() => { const res = new PassThrough(); res.statusCode = 200; res.headers = {}; res.complete = true; callback(res); res.end(JSON.stringify(body)); });
+    };
+    return req;
+  };
+  syncBuiltinESMExports();
+  t.after(() => { https.request = oldRequest; syncBuiltinESMExports(); release(); releaseCredentials({ value: 'synthetic', source: 'fake' }); });
+  f.ctx.workspaceRegistry = { get: id => id === 'w' ? { createdAt: 'test-workspace', sessionIds: ['s'] } : undefined, archivedSessionIds: [] };
   f.ctx.connection.fetch.register = route => {
     f.routes.push(route);
     return () => { if (route.methods[0] === 'POST') { entered(); return waiting; } };
@@ -235,15 +349,24 @@ test('Tracker shutdown unregisters tools and routes before draining the service'
   trackerPlugin.apply(f.ctx);
   const list = f.tools.find(tool => tool.name === 'tracker_list_boards');
   const caller = { agent: { id: 's', session: { id: 's' } }, signal: new AbortController().signal };
-  assert.equal((await trackerGet(f)).status, 200);
+  assert.equal((await trackerPost(f, { op: 'configuration.configure', expectedRevision: 0, orgType: 'org' })).status, 200);
+  assert.equal((await trackerPost(f, { op: 'boards.list' })).status, 200);
+  assert.equal((await trackerPost(f, { op: 'workspace.select', workspaceId: 'w', boardIds: ['1'], expectedRevision: 1 })).status, 200);
+  stall = true;
+  const pending = trackerGet(f); await credentialStarted;
   let finished = false;
   const closing = dispose(f).then(() => { finished = true; });
   await unregistered;
   assert.equal(f.tools.length, 0);
   await assert.rejects(list.execute({ workspaceId: 'w' }, caller), /unavailable/);
   assert.equal((await trackerGet(f)).status, 503);
+  assert.equal((await pending).status, 503);
+  const callsAtShutdown = calls;
+  assert.equal((await trackerPost(f, { op: 'boards.list' })).status, 503);
+  assert.equal(calls, callsAtShutdown);
   assert.equal(finished, false); assert.equal(released, false);
   release(); await closing; assert.equal(finished, true);
+  releaseCredentials({ value: 'synthetic', source: 'fake' });
   await dispose(f);
 });
 
@@ -340,6 +463,17 @@ test('Tracker unload aborts stalled credentials and streams before closing setti
   await new Promise(resolve => setImmediate(resolve));
   const store = openTrackerSettings({ directory: storage, profileId: 'web' });
   assert.equal(store.read().revision, 1); store.close();
+});
+
+test('Tracker unload during lazy initialization rejects work without opening resources', async t => {
+  const { dir } = fixture(t), storage = trackerDirectory(dir);
+  mkdirSync(storage, { recursive: true, mode: 0o700 });
+  const f = trackerContext(dir);
+  const pending = trackerGet(f);
+  await dispose(f);
+  assert.equal((await pending).status, 503);
+  assert.equal((await trackerGet(f)).status, 503);
+  assert.deepEqual(readdirSync(storage), []);
 });
 
 test('Tracker startup failures do not break local board or leak registered routes', async t => {

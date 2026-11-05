@@ -15,7 +15,7 @@ const pkg = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
 if (pkg.name !== 'dsh-board' || pkg.dsh?.bundle?.patch !== './cordis.patch.yml') {
   throw new Error('Unexpected package identity or bundle patch');
 }
-for (const file of ['index.js', 'core.mjs', 'service.mjs', 'sqlite-store.mjs', 'tracker-api.mjs', 'tracker-fetch.mjs', 'tracker-service.mjs', 'tracker-tools.mjs', 'tracker-settings.mjs', 'client.js', 'cordis.patch.yml', 'icon.svg', 'locale/en.json', 'locale/ru.json']) {
+for (const file of ['index.js', 'core.mjs', 'service.mjs', 'sqlite-store.mjs', 'tracker-api.mjs', 'tracker-fetch.mjs', 'tracker-service.mjs', 'tracker-tools.mjs', 'tracker-account.mjs', 'tracker-links.mjs', 'tracker-settings.mjs', 'client.js', 'cordis.patch.yml', 'icon.svg', 'locale/en.json', 'locale/ru.json']) {
   try {
     await access(resolve(root, file));
   } catch (error) {
@@ -27,7 +27,7 @@ for (const locale of ['en', 'ru']) {
   const metadata = JSON.parse(await readFile(resolve(root, `locale/${locale}.json`), 'utf8'));
   if (!metadata.meta?.title || !metadata.meta?.description) throw new Error(`Missing ${locale} metadata`);
 }
-for (const file of ['index.js', 'core.mjs', 'service.mjs', 'sqlite-store.mjs', 'tracker-api.mjs', 'tracker-fetch.mjs', 'tracker-service.mjs', 'tracker-tools.mjs', 'tracker-settings.mjs', 'client.js']) {
+for (const file of ['index.js', 'core.mjs', 'service.mjs', 'sqlite-store.mjs', 'tracker-api.mjs', 'tracker-fetch.mjs', 'tracker-service.mjs', 'tracker-tools.mjs', 'tracker-account.mjs', 'tracker-links.mjs', 'tracker-settings.mjs', 'client.js']) {
   const result = spawnSync(process.execPath, ['--check', resolve(root, file)], { stdio: 'inherit' });
   if (result.error) throw result.error;
   if (result.status !== 0) process.exit(result.status ?? 1);

@@ -76,6 +76,21 @@ test('POST body bounded by UTF-8 bytes and preserves astral Unicode', async () =
   assert.equal(calls.length, 2);
 });
 
+test('PATCH uses the same pinned TLS transport and bounded body', async () => {
+  const { fetch, calls } = fixture();
+  const pending = fetch(URL, { method: 'PATCH', body: JSON.stringify({ summary: 'safe' }), redirect: 'error' });
+  assert.equal(calls[0].options.method, 'PATCH');
+  assert.equal(calls[0].options.hostname, 'api.tracker.yandex.net');
+  assert.equal(calls[0].options.rejectUnauthorized, true);
+  assert.deepEqual(calls[0].req.body, Buffer.from('{"summary":"safe"}'));
+  calls[0].respond(); calls[0].res.end('{}'); await pending;
+  await assert.rejects(fetch(URL, { method: 'PATCH', body: 'é'.repeat(32769) }));
+  await assert.rejects(fetch(URL, { method: 'PATCH', body: '\ud800' }));
+  await assert.rejects(fetch('https://api.tracker.yandex.net.evil.example/', { method: 'PATCH', body: '{}' }));
+  await assert.rejects(fetch(URL, { method: 'DELETE' }));
+  assert.equal(calls.length, 1);
+});
+
 test('rejects untrusted destinations and malformed URLs before requesting', async () => {
   const { fetch, calls } = fixture();
   for (const url of [

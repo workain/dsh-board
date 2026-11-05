@@ -29,10 +29,11 @@ function harness(sessionFixture, initialCommands = []) {
       if (!old || !deps || deps.some((v, n) => !Object.is(v, old.deps[n]))) effects.push(() => { old?.cleanup?.(); hooks[i] = { deps, cleanup: fn() }; });
     },
   };
-  const timers = new Set(), documentEvents = new Map();
+  const timers = new Set(), timeouts = new Set(), documentEvents = new Map();
   const document = { visibilityState: 'visible', addEventListener(type, fn) { documentEvents.set(type, fn); }, removeEventListener(type, fn) { if (documentEvents.get(type) === fn) documentEvents.delete(type); } };
   const window = {
     setInterval(fn) { timers.add(fn); return fn; }, clearInterval(fn) { timers.delete(fn); },
+    setTimeout(fn) { timeouts.add(fn); return fn; }, clearTimeout(fn) { timeouts.delete(fn); },
     __ModuleLoader__: { load(value) { registration = value; } },
     addEventListener(type, fn) { events.set(type, fn); },
     removeEventListener(type, fn) { if (events.get(type) === fn) events.delete(type); },
@@ -95,7 +96,7 @@ function harness(sessionFixture, initialCommands = []) {
     const found = nodes('button').filter(n => n.props.className === 'dsh-board-tile' && n.props['aria-label'] === label);
     assert.equal(found.length, 1, `board tile ${label}`); return found[0];
   }
-  return { requests, events, documentEvents, document, timers, confirms, panels, openedSessions, commands, slotNames, plugin, ctx, generation, panelInfo, ws, disposePlugin, window, nodes, text, button, click, change, mount, unmount, resolve, choose, editDraft, submit, openContext, tile };
+  return { requests, events, documentEvents, document, timers, timeouts, confirms, panels, openedSessions, commands, slotNames, plugin, ctx, generation, panelInfo, ws, disposePlugin, window, nodes, text, button, click, change, mount, unmount, resolve, choose, editDraft, submit, openContext, tile };
 }
 
 async function ready() {
@@ -280,14 +281,263 @@ test('older success revision is not accepted as a commit receipt', async () => {
 });
 
 const trackerSettings = (revision = 0, configured = false, workspaces = {}, needsReselect = []) => ({ revision, configured, orgType: configured ? 'cloud' : null, workspaces, needsReselect });
+const issueFixture = { id: 'issue-1', key: 'A-1', summary: '<script>unsafe</script>', description: 'original', assigneeKnown: true, assignee: { id: 'user-1', display: 'User' }, status: { id: '1', key: 'open', display: 'Open' }, version: 5 };
+const issueComments = { comments: [{ id: 'c1', text: '<img>comment', version: 1, createdBy: { id: 'u', display: 'Author' }, createdAt: '2026-01-01' }], complete: false };
+const issueTransitions = [{ id: 'start', display: 'Start', to: { id: '2', key: 'doing', display: 'Doing' } }];
+const issueLinks = { revision: 1, links: [{ issueKey: 'A-1', issueId: 'issue-1', sessionId: 'session-1' }], incomplete: true };
 const trackerBoard = { board: { id: '1', name: '<img src=x onerror=alert(1)>' }, columns: [
   { id: '10', name: 'Open', statuses: [{ key: 'open' }, { key: 'shared' }] },
   { id: '11', name: 'Doing', statuses: [{ key: 'doing' }, { key: 'shared' }] },
 ], issues: [
-  { key: 'A-1', summary: '<script>unsafe</script>', status: { key: 'open', display: 'Open' } },
+  { id: 'issue-1', key: 'A-1', summary: '<script>unsafe</script>', status: { key: 'open', display: 'Open' } },
   { key: 'A-2', summary: 'Ambiguous', status: { key: 'shared', display: 'Shared' } },
   { key: 'A-3', summary: 'Unknown', status: { key: 'unknown', display: 'Unknown' } },
 ], issuesComplete: false, issuesReason: 'approximate_board_filter' };
+
+async function trackerIssueReady() {
+  const h = harness({ manualTracker: true, ids: ['session-1'], byId: { 'session-1': { title: 'Session' } } });
+  h.mount(); await h.resolve(0, base()); await h.resolve(1, trackerSettings(1, true, { w: ['1'] }));
+  h.tile('tracker #1 — Workspace — tracker').props.onClick(); await h.resolve(2, trackerSettings(1, true, { w: ['1'] })); await h.resolve(3, trackerBoard);
+  h.nodes('button').find(n => n.props['aria-label'] === 'issueDetails: <script>unsafe</script>').props.onClick();
+  assert.deepEqual(h.requests.slice(4).map(r => JSON.parse(r.options.body).op), ['issue.read']);
+  await h.resolve(4, issueFixture); await h.resolve(5, issueComments); await h.resolve(6, issueTransitions); await h.resolve(7, issueLinks); await h.resolve(8, issueFixture);
+  return h;
+}
+
+test('Tracker drawer opens lazily without writes, validates and saves only changed fields', async () => {
+  const h = await trackerIssueReady();
+  assert.equal(h.nodes('aside').filter(n => n.props['aria-label'] === 'issueDetails').length, 1);
+  assert.ok(!h.nodes('script').length); assert.ok(h.nodes('p').some(n => h.text(n) === '<img>comment'));
+  assert.equal(h.nodes('input').find(n => n.props.value === 'user-1').props.value, 'user-1');
+  h.click('issueSaveFields'); assert.equal(h.requests.length, 9, 'opening and unchanged save never write');
+  h.change(h.nodes('input').find(n => n.props.value === issueFixture.summary), '  '); h.click('issueSaveFields');
+  assert.ok(h.nodes('p').some(n => h.text(n) === 'issueInvalid')); assert.equal(h.requests.length, 9);
+  h.change(h.nodes('input').find(n => n.props.value === '  '), 'Updated'); h.click('issueSaveFields');
+  assert.deepEqual(JSON.parse(h.requests[9].options.body), { op: 'issue.update', workspaceId: 'w', boardId: '1', issueKey: 'A-1', issueId: 'issue-1', changes: { expectedVersion: 5, summary: 'Updated' } });
+  assert.equal(h.button('issueSaveFields').props.disabled, true); h.button('issueSaveFields').props.onClick(); assert.equal(h.requests.length, 10);
+  await h.resolve(9, { version: 6 }); assert.equal(h.requests.length, 11, 'successful save triggers fresh reads'); h.unmount();
+});
+
+test('Tracker transition and comment are separate explicit writes and unknown is not retried', async () => {
+  const h = await trackerIssueReady();
+  h.change(h.nodes('select').find(n => n.children.some(c => c?.props?.value === 'start')), 'start');
+  h.window.confirmResult = false; h.click('issueChangeStatus'); assert.equal(h.requests.length, 9);
+  h.window.confirmResult = true; h.click('issueChangeStatus');
+  assert.deepEqual(JSON.parse(h.requests[9].options.body), { op: 'issue.transition', workspaceId: 'w', boardId: '1', issueKey: 'A-1', issueId: 'issue-1', transitionId: 'start', expectedTo: issueTransitions[0].to });
+  await h.resolve(9, { error: { code: 'conflict' } }, 409);
+  assert.ok(h.nodes('p').some(n => h.text(n) === 'issueConflict')); assert.equal(h.button('issueChangeStatus').props.disabled, true);
+  h.click('issueReload'); await h.resolve(10, issueFixture); await h.resolve(11, issueComments); await h.resolve(12, issueTransitions); await h.resolve(13, issueLinks); await h.resolve(14, issueFixture);
+  assert.equal(h.button('issueChangeStatus').props.disabled, true, 'reload cannot silently rebase conflicted draft');
+  h.click('issueDiscardConflict'); await h.resolve(15, issueFixture); await h.resolve(16, issueComments); await h.resolve(17, issueTransitions); await h.resolve(18, issueLinks); await h.resolve(19, issueFixture);
+  h.change(h.nodes('textarea')[1], 'new comment'); h.click('issueAddComment');
+  assert.deepEqual(JSON.parse(h.requests[20].options.body), { op: 'issue.comment', workspaceId: 'w', boardId: '1', issueKey: 'A-1', issueId: 'issue-1', text: 'new comment' });
+  h.requests[20].reject(new Error('offline')); await settle(); assert.equal(h.button('issueAddComment').props.disabled, true);
+  assert.equal(h.nodes('textarea')[1].props.value, 'new comment'); assert.ok(h.nodes('p').some(n => h.text(n) === 'issueUnknown')); assert.equal(h.requests.length, 21); h.unmount();
+});
+
+test('Tracker comment edit retains versioned row draft across refresh and saves explicitly', async () => {
+  const h = await trackerIssueReady();
+  h.click('issueEditComment');
+  h.change(h.nodes('textarea').find(n => n.props.value === '<img>comment'), 'private revised comment');
+  assert.equal(h.requests.length, 9);
+  assert.ok(h.nodes('p').some(n => h.text(n) === 'issueCommentRaceWarning'));
+  h.events.get('focus')();
+  assert.ok(!h.nodes('textarea').some(n => n.props.value === 'private revised comment'));
+  await h.resolve(9, trackerSettings(1, true, { w: ['1'] })); await h.resolve(10, trackerBoard); h.nodes('main');
+  await h.resolve(11, issueFixture); await h.resolve(12, { comments: [{ ...issueComments.comments[0], text: 'changed elsewhere', version: 2 }], complete: false }); await h.resolve(13, issueTransitions); await h.resolve(14, issueLinks); await h.resolve(15, issueFixture);
+  assert.ok(h.nodes('textarea').some(n => n.props.value === 'private revised comment'));
+  h.click('issueSaveCommentEdit');
+  assert.deepEqual(JSON.parse(h.requests[16].options.body), { op: 'issue.editComment', workspaceId: 'w', boardId: '1', issueKey: 'A-1', issueId: 'issue-1', commentId: 'c1', expectedVersion: 1, text: 'private revised comment' });
+  h.requests[16].reject(new Error('offline')); await settle();
+  assert.ok(h.nodes('p').some(n => h.text(n) === 'issueUnknown'));
+  assert.equal(h.button('issueSaveCommentEdit').props.disabled, true);
+  assert.ok(h.nodes('textarea').some(n => n.props.value === 'private revised comment'));
+  h.unmount();
+});
+
+test('Tracker comment edit success clears only its own draft', async () => {
+  const h = await trackerIssueReady();
+  h.change(h.nodes('input').find(n => n.props.value === issueFixture.summary), 'unsaved issue field');
+  h.click('issueEditComment'); h.change(h.nodes('textarea').find(n => n.props.value === '<img>comment'), 'updated');
+  h.click('issueSaveCommentEdit'); await h.resolve(9, { id: 'c1', version: 2 });
+  assert.equal(JSON.parse(h.requests[10].options.body).op, 'issue.read');
+  await h.resolve(10, issueFixture); await h.resolve(11, { comments: [{ ...issueComments.comments[0], text: 'updated', version: 2 }], complete: false }); await h.resolve(12, issueTransitions); await h.resolve(13, issueLinks); await h.resolve(14, issueFixture);
+  assert.ok(h.nodes('input').some(n => n.props.value === 'unsaved issue field'));
+  assert.ok(h.nodes('p').some(n => h.text(n) === 'updated'));
+  assert.ok(!h.nodes('button').some(n => h.text(n) === 'issueSaveCommentEdit'));
+  h.unmount();
+});
+
+test('Tracker comment editing requires a valid version and validates receipts', async () => {
+  const h = await trackerIssueReady();
+  h.click('issueReload'); await h.resolve(9, issueFixture); await h.resolve(10, { comments: [{ ...issueComments.comments[0], version: null }], complete: false }); await h.resolve(11, issueTransitions); await h.resolve(12, issueLinks); await h.resolve(13, issueFixture);
+  assert.ok(!h.nodes('button').some(n => h.text(n) === 'issueEditComment'));
+  assert.ok(h.nodes('p').some(n => h.text(n) === 'issueCommentVersionUnavailable'));
+  h.click('issueReload'); await h.resolve(14, issueFixture); await h.resolve(15, issueComments); await h.resolve(16, issueTransitions); await h.resolve(17, issueLinks); await h.resolve(18, issueFixture);
+  h.click('issueEditComment'); h.change(h.nodes('textarea').find(n => n.props.value === '<img>comment'), 'updated'); h.click('issueSaveCommentEdit');
+  await h.resolve(19, { id: 'other', version: 2 });
+  assert.ok(h.nodes('p').some(n => h.text(n) === 'issueUnknown'));
+  assert.equal(h.button('issueSaveCommentEdit').props.disabled, true);
+  h.unmount();
+});
+
+test('comment edit conflict can be discarded and retried from the fresh version', async () => {
+  const h = await trackerIssueReady();
+  h.change(h.nodes('input').find(n => n.props.value === issueFixture.summary), 'other draft');
+  h.click('issueEditComment'); h.change(h.nodes('textarea').find(n => n.props.value === '<img>comment'), 'my edit');
+  h.click('issueSaveCommentEdit'); await h.resolve(9, { error: { code: 'conflict' } }, 409);
+  assert.ok(h.nodes('textarea').some(n => n.props.value === 'my edit'));
+  h.click('issueDiscardCommentConflict');
+  await h.resolve(10, issueFixture); await h.resolve(11, { comments: [{ ...issueComments.comments[0], text: 'new server text', version: 2 }], complete: false }); await h.resolve(12, issueTransitions); await h.resolve(13, issueLinks); await h.resolve(14, issueFixture);
+  assert.ok(h.nodes('input').some(n => n.props.value === 'other draft'));
+  h.click('issueEditComment'); h.change(h.nodes('textarea').find(n => n.props.value === 'new server text'), 'retry'); h.click('issueSaveCommentEdit');
+  assert.equal(JSON.parse(h.requests[15].options.body).expectedVersion, 2); h.unmount();
+});
+
+test('comment draft remains accessible and cancellable when missing from partial results', async () => {
+  const h = await trackerIssueReady(); h.click('issueEditComment');
+  h.change(h.nodes('textarea').find(n => n.props.value === '<img>comment'), 'recoverable text');
+  h.click('issueReload'); await h.resolve(9, issueFixture); await h.resolve(10, { comments: [], complete: false }); await h.resolve(11, issueTransitions); await h.resolve(12, issueLinks); await h.resolve(13, issueFixture);
+  assert.ok(h.nodes('p').some(n => h.text(n) === 'issueEditedCommentMissing'));
+  assert.ok(h.nodes('textarea').some(n => n.props.value === 'recoverable text'));
+  const cancel = h.nodes('button').find(n => n.props['aria-label'] === 'cancel: issueEditComment'); assert.ok(cancel); cancel.props.onClick();
+  assert.ok(!h.nodes('textarea').some(n => n.props.value === 'recoverable text')); h.unmount();
+});
+
+test('Tracker drawer keeps drafts on focus refresh, hides privacy data, and confirms navigation', async () => {
+  const h = await trackerIssueReady(); h.change(h.nodes('input').find(n => n.props.value === issueFixture.summary), 'private draft');
+  h.window.confirmResult = false; h.click('← returnToBoards'); assert.equal(h.confirms.at(-1), 'discardDraft'); assert.ok(h.nodes('input').some(n => n.props.value === 'private draft'));
+  h.events.get('focus')(); assert.ok(!h.nodes('input').some(n => n.props.value === 'private draft'));
+  await h.resolve(9, trackerSettings(1, true, { w: ['1'] })); await h.resolve(10, trackerBoard); h.nodes('main');
+  await h.resolve(11, issueFixture); await h.resolve(12, issueComments); await h.resolve(13, issueTransitions); await h.resolve(14, issueLinks); await h.resolve(15, issueFixture);
+  assert.ok(h.nodes('input').some(n => n.props.value === 'private draft'));
+  h.generation.set(undefined); assert.ok(!h.nodes('input').some(n => n.props.value === 'private draft')); h.unmount();
+});
+
+for (const refresh of ['trackerRefreshBoard', 'trackerConnect']) test(`issue read resumes after overlapping ${refresh}`, async () => {
+  const h = await trackerIssueReady();
+  h.change(h.nodes('input').find(n => n.props.value === issueFixture.summary), 'keep this draft');
+  h.click('issueReload');
+  h.click(refresh);
+  await h.resolve(9, { ...issueFixture, summary: 'stale read' });
+  await h.resolve(10, trackerSettings(1, true, { w: ['1'] })); await h.resolve(11, trackerBoard);
+  h.nodes('main');
+  assert.equal(JSON.parse(h.requests[12].options.body).op, 'issue.read');
+  await h.resolve(12, issueFixture); await h.resolve(13, issueComments); await h.resolve(14, issueTransitions); await h.resolve(15, issueLinks); await h.resolve(16, issueFixture);
+  assert.ok(h.nodes('input').some(n => n.props.value === 'keep this draft'));
+  assert.ok(!h.nodes('input').some(n => n.props.value === 'stale read'));
+  assert.ok(h.nodes('button').some(n => h.text(n) === 'issueReload' && !n.props.disabled));
+  h.unmount();
+});
+
+test('Tracker settings revision change discards draft even without needsReselect', async () => {
+  const h = await trackerIssueReady(); h.change(h.nodes('input').find(n => n.props.value === issueFixture.summary), 'cross-tab secret');
+  h.events.get('focus')(); await h.resolve(9, trackerSettings(2, true, { w: ['1'] })); await h.resolve(10, trackerBoard);
+  assert.equal(h.nodes('aside').length, 0); assert.ok(!h.nodes('input').some(n => n.props.value === 'cross-tab secret')); h.unmount();
+});
+
+for (const op of ['issue.read', 'issue.update', 'board.read']) test(`${op} needs_reselect discards private data and revalidates settings`, async () => {
+  const h = await trackerIssueReady(); h.change(h.nodes('input').find(n => n.props.value === issueFixture.summary), 'discard this secret');
+  if (op === 'issue.read') h.click('issueReload');
+  else if (op === 'issue.update') h.click('issueSaveFields');
+  else { h.click('trackerRefreshBoard'); await h.resolve(9, trackerSettings(1, true, { w: ['1'] })); }
+  const index = op === 'board.read' ? 10 : 9;
+  assert.equal(JSON.parse(h.requests[index].options.body).op, op);
+  await h.resolve(index, { error: { code: 'needs_reselect' } }, 409);
+  assert.equal(h.nodes('aside').length, 0); assert.ok(!h.text(h.nodes('main')[0]).includes('<script>unsafe</script>'));
+  assert.ok(!h.nodes('input').some(n => n.props.value === 'discard this secret'));
+  await h.resolve(index + 1, trackerSettings(2, true, { w: ['1'] }, ['w']));
+  assert.equal(h.nodes('aside').length, 0); assert.ok(!h.text(h.nodes('main')[0]).includes('<script>unsafe</script>'));
+  if (op === 'issue.update') {
+    h.click('trackerConnect'); await h.resolve(index + 2, trackerSettings(2, true, { w: ['1'] }, ['w']));
+    h.click('trackerList'); await h.resolve(index + 3, { boards: [{ id: '1', name: 'Board' }], complete: true });
+    h.click('trackerSelect'); await h.resolve(index + 4, { revision: 3, workspaceId: 'w', boardIds: ['1'] }); await h.resolve(index + 5, trackerSettings(3, true, { w: ['1'] }));
+    h.click('trackerClose'); h.click('trackerRefreshBoard'); await h.resolve(index + 6, trackerSettings(3, true, { w: ['1'] })); await h.resolve(index + 7, trackerBoard);
+    h.nodes('button').find(n => n.props['aria-label'] === 'issueDetails: <script>unsafe</script>').props.onClick();
+    await h.resolve(index + 8, issueFixture); await h.resolve(index + 9, issueComments); await h.resolve(index + 10, issueTransitions); await h.resolve(index + 11, issueLinks); await h.resolve(index + 12, issueFixture);
+    assert.ok(h.nodes('p').some(n => h.text(n) === 'issueUnknown')); assert.equal(h.button('issueSaveFields').props.disabled, true);
+  }
+  h.unmount();
+});
+
+test('Tracker reselect discards old principal draft and fences old reads', async () => {
+  const h = await trackerIssueReady();
+  h.change(h.nodes('input').find(n => n.props.value === issueFixture.summary), 'old principal private draft');
+  h.click('issueReload'); // This old-principal response arrives only after reselect.
+  assert.equal(JSON.parse(h.requests[9].options.body).op, 'issue.read');
+  h.events.get('focus')();
+  await h.resolve(10, trackerSettings(2, true, { w: ['1'] }, ['w']));
+  assert.equal(h.nodes('aside').length, 0);
+  assert.ok(!h.nodes('input').some(n => n.props.value === 'old principal private draft'));
+  h.click('trackerConnect'); await h.resolve(11, trackerSettings(2, true, { w: ['1'] }, ['w']));
+  h.click('trackerList'); await h.resolve(12, { boards: [{ id: '1', name: 'New board' }], complete: true });
+  h.click('trackerSelect'); await h.resolve(13, { revision: 3, workspaceId: 'w', boardIds: ['1'] });
+  await h.resolve(14, trackerSettings(3, true, { w: ['1'] }));
+  h.click('trackerClose'); h.click('trackerRefreshBoard');
+  await h.resolve(15, trackerSettings(3, true, { w: ['1'] }));
+  const newBoard = { ...trackerBoard, issues: [{ ...trackerBoard.issues[0], summary: 'new principal title' }] };
+  await h.resolve(16, newBoard);
+  await h.resolve(9, issueFixture); // Must not revive the old drawer or issue data.
+  assert.equal(h.nodes('aside').length, 0);
+  assert.ok(!h.text(h.nodes('main')[0]).includes('<script>unsafe</script>'));
+  h.nodes('button').find(n => n.props['aria-label'] === 'issueDetails: new principal title').props.onClick();
+  const fresh = { ...issueFixture, summary: 'new principal title', description: 'new account description' };
+  await h.resolve(17, fresh); await h.resolve(18, { comments: [], complete: false }); await h.resolve(19, issueTransitions); await h.resolve(20, issueLinks); await h.resolve(21, fresh);
+  assert.ok(!h.nodes('input').some(n => n.props.value === 'old principal private draft'));
+  assert.ok(!h.text(h.nodes('main')[0]).includes('<img>comment'));
+  h.click('issueSaveFields'); assert.equal(h.requests.length, 22, 'discarded draft cannot be saved');
+  h.unmount();
+});
+
+test('Tracker reselect retains unknown guard for in-flight issue mutation', async () => {
+  const h = await trackerIssueReady();
+  h.change(h.nodes('textarea')[1], 'old principal pending comment'); h.click('issueAddComment');
+  h.events.get('focus')(); await h.resolve(10, trackerSettings(2, true, { w: ['1'] }, ['w']));
+  assert.equal(h.nodes('aside').length, 0);
+  h.click('trackerConnect'); await h.resolve(11, trackerSettings(2, true, { w: ['1'] }, ['w']));
+  h.click('trackerList'); await h.resolve(12, { boards: [{ id: '1', name: 'New board' }], complete: true });
+  h.click('trackerSelect'); await h.resolve(13, { revision: 3, workspaceId: 'w', boardIds: ['1'] });
+  await h.resolve(14, trackerSettings(3, true, { w: ['1'] }));
+  h.click('trackerClose'); h.click('trackerRefreshBoard'); await h.resolve(15, trackerSettings(3, true, { w: ['1'] })); await h.resolve(16, trackerBoard);
+  await h.resolve(9, { id: 'created' });
+  h.nodes('button').find(n => n.props['aria-label'] === 'issueDetails: <script>unsafe</script>').props.onClick();
+  await h.resolve(17, issueFixture); await h.resolve(18, issueComments); await h.resolve(19, issueTransitions); await h.resolve(20, issueLinks); await h.resolve(21, issueFixture);
+  assert.ok(h.nodes('p').some(n => h.text(n) === 'issueUnknown'));
+  assert.equal(h.button('issueSaveFields').props.disabled, true);
+  assert.equal(h.nodes('textarea')[1].props.value, '');
+  h.unmount();
+});
+
+test('Tracker session links use immutable issue ID and explicit revisioned write', async () => {
+  const h = await trackerIssueReady();
+  const ws = h.ws.getSnapshot(); h.ws.set({ ...ws, items: ws.items.map(item => ({ ...item, sessionIds: ['session-1', 'session-2'] })) });
+  // Select an already-linked session to unlink, and do not mutate on selection.
+  h.change(h.nodes('select').find(n => n.children.some(c => c?.props?.value === 'session-1')), 'session-1');
+  h.change(h.nodes('select').find(n => n.children.some(c => c?.props?.value === 'unlink')), 'unlink');
+  assert.equal(h.requests.length, 9); h.click('issueLinkSave');
+  assert.deepEqual(JSON.parse(h.requests[9].options.body), { op: 'links.set', workspaceId: 'w', boardId: '1', issueKey: 'A-1', issueId: 'issue-1', sessionId: 'session-1', linked: false, expectedRevision: 1 });
+  assert.equal(h.button('issueLinkSave').props.disabled, true); h.unmount();
+});
+
+test('Tracker whales join only matching immutable issue IDs', async () => {
+  const h = harness({ manualTracker: true, ids: ['session-1'] }); h.mount(); await h.resolve(0, base()); await h.resolve(1, trackerSettings(1, true, { w: ['1'] }));
+  h.tile('tracker #1 — Workspace — tracker').props.onClick(); await h.resolve(2, trackerSettings(1, true, { w: ['1'] })); await h.resolve(3, trackerBoard);
+  h.nodes('main'); const run = [...h.timeouts][0]; assert.ok(run); run(); await settle();
+  await h.resolve(4, { revision: 1, incomplete: true, links: [{ issueKey: 'A-1', issueId: 'old-issue', sessionId: 'session-1' }] });
+  assert.ok(!h.nodes('button').some(n => n.props['aria-label'] === 'openSession: <script>unsafe</script>'));
+  assert.ok(h.nodes('button').some(n => n.props['aria-label'] === 'columnSessions: Open — 0'));
+  h.click('trackerRefreshBoard'); await h.resolve(5, trackerSettings(1, true, { w: ['1'] })); await h.resolve(6, trackerBoard); h.nodes('main'); [...h.timeouts][0](); await settle();
+  await h.resolve(7, issueLinks); const whale = h.nodes('button').find(n => n.props['aria-label'] === 'openSession: <script>unsafe</script>'); assert.ok(whale); whale.props.onClick(); assert.deepEqual(h.openedSessions, ['session-1']);
+  h.panelInfo.set({ activePanelId: null }); whale.props.onClick(); assert.deepEqual(h.openedSessions, ['session-1']); h.unmount();
+});
+
+test('Tracker unknown result remains blocked after drawer close and reopen', async () => {
+  const h = await trackerIssueReady(); h.change(h.nodes('textarea')[1], 'uncertain comment'); h.click('issueAddComment');
+  h.requests[9].reject(new Error('offline')); await settle(); h.click('close');
+  h.nodes('button').find(n => n.props['aria-label'] === 'issueDetails: <script>unsafe</script>').props.onClick();
+  await h.resolve(10, issueFixture); await h.resolve(11, issueComments); await h.resolve(12, issueTransitions); await h.resolve(13, issueLinks); await h.resolve(14, issueFixture);
+  assert.ok(h.nodes('p').some(n => h.text(n) === 'issueUnknown')); assert.equal(h.button('issueSaveFields').props.disabled, true); h.unmount();
+});
 
 test('Tracker configuration, explicit workspace selection, and read-only partial board', async () => {
   const h = harness({ manualTracker: true }); h.mount(); await h.resolve(0, base());
@@ -318,7 +568,10 @@ test('Tracker configuration, explicit workspace selection, and read-only partial
   assert.ok(h.nodes('p').some(n => h.text(n).includes('trackerPartial')));
   assert.ok(!h.nodes('button').some(n => ['addTask', 'addStatus', 'linkCurrent'].includes(h.text(n))));
   assert.ok(h.nodes('h2').some(n => h.text(n) === '<img src=x onerror=alert(1)>'));
-  assert.ok(!h.nodes('a').length); assert.ok(!h.nodes('script').length); assert.ok(!h.nodes('img').length);
+  const anchors = h.nodes('a'); assert.equal(anchors.length, 3);
+  for (const a of anchors) { assert.equal(a.props.href, `https://tracker.yandex.ru/${h.text(a)}`); assert.equal(a.props.target, '_blank'); assert.equal(a.props.rel, 'noopener noreferrer'); }
+  const region = h.nodes('div').find(n => n.props.className === 'dsh-board-kanban'); assert.equal(region.props.tabIndex, 0); assert.equal(region.props['aria-label'], 'scrollBoard');
+  assert.ok(!h.nodes('script').length); assert.ok(!h.nodes('img').length);
   assert.ok(h.requests.slice(1).every(r => !JSON.stringify(r.options).includes('orgId') && !JSON.stringify(r.options).includes('token')));
   h.unmount();
 });
@@ -517,4 +770,50 @@ test('workspace change asks before discarding picker selection', async () => {
   h.window.confirmResult = false; h.change(workspace(), 'w2');
   assert.equal(workspace().props.value, 'w'); assert.equal(h.nodes('input').filter(n => n.props.type === 'checkbox')[1].props.checked, true);
   h.window.confirmResult = true; h.change(workspace(), 'w2'); assert.equal(workspace().props.value, 'w2'); h.unmount();
+});
+test('card whale opens only current member links and rechecks live state', async () => {
+  const h = harness({ ids: ['one', 'foreign'], workspaces: [{ workspaceId: 'w', title: 'Workspace', sessionIds: ['one'] }] });
+  const snapshot = base(); snapshot.boards[0].tasks.push({ id: 'no', title: 'No link', statusId: 's' }, { id: 'foreign', title: 'Foreign link', statusId: 's' });
+  snapshot.links = [{ boardId: 'b', taskId: 't', sessionId: 'one' }, { boardId: 'b', taskId: 'foreign', sessionId: 'foreign' }];
+  h.mount(); await h.resolve(0, snapshot); await h.choose();
+  let whales = h.nodes('button').filter(n => n.props.className === 'dsh-board-whale-button' && n.props['aria-label'].startsWith('openSession:'));
+  assert.equal(whales.length, 1); assert.equal(whales[0].props['aria-label'], 'openSession: Existing');
+  const icon = whales[0].children[0]; assert.equal(icon.type, 'img'); assert.equal(icon.props.src, './favicon.svg'); assert.equal(icon.props.alt, '');
+  const open = whales[0].props.onClick; open(); assert.deepEqual(h.openedSessions, ['one']);
+  h.ws.set({ ...h.ws.getSnapshot(), items: [{ workspaceId: 'w', title: 'Workspace', sessionIds: [] }] }); open(); assert.deepEqual(h.openedSessions, ['one']);
+  assert.equal(h.nodes('button').filter(n => n.props['aria-label'] === 'openSession: Existing').length, 0); h.unmount();
+});
+
+test('multiple member sessions expose keyboard menu with full IDs and unavailable states', async () => {
+  const h = harness({ ids: ['one', 'two', 'archived'], archived: ['archived'], byId: { one: { title: 'Same' }, two: { title: 'Same' } }, workspaces: [{ workspaceId: 'w', title: 'Workspace', sessionIds: ['one', 'two', 'archived', 'missing'] }] });
+  const snapshot = base(); snapshot.links = ['one', 'two', 'archived', 'missing'].map(sessionId => ({ boardId: 'b', taskId: 't', sessionId }));
+  h.mount(); await h.resolve(0, snapshot); await h.choose();
+  let trigger = h.nodes('button').find(n => n.props['aria-label'] === 'sessionMenu: Existing');
+  assert.equal(trigger.props['aria-haspopup'], 'menu'); assert.equal(trigger.props['aria-expanded'], false); trigger.props.onClick();
+  trigger = h.nodes('button').find(n => n.props['aria-label'] === 'sessionMenu: Existing'); assert.equal(trigger.props['aria-expanded'], true);
+  const menu = h.nodes('div').find(n => n.props.role === 'menu'); assert.ok(menu); assert.equal(menu.props.id, trigger.props['aria-controls']);
+  const items = h.nodes('button').filter(n => n.props.role === 'menuitem'); assert.equal(items.length, 4);
+  assert.equal(h.text(items[0]), 'Same (one)'); assert.equal(h.text(items[1]), 'Same (two)');
+  assert.equal(h.text(items[2]), 'archived — sessionArchived'); assert.equal(items[2].props['aria-disabled'], true);
+  assert.equal(h.text(items[3]), 'missing — sessionUnavailable'); assert.equal(items[3].props['aria-disabled'], true);
+  items[2].props.onClick(); items[3].props.onClick(); assert.deepEqual(h.openedSessions, []);
+  items[1].props.onClick(); assert.deepEqual(h.openedSessions, ['two']); assert.equal(h.nodes('div').filter(n => n.props.role === 'menu').length, 0); h.unmount();
+});
+
+test('column whale counts distinct member sessions before session filter and intersects other filters', async () => {
+  const h = harness({ ids: ['a', 'b', 'foreign'], workspaces: [{ workspaceId: 'w', title: 'Workspace', sessionIds: ['a', 'b'] }] });
+  const snapshot = base(); snapshot.boards[0].tasks = [{ id: 't', title: 'Needle one', statusId: 's', assignee: 'Alex' }, { id: 't2', title: 'Needle two', statusId: 's', assignee: 'Alex' }, { id: 't3', title: 'Needle none', statusId: 's', assignee: 'Alex' }, { id: 't4', title: 'Other', statusId: 's', assignee: 'Blair' }];
+  snapshot.links = [['t','a'], ['t','b'], ['t','foreign'], ['t2','a'], ['t4','b']].map(([taskId, sessionId]) => ({ boardId: 'b', taskId, sessionId }));
+  h.mount(); await h.resolve(0, snapshot); await h.choose();
+  h.change(h.nodes('input').find(n => n.props['aria-label'] === 'search'), 'Needle');
+  h.change(h.nodes('select').find(n => n.props['aria-label'] === 'assignee'), JSON.stringify(['assignee', 'Alex']));
+  const column = () => h.nodes('button').find(n => n.props['aria-label']?.startsWith('columnSessions:'));
+  assert.equal(column().props['aria-label'], 'columnSessions: Open — 2');
+  h.change(h.nodes('select').find(n => n.props['aria-label'] === 'sessionFilter'), 'unlinked');
+  assert.equal(column().props['aria-label'], 'columnSessions: Open — 2'); column().props.onClick();
+  assert.equal(h.nodes('select').find(n => n.props['aria-label'] === 'sessionFilter').props.value, 'linked');
+  assert.equal(column().props['aria-pressed'], true); assert.equal(h.nodes('button').filter(n => n.props['aria-label']?.startsWith('editTask:')).length, 2);
+  h.click('clearSessionFilter'); assert.equal(h.nodes('select').find(n => n.props['aria-label'] === 'sessionFilter').props.value, 'all');
+  const region = h.nodes('div').find(n => n.props.className === 'dsh-board-kanban'); assert.equal(region.props.tabIndex, 0); assert.equal(region.props.role, 'region');
+  assert.match(h.text(h.nodes('style')[0]), /max-width:100%;min-width:0;overflow-x:auto/); h.unmount();
 });

@@ -28,7 +28,7 @@ export function createTrackerFetch({ requestFn = httpsRequest } = {}) {
       url = new URL(input);
       if (url.protocol !== 'https:' || url.hostname !== HOST || url.port || url.username || url.password || url.hash) throw error();
       method = init.method ?? 'GET';
-      if (method !== 'GET' && method !== 'POST') throw error();
+      if (method !== 'GET' && method !== 'POST' && method !== 'PATCH') throw error();
       if (init.redirect !== undefined && init.redirect !== 'error') throw error();
       signal = init.signal;
       if (signal !== undefined && signal !== null && !(signal instanceof AbortSignal)) throw error();
@@ -41,7 +41,7 @@ export function createTrackerFetch({ requestFn = httpsRequest } = {}) {
       headers.set('accept-encoding', 'identity');
       body = init.body;
       if (body !== undefined && body !== null) {
-        if (method !== 'POST' || typeof body !== 'string' || /[\ud800-\udfff]/u.test(body)) throw error();
+        if ((method !== 'POST' && method !== 'PATCH') || typeof body !== 'string' || /[\ud800-\udfff]/u.test(body)) throw error();
         if (Buffer.byteLength(body, 'utf8') > MAX_BODY_BYTES) throw error();
         body = Buffer.from(body, 'utf8');
       } else body = undefined;
