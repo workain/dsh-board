@@ -440,12 +440,12 @@ test('write stream failure and hanging body are outcome unknown with no retry', 
   await checked; assert.equal(calls.length, 2);
 });
 
-test('comments return only bounded allowlisted fields and short pages complete', async () => {
+test('comments return only bounded allowlisted fields and missing Link is indeterminate', async () => {
   const raw = { id: 42, text: '', version: 0, createdBy: { id: 'u1', display: 'User', self: 'https://evil.invalid' },
     createdAt: '2020-11-03T13:24:52.575+0000', self: 'https://evil.invalid', private: 'secret' };
   const { client, calls } = harness([json([raw])]);
   const result = await (await client.openSession()).getComments('TEST-1');
-  assert.deepEqual(result, { comments: [{ id: '42', text: '', version: 0, createdBy: { id: 'u1', display: 'User' }, createdAt: raw.createdAt }], complete: true, nextCursor: null });
+  assert.deepEqual(result, { comments: [{ id: '42', text: '', version: 0, createdBy: { id: 'u1', display: 'User' }, createdAt: raw.createdAt }], complete: false, nextCursor: null });
   assert.equal(calls[0].url, 'https://api.tracker.yandex.net/v3/issues/TEST-1/comments?perPage=100');
   assert.equal(calls[0].init.method, 'GET'); assert.equal(calls[0].init.redirect, 'error');
   assert.doesNotMatch(JSON.stringify(result), /evil\.invalid|secret/);
@@ -483,6 +483,24 @@ test('comment pagination reconstructs explicit next and permits cursor unlike la
   assert.deepEqual(h.calls.map(c => c.url), [commentsBase, `${commentsBase}&id=5`]);
 });
 
+test('short capped pages continue with only reconstructed safe parameters', async () => {
+  const page = Array.from({ length: 30 }, (_, i) => comment(i + 1));
+  const firstLink = `${commentsBase}&expand=comments&createdAt=2020-11-03T13%3A24%3A52Z`;
+  const nextLink = `${commentsBase}&id=30&order=createdAt&url=https%3A%2F%2Fevil.invalid%2Fprivate&token=synthetic-link-secret`;
+  const h = harness([
+    json(page, 200, { link: `${linkTo(firstLink, 'first')}, ${linkTo(nextLink, 'next')}` }),
+    json([comment(31)], 200, { link: linkTo(firstLink, 'first') }),
+  ]);
+  const s = await h.client.openSession();
+  const first = await s.getComments('TEST-1');
+  assert.equal(first.comments.length, 30); assert.equal(first.complete, false); assert.equal(first.nextCursor, '30');
+  assert.doesNotMatch(JSON.stringify(first), /evil\.invalid|synthetic-link-secret/);
+  const second = await s.getComments('TEST-1', { cursor: first.nextCursor });
+  assert.equal(second.complete, true); assert.equal(second.nextCursor, null);
+  assert.deepEqual(h.calls.map(c => c.url), [commentsBase, `${commentsBase}&id=30`]);
+  for (const { init } of h.calls) { assert.equal(init.redirect, 'error'); assert.equal(init.method, 'GET'); }
+});
+
 test('comment Link may omit perPage without changing reconstructed requests', async () => {
   const base = commentsBase.replace('?perPage=100', '');
   const h = harness([
@@ -497,18 +515,18 @@ test('comment Link may omit perPage without changing reconstructed requests', as
   assert.deepEqual(h.calls.map(c => c.url), [commentsBase, `${commentsBase}&id=2`]);
 });
 
-test('full page without Link has indeterminate completion, first-only Link ends', async () => {
+test('pages of any length without Link are indeterminate; first-only Link ends', async () => {
   const page = Array.from({ length: 100 }, (_, i) => comment(i + 1));
   const h = harness([json(page), json([comment(101)]), json(page, 200, { link: linkTo(commentsBase, 'first') }), json([])]);
   const s = await h.client.openSession();
   const first = await s.getComments('TEST-1');
   assert.equal(first.complete, false); assert.equal(first.nextCursor, null);
   const second = await s.getComments('TEST-1', { cursor: '100' });
-  assert.equal(second.complete, true); assert.equal(second.nextCursor, null);
+  assert.equal(second.complete, false); assert.equal(second.nextCursor, null);
   const explicitEnd = await s.getComments('TEST-1');
   assert.equal(explicitEnd.complete, true); assert.equal(explicitEnd.nextCursor, null);
   const empty = await s.getComments('TEST-1');
-  assert.equal(empty.complete, true); assert.equal(empty.nextCursor, null);
+  assert.equal(empty.complete, false); assert.equal(empty.nextCursor, null);
   assert.deepEqual(h.calls.map(c => c.url), [commentsBase, `${commentsBase}&id=100`, commentsBase, commentsBase]);
 });
 
@@ -534,9 +552,17 @@ test('comment pagination rejects unsafe or ambiguous Link metadata without follo
     '', 'x'.repeat(8193), 'not-a-link', `${linkTo(`${commentsBase}&id=2`, 'next')},`,
     linkTo('https://evil.invalid/v3/issues/TEST-1/comments?perPage=100&id=2', 'next'),
     linkTo('https://api.tracker.yandex.net.evil.invalid/v3/issues/TEST-1/comments?perPage=100&id=2', 'next'),
+    linkTo('https://user:pass@api.tracker.yandex.net/v3/issues/TEST-1/comments?perPage=100&id=2', 'next'),
+    linkTo('https://api.tracker.yandex.net:443/v3/issues/TEST-1/comments?perPage=100&id=2', 'next'),
+    linkTo('http://api.tracker.yandex.net/v3/issues/TEST-1/comments?perPage=100&id=2', 'next'),
     linkTo('https://api.tracker.yandex.net/v3/issues/OTHER-1/comments?perPage=100&id=2', 'next'),
-    linkTo(`${commentsBase}&id=2#fragment`, 'next'), linkTo(`${commentsBase}&id=2&evil=1`, 'next'),
-    linkTo(`${commentsBase}&id=2&id=3`, 'next'), linkTo(`${commentsBase}&id=02`, 'next'),
+    linkTo('https://api.tracker.yandex.net/v3/issues/TEST-1/x/../comments?perPage=100&id=2', 'next'),
+    linkTo(`${commentsBase}&id=2#fragment`, 'next'),
+    linkTo(`${commentsBase}&id=2&id=3`, 'next'), linkTo(`${commentsBase}&id=2&perPage=100`, 'next'),
+    linkTo(`${commentsBase}&id=2&%69d=3`, 'next'), linkTo(`${commentsBase}&id=%32`, 'next'),
+    linkTo(`${commentsBase}&id=2&extra=%0d%0aInjected`, 'next'),
+    linkTo(`${commentsBase}&id=2&extra=%250a`, 'next'), linkTo(`${commentsBase}&id=2&extra=%zz`, 'next'),
+    linkTo(`${commentsBase}&id=02`, 'next'),
     linkTo(`${commentsBase}&id=9007199254740992`, 'next'), linkTo(commentsBase, 'next'),
     linkTo(commentsBase.replace('100', '99') + '&id=2', 'next'),
     `${linkTo(`${commentsBase}&id=2`, 'next')}, ${linkTo(`${commentsBase}&id=3`, 'next')}`,

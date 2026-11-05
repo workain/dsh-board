@@ -1135,7 +1135,7 @@ test('owner comment pagination uses only synthetic Tracker GET requests', async 
   const service = createTrackerService({ settings: f.settings, tracker, workspaceRegistry: f.registry });
   await config(service); await service.command({ op: 'boards.list' }); await select(service);
   assert.deepEqual(await service.command(commentsCommand()), { comments: [testComment('1')], complete: false, nextCursor: '1' });
-  assert.deepEqual(await service.command(commentsCommand({ cursor: '1' })), { comments: [testComment('2')], complete: true, nextCursor: null });
+  assert.deepEqual(await service.command(commentsCommand({ cursor: '1' })), { comments: [testComment('2')], complete: false, nextCursor: null });
   const reads = calls.filter(call => call.url.includes('/comments?'));
   assert.equal(reads.length, 2); assert.equal(new URL(reads[0].url).searchParams.has('id'), false);
   assert.equal(new URL(reads[1].url).searchParams.get('id'), '1');

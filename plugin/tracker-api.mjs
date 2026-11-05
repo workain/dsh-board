@@ -67,28 +67,43 @@ function commentNextCursor(headers, key) {
   if (!headers || typeof headers.get !== 'function') fail('invalid_response');
   const link = headers.get('link');
   if (link === null) return { present: false, next: null };
-  if (typeof link !== 'string' || !link || link.length > 8192) fail('invalid_response');
+  if (typeof link !== 'string' || !link || link.length > 8192 || /[\u0000-\u001f\u007f-\u009f]/u.test(link)) fail('invalid_response');
   const relations = new Set();
   let next = null;
   for (const entry of link.split(',')) {
-    const match = /^\s*<([^<>\s]+)>\s*;\s*rel\s*=\s*(?:"([A-Za-z]+)"|([A-Za-z]+))\s*$/i.exec(entry);
+    const match = /^[ \t]*<([^<>\s]+)>[ \t]*;[ \t]*rel[ \t]*=[ \t]*(?:"([A-Za-z]+)"|([A-Za-z]+))[ \t]*$/i.exec(entry);
     if (!match) fail('invalid_response');
     const relation = (match[2] || match[3]).toLowerCase();
     if (!['first', 'next'].includes(relation) || relations.has(relation)) fail('invalid_response');
     relations.add(relation);
     const prefix = `${ORIGIN}/v3/issues/${encodeURIComponent(key)}/comments`;
-    if (match[1] !== prefix && !match[1].startsWith(`${prefix}?`)) fail('invalid_response');
-    const query = match[1].slice(prefix.length);
-    // Accept omitted perPage (the outgoing request still enforces our fixed page size),
-    // but reject extra parameters and normalization or duplicate ambiguities.
+    const raw = match[1];
+    // The exact raw prefix additionally rejects URL normalization, credentials,
+    // explicit ports (including :443), fragments and path/host encodings.
+    if ((raw !== prefix && !raw.startsWith(`${prefix}?`)) || /[#\\]/.test(raw)) fail('invalid_response');
+    let url;
+    try { url = new URL(raw); } catch { fail('invalid_response'); }
+    if (url.origin !== ORIGIN || url.pathname !== `/v3/issues/${encodeURIComponent(key)}/comments` ||
+        url.username || url.password || url.port || url.hash) fail('invalid_response');
+    // Additional parameters are untrusted and are never copied into a request.
+    // Reject encoded spelling, malformed separators and duplicate cursor fields.
     const parsed = new Map();
-    if (query) {
-      const params = query.slice(1).split('&');
-      if (params.length > 2) fail('invalid_response');
+    if (raw.length > prefix.length) {
+      const params = raw.slice(prefix.length + 1).split('&');
+      if (params.length > 100) fail('invalid_response');
       for (const param of params) {
-        const part = /^(perPage|id)=([0-9]+)$/.exec(param);
-        if (!part || parsed.has(part[1])) fail('invalid_response');
-        parsed.set(part[1], part[2]);
+        const part = /^([A-Za-z0-9_.~-]+)=((?:[A-Za-z0-9_.~!$'()*+;=:@/?-]|%[0-9A-Fa-f]{2})*)$/.exec(param);
+        if (!part) fail('invalid_response');
+        if (part[1] === 'id' || part[1] === 'perPage') {
+          if (parsed.has(part[1]) || part[2].includes('%')) fail('invalid_response');
+          parsed.set(part[1], part[2]);
+        } else {
+          // Unknown values are discarded, not interpreted. Reject encoded controls
+          // and nested escapes rather than tolerating header/query injection.
+          let decoded;
+          try { decoded = decodeURIComponent(part[2]); } catch { fail('invalid_response'); }
+          if (/[\u0000-\u001f\u007f-\u009f%]/u.test(decoded)) fail('invalid_response');
+        }
       }
     }
     if ((parsed.has('perPage') && parsed.get('perPage') !== String(MAX_COMMENTS)) ||
@@ -442,9 +457,9 @@ export function createTrackerClient({ getCredentials, fetch: fetchFn = globalThi
         const link = commentNextCursor(headers, key);
         const nextCursor = link.next;
         if (nextCursor !== null && (!comments.length || (cursor !== undefined && Number(nextCursor) <= Number(cursor)))) fail('invalid_response');
-        // An absent Link on a full page does not establish an ordering from which
-        // a trustworthy next cursor can be derived. Report an indeterminate end.
-        const complete = nextCursor === null && (link.present || comments.length < MAX_COMMENTS);
+        // Tracker may silently cap pages below our requested size, so no Link
+        // cannot prove completion or provide a trustworthy continuation cursor.
+        const complete = link.present && nextCursor === null;
         return { comments, complete, nextCursor };
       },
     });
