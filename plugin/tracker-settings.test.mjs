@@ -39,14 +39,21 @@ test('initial state, CAS, persistence, no caching and profile isolation', t => {
 
 test('separate processes racing the same revision commit only once', async t => {
   const { directory } = fixture(t);
-  const initial = openTrackerSettings(options(directory)); initial.close();
+  const initial = openTrackerSettings(options(directory));
+  const optIn = { ws: { accountScope: 'a'.repeat(64), incarnation: 'created-at-1' } };
+  assert.deepEqual(initial.compareAndSet(0, { connection: null, workspaces: {}, unattendedIssueCreation: optIn }), { ok: true, revision: 1 });
+  initial.close();
   const moduleUrl = new URL('./tracker-settings.mjs', import.meta.url).href;
   const source = `
     import { openTrackerSettings } from ${JSON.stringify(moduleUrl)};
     const s = openTrackerSettings({directory: process.argv[1], profileId:'profile-1'});
     process.send('ready');
     process.on('message', () => {
-      try { process.send(s.compareAndSet(0, {connection:null, workspaces:{ws:[process.argv[2]]}})); }
+      try {
+        const current = s.read();
+        current.settings.workspaces.ws = [process.argv[2]];
+        process.send(s.compareAndSet(1, current.settings));
+      }
       catch (e) { process.send({error:e.code || e.message}); }
       finally { s.close(); process.disconnect(); }
     });`;
@@ -62,9 +69,13 @@ test('separate processes racing the same revision commit only once', async t => 
   }));
   await Promise.all(children.map(child => child.ready));
   children.forEach(child => child.send('go'));
-  assert.deepEqual((await Promise.all(results)).sort((a, b) => Number(a.ok) - Number(b.ok)), [{ ok: false, revision: 1 }, { ok: true, revision: 1 }]);
+  assert.deepEqual((await Promise.all(results)).sort((a, b) => Number(a.ok) - Number(b.ok)), [{ ok: false, revision: 2 }, { ok: true, revision: 2 }]);
   const final = openTrackerSettings(options(directory));
-  assert.equal(final.read().revision, 1); final.close();
+  const result = final.read();
+  assert.equal(result.revision, 2);
+  assert.deepEqual(result.settings.unattendedIssueCreation, optIn);
+  assert.ok(['board-1', 'board-2'].includes(result.settings.workspaces.ws[0]));
+  final.close();
 });
 
 test('strict shape, references only, bounded settings and no partial writes', t => {
@@ -141,4 +152,108 @@ test('rechecks schema on every operation and rejects unsafe sidecars', t => {
   store.close();
   symlinkSync(filename('profile-1'), `${filename('profile-1')}-journal`);
   assert.throws(() => openTrackerSettings(options(directory)), isCode('permissions'));
+});
+
+test('legacy data is read without migration; opt-ins round-trip without schema changes', t => {
+  const { directory, filename } = fixture(t);
+  const legacy = data();
+  let store = openTrackerSettings(options(directory));
+  assert.equal(Object.hasOwn(store.read().settings, 'unattendedIssueCreation'), false);
+  assert.deepEqual(store.compareAndSet(0, legacy), { ok: true, revision: 1 });
+  store.close();
+  let raw = new DatabaseSync(filename('profile-1'));
+  const identity = () => ({
+    app: raw.prepare('PRAGMA application_id').get().application_id,
+    version: raw.prepare('PRAGMA user_version').get().user_version,
+    schema: raw.prepare("SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name").all(),
+  });
+  const beforeIdentity = identity();
+  const beforeRow = raw.prepare('SELECT * FROM settings').get();
+  raw.close();
+  store = openTrackerSettings(options(directory));
+  assert.deepEqual(store.read(), { revision: 1, settings: legacy });
+  store.close();
+  raw = new DatabaseSync(filename('profile-1'));
+  assert.deepEqual(raw.prepare('SELECT * FROM settings').get(), beforeRow);
+  assert.deepEqual(identity(), beforeIdentity);
+  raw.close();
+
+  store = openTrackerSettings(options(directory));
+  const settings = store.read().settings;
+  settings.unattendedIssueCreation = {
+    workspace1: { accountScope: '0123456789abcdef'.repeat(4), incarnation: '2026-01-01T00:00:00.000Z' },
+    another: { accountScope: 'f'.repeat(64), incarnation: 'x'.repeat(256) },
+  };
+  const expected = structuredClone(settings);
+  assert.deepEqual(store.compareAndSet(1, settings), { ok: true, revision: 2 });
+  settings.unattendedIssueCreation.workspace1.incarnation = 'mutated-after-cas';
+  const snapshot = store.read();
+  assert.deepEqual(snapshot, { revision: 2, settings: expected });
+  snapshot.settings.unattendedIssueCreation.workspace1.accountScope = '0'.repeat(64);
+  assert.deepEqual(store.read().settings, expected);
+  const copy = store.read().settings;
+  copy.workspaces.workspace1.push('new-board');
+  assert.deepEqual(store.compareAndSet(2, copy), { ok: true, revision: 3 });
+  store.close();
+  store = openTrackerSettings(options(directory));
+  assert.deepEqual(store.read(), { revision: 3, settings: copy });
+  store.close();
+  raw = new DatabaseSync(filename('profile-1'));
+  assert.deepEqual(identity(), beforeIdentity);
+  raw.close();
+});
+
+test('unattended opt-ins are strict, bounded and corrupt persisted data fails closed', t => {
+  const { directory, filename } = fixture(t);
+  const store = openTrackerSettings(options(directory));
+  const entry = { accountScope: 'a'.repeat(64), incarnation: 'created' };
+  const invalidMaps = [
+    null, [], 'not-a-map', Object.create(null),
+    { '../bad': entry }, { ['x'.repeat(129)]: entry },
+    { ws: null }, { ws: [] }, { ws: Object.create(null) },
+    { ws: { ...entry, extra: true } }, { ws: { accountScope: entry.accountScope } },
+    { ws: { ...entry, accountScope: 'A'.repeat(64) } },
+    { ws: { ...entry, accountScope: 'g'.repeat(64) } },
+    { ws: { ...entry, accountScope: 'a'.repeat(63) } },
+    { ws: { ...entry, accountScope: 'a'.repeat(65) } },
+    { ws: { ...entry, accountScope: 1 } },
+    { ws: { ...entry, incarnation: '' } },
+    { ws: { ...entry, incarnation: 'x'.repeat(257) } },
+    { ws: { ...entry, incarnation: '\ud800' } },
+    ...['\u0000', '\u001f', '\u007f', '\u009f', '\u202a', '\u202e', '\u2066', '\u2069'].map(incarnation => ({ ws: { ...entry, incarnation } })),
+    { ws: { ...entry, incarnation: null } },
+    Object.defineProperty({}, 'ws', { value: entry, enumerable: false }),
+    Object.defineProperty({}, 'ws', { get() { throw new Error('getter invoked'); }, enumerable: true }),
+    { [Symbol('ws')]: entry },
+    { ws: Object.defineProperty({ incarnation: 'created' }, 'accountScope', { get() { throw new Error('getter invoked'); }, enumerable: true }) },
+    { ws: { ...entry, [Symbol('extra')]: true } },
+  ];
+  for (const unattendedIssueCreation of invalidMaps) {
+    assert.throws(() => store.compareAndSet(0, { ...data(), unattendedIssueCreation }), isCode('invalid'));
+  }
+  assert.throws(() => store.compareAndSet(0, Object.defineProperty(data(), 'unattendedIssueCreation', { get() { throw new Error('getter invoked'); }, enumerable: true })), isCode('invalid'));
+  assert.deepEqual(store.read(), { revision: 0, settings: { connection: null, workspaces: {} } });
+  assert.deepEqual(store.compareAndSet(0, { ...data(), unattendedIssueCreation: {} }), { ok: true, revision: 1 });
+  store.close();
+  const raw = new DatabaseSync(filename('profile-1'));
+  raw.prepare('UPDATE settings SET json = ?').run(JSON.stringify({ ...data(), unattendedIssueCreation: { ws: { ...entry, accountScope: 'bad' } } }));
+  raw.close();
+  assert.throws(() => openTrackerSettings(options(directory)), isCode('corrupt'));
+});
+
+test('the mapping counts toward the configured byte limit', t => {
+  const { directory } = fixture(t);
+  const value = { connection: null, workspaces: {}, unattendedIssueCreation: { ws: { accountScope: 'a'.repeat(64), incarnation: 'x'.repeat(128) } } };
+  const size = Buffer.byteLength(JSON.stringify(value));
+  const small = openTrackerSettings({ ...options(directory), maxBytes: size - 1 });
+  assert.throws(() => small.compareAndSet(0, value), isCode('too_large'));
+  assert.deepEqual(small.read(), { revision: 0, settings: { connection: null, workspaces: {} } });
+  small.close();
+  const exact = openTrackerSettings({ ...options(directory), maxBytes: size });
+  assert.deepEqual(exact.compareAndSet(0, value), { ok: true, revision: 1 });
+  exact.close();
+  assert.throws(() => openTrackerSettings({ ...options(directory), maxBytes: size - 1 }), isCode('corrupt'));
+  const reopened = openTrackerSettings({ ...options(directory), maxBytes: size });
+  assert.deepEqual(reopened.read(), { revision: 1, settings: value });
+  reopened.close();
 });

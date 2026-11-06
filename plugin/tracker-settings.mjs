@@ -26,7 +26,7 @@ const revisionOK = value => Number.isSafeInteger(value) && value >= 0;
 const validId = value => typeof value === 'string' && ID.test(value);
 
 function validate(value) {
-  if (!keys(value, ['connection', 'workspaces'])) fail('invalid', 'Invalid settings shape');
+  if (!keys(value, ['connection', 'workspaces']) && !keys(value, ['connection', 'workspaces', 'unattendedIssueCreation'])) fail('invalid', 'Invalid settings shape');
   const connection = value.connection;
   if (connection !== null && (!keys(connection, ['tokenRef', 'orgIdRef', 'orgType']) || connection.tokenRef !== 'TOKEN' || connection.orgIdRef !== 'ORG_ID' || !ORGANIZATION_TYPES.has(connection.orgType))) fail('invalid', 'Invalid connection references or organization type');
   if (!plain(value.workspaces)) fail('invalid', 'Invalid workspace mapping');
@@ -40,6 +40,16 @@ function validate(value) {
       const entry = Object.getOwnPropertyDescriptor(boards, String(i));
       if (!entry || !entry.enumerable || !('value' in entry) || !validId(entry.value) || seen.has(entry.value)) fail('invalid', 'Invalid or duplicate board ID');
       seen.add(entry.value);
+    }
+  }
+  if (Object.hasOwn(value, 'unattendedIssueCreation')) {
+    const mapping = value.unattendedIssueCreation;
+    if (!plain(mapping)) fail('invalid', 'Invalid unattended issue creation mapping');
+    for (const key of Reflect.ownKeys(mapping)) {
+      const descriptor = Object.getOwnPropertyDescriptor(mapping, key);
+      if (!validId(key) || !descriptor.enumerable || !('value' in descriptor)) fail('invalid', 'Invalid unattended issue creation workspace ID');
+      const entry = descriptor.value;
+      if (!keys(entry, ['accountScope', 'incarnation']) || typeof entry.accountScope !== 'string' || !/^[0-9a-f]{64}$/.test(entry.accountScope) || typeof entry.incarnation !== 'string' || entry.incarnation.length === 0 || entry.incarnation.length > 256 || !entry.incarnation.isWellFormed() || /[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(entry.incarnation)) fail('invalid', 'Invalid unattended issue creation opt-in');
     }
   }
 }
@@ -97,10 +107,18 @@ function checkIdentity(db) {
  * read() returns {revision, settings}. compareAndSet(revision, settings) returns
  * {ok: true, revision: next} or {ok: false, revision: current}; it never merges.
  * settings: {connection: null | {tokenRef:'TOKEN', orgIdRef:'ORG_ID',
- * orgType:'org'|'cloud'}, workspaces:{[workspaceId]: boardId[]}}.
+ * orgType:'org'|'cloud'}, workspaces:{[workspaceId]: boardId[]},
+ * unattendedIssueCreation?:{[workspaceId]:{accountScope, incarnation}}}.
+ * A missing unattendedIssueCreation mapping disables it for all workspaces.
+ * accountScope is exactly 64 lowercase hex characters; incarnation is the
+ * workspace createdAt string, nonempty, well-formed, at most 256 UTF-16 code
+ * units and free of C0/C1 control and bidirectional formatting characters.
  * IDs match [A-Za-z0-9][A-Za-z0-9_.:-]{0,127}; board IDs must be unique within
  * each workspace. No credentials are resolved. Workspace and board IDs are
  * syntax-checked only; callers must not put secrets in these identifier fields.
+ * CAS replaces the entire document, including any optional mapping. Legacy data
+ * is not rewritten on read. An older binary will reject data with the mapping;
+ * remove it with a CAS before downgrading if such compatibility is required.
  * close() is idempotent. SQLite uses FULL synchronous rollback journaling, not network filesystems.
  * A racing opener can see an uninitialized file and must retry a schema error.
  * busyTimeoutMs is 0..30000 (default 5000); maxBytes is 1..256 KiB.

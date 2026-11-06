@@ -260,7 +260,7 @@ test('real SQLite: exact routes, direct approval and tool/API race across instan
     const a = context(), b = context(); await apply(a.ctx); await apply(b.ctx);
     assert.deepEqual(inject, ['connection', 'workspaceRegistry', 'tools', 'approval']);
     assert.deepEqual(a.children, [trackerPlugin]);
-    assert.deepEqual(trackerPlugin.inject, ['connection', 'workspaceRegistry', 'profileContext', 'credentials', 'tools', 'approval']);
+    assert.deepEqual(trackerPlugin.inject, ['connection', 'workspaceRegistry', 'profileContext', 'credentials', 'tools', 'approval', 'agents']);
     assert.deepEqual(a.routes.map(r => [r.path, r.methods, r.requestBody]), [
       ['/api/dsh-board', ['GET'], 'buffered'], ['/api/dsh-board.mutate', ['POST'], 'streaming'],
     ]);
@@ -305,7 +305,7 @@ test('Tracker routes bootstrap lazily per launcher profile and fail soft', async
   const key = path.join(storage, 'tracker-account-web.key'), links = path.join(storage, 'tracker-links-web.sqlite');
   assert.equal(existsSync(db), false); assert.equal(existsSync(key), false); assert.equal(existsSync(links), false);
   const [one, two] = await Promise.all([trackerGet(web), trackerGet(web)]);
-  assert.deepEqual(await one.json(), { revision: 0, configured: false, orgType: null, workspaces: {}, needsReselect: [] });
+  assert.deepEqual(await one.json(), { revision: 0, configured: false, orgType: null, workspaces: {}, needsReselect: [], unattendedIssueCreation: {}, unattendedIssueCreationStored: {} });
   assert.equal(two.status, 200); assert.equal(calls, 0); assert.equal(existsSync(db), true);
   for (const file of [db, key, links]) assert.equal(lstatSync(file).mode & 0o7777, 0o600);
   assert.equal(lstatSync(key).size, 64);

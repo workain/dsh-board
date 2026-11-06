@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { registerTrackerTools } from './tracker-tools.mjs';
+import { createTrackerService } from './tracker-service.mjs';
 
 const status = { id: '1', key: 'open', display: 'Open' };
 const to = { id: '2', key: 'done', display: 'Done' };
@@ -23,8 +24,11 @@ function fixture(overrides = {}) {
       async addComment(args) { events.push(['comment', args]); return overrides.addComment ? overrides.addComment(args) : { id: '99', credential: 'SECRET' }; },
       async executeTransition(args) { events.push(['writeTransition', args]); return overrides.executeTransition ? overrides.executeTransition(args) : {}; },
       async updateIssue(args) { events.push(['update', args]); return overrides.updateIssue ? overrides.updateIssue(args) : { version: 2, credential: 'SECRET' }; },
-      async previewCreate(args) { events.push(['previewCreate', args]); return overrides.previewCreate ? overrides.previewCreate(args) : { queue: { id: '7', key: 'ABC', display: 'Queue' } }; },
-      async createIssue(args) { events.push(['create', args]); return overrides.createIssue ? overrides.createIssue(args) : { id: 'issue-2', key: 'ABC-2', version: 1, credential: 'SECRET' }; },
+      ...(overrides.allowUnattendedIssueCreation ? { async allowUnattendedIssueCreation() {
+        events.push('unattendedSetting'); return overrides.allowUnattendedIssueCreation(options);
+      } } : {}),
+      async previewCreate(args) { events.push(['previewCreate', args]); return overrides.previewCreate ? overrides.previewCreate(args, options) : { queue: { id: '7', key: 'ABC', display: 'Queue' } }; },
+      async createIssue(args, trustedOptions) { events.push(['create', args, trustedOptions]); return overrides.createIssue ? overrides.createIssue(args, trustedOptions, options) : { id: 'issue-2', key: 'ABC-2', version: 1, credential: 'SECRET' }; },
       async previewOwnLink(args) { events.push(['previewLink', args]); return overrides.previewOwnLink ? overrides.previewOwnLink(args) : { issueId: 'issue-1', linked: false, revision: 3 }; },
       async setOwnLink(args) { events.push(['setLink', args]); return overrides.setOwnLink ? overrides.setOwnLink(args) : { revision: 4, credential: 'SECRET' }; },
     };
@@ -321,6 +325,156 @@ test('explicit queue is canonical, approved exactly, and repeated at revalidatio
   const altered = fixture({ previewCreate: () => ({ queue: ++n === 1 ? { id: '7', key: 'ABC' } : { id: '8', key: 'ABC' } }) });
   await assert.rejects(altered.call('tracker_create_issue', { ...createArgs, queueKey: 'ABC' }), code('conflict'));
   assert.equal(altered.events.some(e => Array.isArray(e) && e[0] === 'create'), false);
+});
+
+function setRoot(f, context) {
+  context.agent.status = 'running';
+  f.ctx.agents = { get: id => id === context.agent.id ? context.agent : undefined, roots: () => [context.agent], currentInitiator: () => context.agent };
+}
+
+test('opted-in live root creates unattended with pinned revision, explicit mode and no fake approval', async () => {
+  for (const policy of ['ask', 'never']) {
+    const context = exec();
+    const f = fixture({ allowUnattendedIssueCreation: () => ({ enabled: true, revision: 17 }),
+      previewCreate: (_args, options) => { assert.equal(typeof options.assertCaller, 'function'); options.assertCaller(); return { queue: { id: '7', key: 'ABC', display: 'Queue' } }; },
+      createIssue: (input, options, scope) => { scope.assertCaller(); assert.deepEqual(options, { unattendedRevision: 17 }); assert.equal(input.queueKey, 'ABC'); return { id: 'issue-2', key: 'ABC-2', version: 1 }; },
+    });
+    setRoot(f, context); f.ctx.approval.config = { policy }; f.ctx.approval.overrideOf = () => undefined;
+    assert.deepEqual(parsed(await f.call('tracker_create_issue', { ...createArgs, queueKey: 'ABC' }, context)), { id: 'issue-2', key: 'ABC-2', version: 1, mode: 'unattended' });
+    assert.equal(f.events.some(e => Array.isArray(e) && e[0] === 'approval'), false);
+    assert.deepEqual(f.events.filter(e => Array.isArray(e) && e[0] === 'previewCreate').map(e => e[1]), [{ boardId: '1', queueKey: 'ABC' }]);
+    assert.deepEqual(f.events.find(e => Array.isArray(e) && e[0] === 'create')[2], { unattendedRevision: 17 });
+    assert.equal(f.scopes[0].assertCaller, undefined);
+    assert.equal(typeof f.scopes[1].assertCaller, 'function');
+  }
+});
+
+test('disabled, legacy and non-root identities retain ordinary approval policy', async () => {
+  for (const setting of [undefined, { enabled: false, revision: 0 }, { enabled: true, revision: 1 }]) {
+    for (const identity of ['root', 'child', 'nested', 'forged', 'absent']) {
+      if (setting?.enabled && identity === 'root') continue;
+      const context = exec();
+      const overrides = setting ? { allowUnattendedIssueCreation: () => setting } : {};
+      const f = fixture(overrides);
+      if (identity === 'root') setRoot(f, context);
+      if (identity === 'child' || identity === 'nested') f.ctx.agents = { get: () => context.agent, roots: () => [{ id: 'parent' }] };
+      if (identity === 'forged') f.ctx.agents = { get: () => ({ ...context.agent }), roots: () => [context.agent] };
+      f.ctx.approval.config = { policy: 'ask' }; f.ctx.approval.overrideOf = () => undefined;
+      assert.deepEqual(parsed(await f.call('tracker_create_issue', createArgs, context)), { id: 'issue-2', key: 'ABC-2', version: 1 });
+      assert.equal(f.events.filter(e => Array.isArray(e) && e[0] === 'approval').length, 1);
+      assert.equal(f.events.find(e => Array.isArray(e) && e[0] === 'create')[2], undefined);
+      assert.ok(f.scopes.every(scope => scope.assertCaller === undefined));
+      const denied = fixture(overrides);
+      if (identity === 'root') setRoot(denied, context);
+      if (identity === 'child' || identity === 'nested') denied.ctx.agents = { get: () => context.agent, roots: () => [{ id: 'parent' }] };
+      if (identity === 'forged') denied.ctx.agents = { get: () => ({ ...context.agent }), roots: () => [context.agent] };
+      denied.ctx.approval.config = { policy: 'never' }; denied.ctx.approval.overrideOf = () => undefined;
+      await assert.rejects(denied.call('tracker_create_issue', createArgs, context), code('approval_policy_never'));
+      assert.equal(denied.events.some(e => Array.isArray(e) && ['previewCreate', 'approval', 'create'].includes(e[0])), false);
+    }
+  }
+});
+
+test('stale or mismatched initiators cannot obtain unattended authority', async () => {
+  for (const variant of ['idle', 'missing-initiator', 'different-initiator']) {
+    const context = exec(), f = fixture({ allowUnattendedIssueCreation: () => ({ enabled: true, revision: 1 }), approval: () => 'rejected' });
+    setRoot(f, context);
+    if (variant === 'idle') context.agent.status = 'idle';
+    if (variant === 'missing-initiator') delete f.ctx.agents.currentInitiator;
+    if (variant === 'different-initiator') f.ctx.agents.currentInitiator = () => ({ ...context.agent });
+    await assert.rejects(f.call('tracker_create_issue', createArgs, context), code('approval_denied'));
+    assert.equal(f.events.some(e => Array.isArray(e) && e[0] === 'create'), false);
+  }
+});
+
+test('unattended authorization fails closed on malformed settings, changed caller or revoked permission', async () => {
+  for (const setting of [null, {}, { enabled: 1, revision: 1 }, { enabled: true, revision: -1 }, { enabled: true, revision: '1' }]) {
+    const context = exec(); const f = fixture({ allowUnattendedIssueCreation: () => setting }); setRoot(f, context);
+    await assert.rejects(f.call('tracker_create_issue', createArgs, context), code('invalid_response'));
+    assert.equal(f.events.some(e => Array.isArray(e) && ['previewCreate', 'approval', 'create'].includes(e[0])), false);
+  }
+  const context = exec(); let f;
+  f = fixture({ allowUnattendedIssueCreation: () => ({ enabled: true, revision: 3 }),
+    previewCreate: () => { f.ctx.agents.roots = () => []; return { queue: { id: '7', key: 'ABC' } }; } }); setRoot(f, context);
+  await assert.rejects(f.call('tracker_create_issue', createArgs, context), code('forbidden'));
+  assert.equal(f.events.some(e => Array.isArray(e) && ['approval', 'create'].includes(e[0])), false);
+  for (const expected of ['needs_reselect', 'conflict', 'forbidden']) {
+    const revoked = fixture({ allowUnattendedIssueCreation: () => ({ enabled: true, revision: 3 }),
+      createIssue: (_input, _options, scope) => { scope.assertCaller(); throw Object.assign(Error('revoked'), { code: expected }); } });
+    setRoot(revoked, context);
+    await assert.rejects(revoked.call('tracker_create_issue', createArgs, context), code(expected));
+    assert.equal(revoked.events.filter(e => Array.isArray(e) && e[0] === 'create').length, 1);
+    assert.equal(revoked.events.some(e => Array.isArray(e) && e[0] === 'approval'), false);
+  }
+  let after;
+  after = fixture({ allowUnattendedIssueCreation: () => ({ enabled: true, revision: 3 }),
+    createIssue: () => { after.ctx.agents.get = () => undefined; return { id: 'issue-2', key: 'ABC-2', version: 1 }; } });
+  setRoot(after, context);
+  await assert.rejects(after.call('tracker_create_issue', createArgs, context), code('outcome_unknown'));
+  assert.equal(after.events.filter(e => Array.isArray(e) && e[0] === 'create').length, 1);
+  let rejected;
+  rejected = fixture({ allowUnattendedIssueCreation: () => ({ enabled: true, revision: 3 }),
+    createIssue: () => { rejected.ctx.agents.get = () => undefined; throw Object.assign(Error('revoked'), { code: 'forbidden' }); } });
+  setRoot(rejected, context);
+  await assert.rejects(rejected.call('tracker_create_issue', createArgs, context), code('outcome_unknown'));
+  assert.equal(rejected.events.filter(e => Array.isArray(e) && e[0] === 'create').length, 1);
+});
+
+test('real service and tool integrate unattended creation using synthetic Tracker only', async () => {
+  let state = { revision: 0, settings: { connection: null, workspaces: {} } };
+  const settings = { read: () => structuredClone(state), compareAndSet(revision, value) {
+    if (revision !== state.revision) return { ok: false, revision: state.revision };
+    state = { revision: revision + 1, settings: structuredClone(value) }; return { ok: true, revision: state.revision };
+  } };
+  const workspace = { id: 'w', createdAt: 'one', sessionIds: ['session-1'] };
+  const registry = { get: id => id === 'w' ? workspace : undefined, list: () => [workspace], archivedSessionIds: [] };
+  let writes = 0;
+  const tracker = { async openSession() {
+    const capabilities = new WeakSet();
+    return { identity: 'test-account', async listBoards() { return { boards: [{ id: '1', name: 'Board' }], complete: true, reason: null }; },
+      async getBoardOverview() { return {}; },
+      async getBoardCreationQueue() { const queue = Object.freeze({ id: '7', key: 'ABC', display: 'Queue' }); capabilities.add(queue); return queue; },
+      async createIssue({ queue, summary, description }) { assert.ok(capabilities.has(queue)); assert.equal(summary, 'New task'); assert.equal(description, 'Details\nline'); writes++; return { id: 'issue-2', key: 'ABC-2', version: 1 }; } };
+  } };
+  const links = { read() { return { revision: 0, links: [] }; }, mutate() { throw Error('not used'); } };
+  const service = createTrackerService({ settings, tracker, workspaceRegistry: registry, links, resolveAccountScope: async () => 'a'.repeat(64) });
+  await service.command({ op: 'configuration.configure', expectedRevision: 0, orgType: 'org' });
+  await service.command({ op: 'boards.list' });
+  await service.command({ op: 'workspace.select', expectedRevision: 1, workspaceId: 'w', boardIds: ['1'] });
+  await service.command({ op: 'configuration.setUnattendedIssueCreation', expectedRevision: 2, workspaceId: 'w', enabled: true });
+  const f = fixture(), context = exec();
+  f.dispose(); f.registry.clear();
+  registerTrackerTools(f.ctx, { getService: async () => service }); setRoot(f, context);
+  f.ctx.approval.config = { policy: 'never' }; f.ctx.approval.overrideOf = () => undefined;
+  assert.deepEqual(parsed(await f.call('tracker_create_issue', createArgs, context)), { id: 'issue-2', key: 'ABC-2', version: 1, mode: 'unattended' });
+  assert.equal(writes, 1); assert.equal(f.events.some(e => Array.isArray(e) && e[0] === 'approval'), false);
+  await service.command({ op: 'configuration.setUnattendedIssueCreation', expectedRevision: 3, workspaceId: 'w', enabled: false });
+  await assert.rejects(f.call('tracker_create_issue', createArgs, context), code('approval_policy_never'));
+  assert.equal(writes, 1);
+  await service.close();
+});
+
+test('failed optional capability probe preserves normal approval flow without bypass', async () => {
+  for (const failure of ['workspace_ambiguous', 'unavailable', 'forbidden']) {
+    const context = exec();
+    const f = fixture({ allowUnattendedIssueCreation: () => { throw Object.assign(Error('private'), { code: failure }); } });
+    setRoot(f, context);
+    assert.deepEqual(parsed(await f.call('tracker_create_issue', createArgs, context)), { id: 'issue-2', key: 'ABC-2', version: 1 });
+    assert.equal(f.events.filter(e => Array.isArray(e) && e[0] === 'approval').length, 1);
+    assert.equal(f.events.find(e => Array.isArray(e) && e[0] === 'create')[2], undefined);
+  }
+});
+
+test('unattended opt-in cannot alter approval for other Tracker mutations', async () => {
+  for (const [name, args, event] of [['tracker_add_comment', { workspaceId: 'w', issueKey: 'ABC-1', text: 'x' }, 'comment'],
+    ['tracker_transition_issue', { workspaceId: 'w', issueKey: 'ABC-1', transitionId: 'finish' }, 'writeTransition'],
+    ['tracker_update_issue', updateArgs(), 'update'], ['tracker_link_own_session', linkArgs, 'setLink'], ['tracker_unlink_own_session', linkArgs, 'setLink']]) {
+    const context = exec(), f = fixture({ allowUnattendedIssueCreation: () => ({ enabled: true, revision: 1 }), approval: () => 'rejected' });
+    setRoot(f, context);
+    await assert.rejects(f.call(name, args, context), code('approval_denied'));
+    assert.equal(f.events.some(e => Array.isArray(e) && e[0] === event), false);
+    assert.equal(f.events.includes('unattendedSetting'), false);
+  }
 });
 
 test('unavailable default queue and known never policy fail before approval or write', async () => {

@@ -407,7 +407,7 @@ test('owner writes reject stale transitions and never retry unknown outcomes', a
 
 test('configuration and selected board lifecycle uses fixed references and CAS', async () => {
   const f = fixture();
-  assert.deepEqual(await f.service.read(), { revision: 0, configured: false, orgType: null, workspaces: {}, needsReselect: [] });
+  assert.deepEqual(await f.service.read(), { revision: 0, configured: false, orgType: null, workspaces: {}, needsReselect: [], unattendedIssueCreation: {}, unattendedIssueCreationStored: {} });
   await rejected(f.service.command({ op: 'boards.list' }), 'not_configured');
   assert.equal((await config(f.service)).revision, 1);
   assert.deepEqual(f.settings.read().settings.connection, { tokenRef: 'TOKEN', orgIdRef: 'ORG_ID', orgType: 'org' });
@@ -700,6 +700,227 @@ async function prepareLinks() {
   await config(f.service); await f.service.command({ op: 'boards.list' }); await select(f.service);
   return { ...f, links, control };
 }
+const setUnattended = (f, enabled, expectedRevision = f.settings.read().revision, workspaceId = 'ws') =>
+  f.service.command({ op: 'configuration.setUnattendedIssueCreation', workspaceId, expectedRevision, enabled });
+const unattendedInput = { boardId: '1', expectedQueue: { id: '3', key: 'DOC', display: 'Documents' }, summary: 'Synthetic issue' };
+
+test('unattended opt-in is owner-set, scoped, projected, and reset on selection/configuration', async () => {
+  const f = await prepareLinks();
+  assert.deepEqual((await f.service.read()).unattendedIssueCreation, { ws: false });
+  assert.equal((await scopeFor(f).allowUnattendedIssueCreation()).enabled, false);
+  await rejected(setUnattended(f, true, 1), 'conflict');
+  await rejected(f.service.command({ op: 'configuration.setUnattendedIssueCreation', workspaceId: 'ws', expectedRevision: 2, enabled: 'true' }), 'invalid');
+  await setUnattended(f, true);
+  assert.deepEqual(f.settings.read().settings.unattendedIssueCreation, { ws: { accountScope: 'a'.repeat(64), incarnation: 'one' } });
+  const view = await f.service.read();
+  assert.deepEqual(view.unattendedIssueCreation, { ws: true });
+  assert.doesNotMatch(JSON.stringify(view), /aaaaaaaa|identity-A/);
+  assert.deepEqual(await scopeFor(f).allowUnattendedIssueCreation(), { enabled: true, revision: 3 });
+  await f.service.command({ op: 'boards.list' }); await select(f.service, 3, ['2'], 'ws2');
+  assert.deepEqual((await f.service.read()).unattendedIssueCreation, { ws: true, ws2: false });
+  await setUnattended(f, true, 4, 'ws2');
+  await f.service.command({ op: 'boards.list' }); await select(f.service, 5, ['1']);
+  assert.deepEqual((await f.service.read()).unattendedIssueCreation, { ws: false, ws2: true });
+  assert.deepEqual(f.settings.read().settings.unattendedIssueCreation, { ws2: { accountScope: 'a'.repeat(64), incarnation: 'two' } });
+  await setUnattended(f, false, 6, 'ws2');
+  assert.equal(Object.hasOwn(f.settings.read().settings, 'unattendedIssueCreation'), false);
+  await setUnattended(f, true); await config(f.service, 8);
+  assert.equal(Object.hasOwn(f.settings.read().settings, 'unattendedIssueCreation'), false);
+});
+
+test('owner can revoke persisted grant offline without broadening old bindings', async () => {
+  const f = await prepareLinks(); await setUnattended(f, true);
+  const restarted = createTrackerService({ settings: f.settings, tracker: f.tracker, workspaceRegistry: f.registry, links: f.links, resolveAccountScope: async () => f.control.scope });
+  f.tracker.openSession = async () => { throw new Error('offline'); };
+  const view = await restarted.read();
+  assert.deepEqual(view.unattendedIssueCreation, { ws: false });
+  assert.deepEqual(view.unattendedIssueCreationStored, { ws: true });
+  assert.doesNotMatch(JSON.stringify(view), /aaaaaaaa|identity-A/);
+  const receipt = await restarted.command({ op: 'configuration.setUnattendedIssueCreation', workspaceId: 'ws', expectedRevision: 3, enabled: false });
+  assert.deepEqual(receipt, { revision: 4, workspaceId: 'ws', enabled: false });
+  assert.equal(Object.hasOwn(f.settings.read().settings, 'unattendedIssueCreation'), false);
+  assert.deepEqual((await restarted.read()).unattendedIssueCreationStored, { ws: false });
+  await rejected(restarted.command({ op: 'configuration.setUnattendedIssueCreation', workspaceId: 'ws', expectedRevision: 3, enabled: false }), 'conflict');
+});
+
+test('local grant read and revoke proceed while credential-backed GET hangs', async () => {
+  const f = await prepareLinks(); await setUnattended(f, true);
+  let started, release, calls = 0;
+  const ready = new Promise(resolve => { started = resolve; });
+  const open = f.tracker.openSession.bind(f.tracker);
+  f.tracker.openSession = async () => {
+    calls++; started();
+    await new Promise(resolve => { release = resolve; });
+    return open();
+  };
+  const pending = f.service.read(); await ready;
+  const local = await body(await post(f.service, { op: 'configuration.unattendedRead' }));
+  assert.deepEqual(local, { status: 200, value: { revision: 3, unattendedIssueCreationStored: { ws: true } } });
+  assert.equal(calls, 1);
+  assert.doesNotMatch(JSON.stringify(local), /aaaaaaaa|identity-A|unattendedIssueCreation\"/);
+  assert.equal((await body(await post(f.service, { op: 'configuration.unattendedRead', workspaceId: 'ws' }))).status, 400);
+  await setUnattended(f, false, local.value.revision);
+  assert.deepEqual(await f.service.command({ op: 'configuration.unattendedRead' }), { revision: 4, unattendedIssueCreationStored: { ws: false } });
+  await rejected(setUnattended(f, false, 3), 'conflict');
+  assert.equal(calls, 1);
+  release(); await rejected(pending, 'conflict');
+  f.tracker.openSession = open;
+  assert.deepEqual((await f.service.read()).unattendedIssueCreation, { ws: false });
+});
+
+test('owner can discover and revoke an orphan grant for an existing workspace', async () => {
+  const f = await prepareLinks();
+  const state = f.settings.read();
+  state.settings.unattendedIssueCreation = {
+    ws2: { accountScope: 'a'.repeat(64), incarnation: 'two' },
+    deleted: { accountScope: 'b'.repeat(64), incarnation: 'old' },
+  };
+  f.settings.compareAndSet(state.revision, state.settings);
+  f.tracker.openSession = async () => { throw new Error('offline'); };
+  const view = await f.service.read();
+  assert.deepEqual(view.unattendedIssueCreation, { ws: false });
+  assert.deepEqual(view.unattendedIssueCreationStored, { ws: false, ws2: true });
+  assert.deepEqual(await f.service.command({ op: 'configuration.unattendedRead' }), { revision: 3, unattendedIssueCreationStored: { ws: false, ws2: true } });
+  assert.doesNotMatch(JSON.stringify(view), /aaaaaaaa|bbbbbbbb|identity-A/);
+  await setUnattended(f, false, 3, 'ws2');
+  assert.deepEqual((await f.service.read()).unattendedIssueCreationStored, { ws: false });
+  assert.deepEqual(f.settings.read().settings.unattendedIssueCreation, { deleted: { accountScope: 'b'.repeat(64), incarnation: 'old' } });
+});
+
+test('offline revoke preserves valid other bindings but cannot retag a changed account', async () => {
+  const f = await prepareLinks(); await setUnattended(f, true);
+  await f.service.command({ op: 'boards.list' }); await select(f.service, 3, ['2'], 'ws2');
+  await setUnattended(f, true, 4, 'ws2');
+  f.control.scope = 'b'.repeat(64);
+  await setUnattended(f, false, 5, 'ws');
+  await rejected(boardRead(f.service, 'ws2', '2'), 'needs_reselect');
+  assert.deepEqual(f.settings.read().settings.unattendedIssueCreation, { ws2: { accountScope: 'a'.repeat(64), incarnation: 'two' } });
+  assert.deepEqual((await f.service.read()).unattendedIssueCreation, { ws: false, ws2: false });
+  assert.deepEqual((await f.service.read()).unattendedIssueCreationStored, { ws: false, ws2: true });
+});
+
+test('owner opt-in refuses stale bindings and races without committing', async () => {
+  for (const change of ['identity', 'account', 'incarnation', 'revision']) {
+    const f = await prepareLinks(); let release, started, calls = 0;
+    const ready = new Promise(resolve => { started = resolve; });
+    const original = f.tracker.openSession;
+    f.tracker.openSession = async function () {
+      const session = await original.call(this);
+      if (++calls === 1) await new Promise(resolve => { release = resolve; started(); });
+      return session;
+    };
+    const pending = setUnattended(f, true); await ready;
+    if (change === 'identity') f.tracker.identity = 'identity-B';
+    if (change === 'account') f.control.scope = 'b'.repeat(64);
+    if (change === 'incarnation') f.registry.get('ws').createdAt = 'new';
+    if (change === 'revision') { const state = f.settings.read(); f.settings.compareAndSet(state.revision, state.settings); }
+    release(); await assert.rejects(pending, undefined, change);
+    assert.equal(Object.hasOwn(f.settings.read().settings, 'unattendedIssueCreation'), false, change);
+  }
+  const noScope = await prepareScope();
+  await rejected(setUnattended(noScope, true), 'unavailable');
+  const f = await prepareLinks();
+  await rejected(setUnattended(f, true, 2, 'ws2'), 'board_not_selected');
+  const restarted = createTrackerService({ settings: f.settings, tracker: f.tracker, workspaceRegistry: f.registry, links: f.links, resolveAccountScope: async () => f.control.scope });
+  await rejected(restarted.command({ op: 'configuration.setUnattendedIssueCreation', workspaceId: 'ws', expectedRevision: 2, enabled: true }), 'needs_reselect');
+});
+
+test('unattended scope requires opt-in and trusted synchronous root assertion', async () => {
+  const f = await prepareLinks(); let writes = 0, allowed = true;
+  f.tracker.createIssue = async () => { writes++; return { id: 'issue-1', key: 'DOC-1', version: 1 }; };
+  await setUnattended(f, true);
+  const revision = f.settings.read().revision;
+  const noCaller = scopeFor(f), scope = scopeFor(f, { assertCaller: () => allowed });
+  await rejected(noCaller.createIssue(unattendedInput, { unattendedRevision: revision }), 'forbidden');
+  await rejected(scope.createIssue({ ...unattendedInput, unattendedRevision: revision }), 'invalid');
+  await rejected(scope.createIssue(unattendedInput, { unattendedRevision: revision - 1 }), 'unattended_not_enabled');
+  allowed = false; await rejected(scope.createIssue(unattendedInput, { unattendedRevision: revision }), 'forbidden');
+  allowed = true;
+  assert.deepEqual(await scope.createIssue(unattendedInput, { unattendedRevision: revision }), { id: 'issue-1', key: 'DOC-1', version: 1 });
+  assert.equal(writes, 1);
+  const asyncCaller = scopeFor(f, { assertCaller: async () => true });
+  await rejected(asyncCaller.createIssue(unattendedInput, { unattendedRevision: revision }), 'forbidden');
+  // Approved calls still work without the unattended capability.
+  assert.deepEqual(await noCaller.createIssue(unattendedInput), { id: 'issue-1', key: 'DOC-1', version: 1 });
+  assert.equal(writes, 2);
+});
+
+test('unattended creation rechecks opt-in, root, principal, membership and workspace during queue await', async () => {
+  for (const change of ['revoke', 'root', 'scope', 'credential', 'member', 'ambiguous', 'incarnation', 'selection']) {
+    const f = await prepareLinks(); await setUnattended(f, true);
+    let allowed = true, release, started, writes = 0;
+    const ready = new Promise(resolve => { started = resolve; });
+    f.tracker.getBoardCreationQueue = () => new Promise(resolve => { release = () => resolve(Object.freeze({ id: '3', key: 'DOC', display: 'Documents' })); started(); });
+    f.tracker.createIssue = async () => { writes++; return { id: 'issue-1', key: 'DOC-1', version: 1 }; };
+    const scope = scopeFor(f, { assertCaller: () => allowed });
+    const pending = scope.createIssue(unattendedInput, { unattendedRevision: 3 }); await ready;
+    if (change === 'revoke') await setUnattended(f, false);
+    if (change === 'root') allowed = false;
+    if (change === 'scope') f.control.scope = 'b'.repeat(64);
+    if (change === 'credential') f.tracker.identity = 'rotated-credential';
+    if (change === 'member') f.registry.get('ws').sessionIds = [];
+    if (change === 'ambiguous') f.registry.get('ws2').sessionIds.push('session-1');
+    if (change === 'incarnation') f.registry.get('ws').createdAt = 'replacement';
+    if (change === 'selection') { await f.service.command({ op: 'boards.list' }); await select(f.service, 3, ['1']); }
+    release(); await assert.rejects(pending, undefined, change); assert.equal(writes, 0, change);
+  }
+});
+
+test('unattended write reports unknown after dispatch revocation and never retries', async () => {
+  for (const change of ['root', 'revoke', 'credential', 'incarnation']) {
+    const f = await prepareLinks(); await setUnattended(f, true);
+    let allowed = true, writes = 0;
+    f.tracker.createIssue = async () => {
+      writes++;
+      if (change === 'root') allowed = false;
+      if (change === 'revoke') await setUnattended(f, false);
+      if (change === 'credential') f.tracker.identity = 'rotated';
+      if (change === 'incarnation') f.registry.get('ws').createdAt = 'replacement';
+      return { id: 'issue-1', key: 'DOC-1', version: 1 };
+    };
+    const scope = scopeFor(f, { assertCaller: () => allowed });
+    await rejected(scope.createIssue(unattendedInput, { unattendedRevision: 3 }), 'outcome_unknown');
+    assert.equal(writes, 1, change);
+  }
+});
+
+test('disabled probe does not impose new unique owner requirement on approved creation', async () => {
+  const f = await prepareLinks(); f.registry.get('ws2').sessionIds.push('session-1');
+  const scope = scopeFor(f);
+  assert.deepEqual(await scope.allowUnattendedIssueCreation(), { enabled: false, revision: 2 });
+  assert.deepEqual(await scope.createIssue(unattendedInput), { id: 'issue-1', key: 'DOC-1', version: 1 });
+});
+
+test('reselect purges obsolete grant so account and workspace ABA cannot resurrect it', async () => {
+  for (const change of ['account', 'workspace']) {
+    const f = await prepareLinks(); await setUnattended(f, true);
+    if (change === 'account') f.control.scope = 'b'.repeat(64);
+    else f.registry.get('ws').createdAt = 'replacement';
+    const receipt = await f.service.command({ op: 'workspace.reselect', workspaceId: 'ws', expectedRevision: 3, boardIds: ['1'] });
+    assert.equal(receipt.revision, 4);
+    assert.equal(Object.hasOwn(f.settings.read().settings, 'unattendedIssueCreation'), false);
+    if (change === 'account') f.control.scope = 'a'.repeat(64);
+    else f.registry.get('ws').createdAt = 'one';
+    const again = await f.service.command({ op: 'workspace.reselect', workspaceId: 'ws', expectedRevision: 4, boardIds: ['1'] });
+    assert.equal(again.revision, 4);
+    assert.equal((await scopeFor(f).allowUnattendedIssueCreation()).enabled, false);
+  }
+});
+
+test('persisted opt-in requires live exact account and workspace incarnation after restart', async () => {
+  const f = await prepareLinks(); await setUnattended(f, true);
+  const restarted = createTrackerService({ settings: f.settings, tracker: f.tracker, workspaceRegistry: f.registry, links: f.links, resolveAccountScope: async () => f.control.scope });
+  assert.deepEqual((await restarted.read()).unattendedIssueCreation, { ws: false });
+  await restarted.command({ op: 'workspace.reselect', workspaceId: 'ws', expectedRevision: 3, boardIds: ['1'] });
+  assert.deepEqual((await restarted.read()).unattendedIssueCreation, { ws: true });
+  f.tracker.identity = 'rotated';
+  assert.deepEqual((await restarted.read()).unattendedIssueCreation, { ws: false });
+  f.registry.get('ws').createdAt = 'replacement';
+  await restarted.command({ op: 'workspace.reselect', workspaceId: 'ws', expectedRevision: 3, boardIds: ['1'] });
+  assert.deepEqual((await restarted.read()).unattendedIssueCreation, { ws: false });
+  assert.equal((await restarted.toolScope({ workspaceId: 'ws', sessionId: 'session-1', signal: undefined }).allowUnattendedIssueCreation()).enabled, false);
+});
+
 const linkRead = (f, workspaceId = 'ws', boardId = '1') => f.service.command({ op: 'links.read', workspaceId, boardId });
 const issueLinkCommand = (overrides = {}) => ({ op: 'links.issue.read', workspaceId: 'ws', boardId: '1', issueKey: 'ABC-1', issueId: 'id-1', ...overrides });
 const issueLinkRead = (f, overrides = {}, signal) => f.service.command(issueLinkCommand(overrides), signal);

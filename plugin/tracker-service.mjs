@@ -74,6 +74,10 @@ function checkCommand(c) {
     case 'configuration.configure':
       shape(c, ['op', 'expectedRevision', 'orgType']); revision(c.expectedRevision);
       if (!['cloud', 'org'].includes(c.orgType)) invalid(); break;
+    case 'configuration.setUnattendedIssueCreation':
+      shape(c, ['op', 'workspaceId', 'expectedRevision', 'enabled']); workspaceId(c.workspaceId); revision(c.expectedRevision);
+      if (typeof c.enabled !== 'boolean') invalid(); break;
+    case 'configuration.unattendedRead':
     case 'boards.list': shape(c, ['op']); break;
     case 'workspace.select': case 'workspace.reselect':
       shape(c, ['op', 'expectedRevision', 'workspaceId', 'boardIds']); revision(c.expectedRevision); workspaceId(c.workspaceId); boardIds(c.boardIds); break;
@@ -186,6 +190,12 @@ function safeError(error, signal) {
  * GET: configuration.read (no body/query); POST: exact command JSON.
  * Calls are bounded, and all failures are sanitized. No credentials are accepted.
  * read(signal?) and command(command, signal?) expose the same trusted API.
+ * For unattended creation the host alone constructs toolScope with an optional
+ * synchronous assertCaller callback; it must throw (or return false) unless the
+ * caller remains an eligible root. allowUnattendedIssueCreation() returns only
+ * {enabled, revision}; it confers no authority. A subsequent trusted call to
+ * createIssue(input, {unattendedRevision}) checks callback and opt-in repeatedly.
+ * Neither callback nor the separate second argument is accepted from tool JSON.
  * Optional links is the synchronous host-owned store; resolveAccountScope receives
  * the exact credential-bound session and resolves a stable 64-hex account namespace.
  * The host owns and closes both dependencies; neither is exposed to callers.
@@ -219,6 +229,34 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
     return result.revision;
   }
   function invalidate() { listing = null; generation++; }
+  function optedIn(state, wid, scope, incarnation) {
+    const map = state.settings.unattendedIssueCreation;
+    const entry = map && typeof map === 'object' && Object.hasOwn(map, wid) ? map[wid] : undefined;
+    return typeof scope === 'string' && /^[0-9a-f]{64}$/.test(scope) && !!entry && typeof entry === 'object' &&
+      entry.accountScope === scope && entry.incarnation === incarnation;
+  }
+  // Owner-only local projection, never claims that a stored grant is active.
+  // This path must not wait on Tracker so a stuck GET cannot prevent revocation.
+  function storedGrants(state) {
+    const result = {}, map = state.settings.unattendedIssueCreation;
+    for (const id of Object.keys(state.settings.workspaces)) {
+      Object.defineProperty(result, id, { enumerable: true, configurable: true, writable: true,
+        value: !!map && Object.hasOwn(map, id) });
+    }
+    if (map) for (const id of Object.keys(map)) {
+      if (!Object.hasOwn(result, id) && workspaceRegistry.get(id)) {
+        Object.defineProperty(result, id, { enumerable: true, configurable: true, writable: true, value: true });
+      }
+    }
+    return result;
+  }
+  function retagBindings(oldRevision, newRevision, identity, scope) {
+    for (const [id, binding] of bindings) {
+      if (binding.revision === oldRevision && binding.identity === identity && binding.accountScope === scope &&
+          workspaceRegistry.get(id)?.createdAt === binding.incarnation) binding.revision = newRevision;
+      else bindings.delete(id);
+    }
+  }
   function revokeAccount() { bindings.clear(); invalidate(); fail('needs_reselect', 409); }
   async function accountScope(account, signal) {
     if (!resolveAccountScope) return undefined;
@@ -247,20 +285,82 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
       if (needed) bindings.delete(id);
       return needed;
     });
+    const unattendedIssueCreation = {}, unattendedIssueCreationStored = storedGrants(state);
+    for (const id of Object.keys(state.settings.workspaces)) {
+      const binding = bindings.get(id);
+      Object.defineProperty(unattendedIssueCreation, id, { enumerable: true, configurable: true, writable: true,
+        value: !!binding && optedIn(state, id, scope, binding.incarnation) });
+    }
     return { revision: state.revision, configured: !!state.settings.connection,
-      orgType: state.settings.connection?.orgType ?? null, workspaces: structuredClone(state.settings.workspaces), needsReselect };
+      orgType: state.settings.connection?.orgType ?? null, workspaces: structuredClone(state.settings.workspaces), needsReselect, unattendedIssueCreation, unattendedIssueCreationStored };
   }
   async function commandImpl(c, signal) {
     checkCommand(c); signal.throwIfAborted();
     const state = current();
+    if (c.op === 'configuration.unattendedRead') {
+      return { revision: state.revision, unattendedIssueCreationStored: storedGrants(state) };
+    }
     if (c.op === 'configuration.configure') {
       if (state.revision !== c.expectedRevision) fail('conflict', 409);
       // Reconfiguration invalidates every board authorization, even for the same type.
       const next = { connection: { tokenRef: 'TOKEN', orgIdRef: 'ORG_ID', orgType: c.orgType }, workspaces: {} };
       const nextRevision = cas(c.expectedRevision, next); invalidate(); bindings.clear();
-      return { revision: nextRevision, configured: true, orgType: c.orgType, workspaces: {}, needsReselect: [] };
+      return { revision: nextRevision, configured: true, orgType: c.orgType, workspaces: {}, needsReselect: [], unattendedIssueCreation: {}, unattendedIssueCreationStored: {} };
     }
     configured(state);
+    if (c.op === 'configuration.setUnattendedIssueCreation') {
+      if (state.revision !== c.expectedRevision) fail('conflict', 409);
+      // Revocation is a local, owner-authorized CAS and must work even when the
+      // Tracker account or previous in-memory binding is unavailable. Existing
+      // bindings retain their original provenance and must still verify the live
+      // account before any operation; this CAS does not authorize a new principal.
+      if (!c.enabled) {
+        workspace(c.workspaceId);
+        if (!Object.hasOwn(state.settings.workspaces, c.workspaceId) &&
+            !(state.settings.unattendedIssueCreation && Object.hasOwn(state.settings.unattendedIssueCreation, c.workspaceId))) fail('board_not_selected', 403);
+        const map = { ...state.settings.unattendedIssueCreation };
+        delete map[c.workspaceId];
+        const next = { ...state.settings };
+        if (Object.keys(map).length) next.unattendedIssueCreation = map;
+        else delete next.unattendedIssueCreation;
+        signal.throwIfAborted();
+        const nextRevision = cas(c.expectedRevision, next);
+        invalidate();
+        for (const [id, binding] of bindings) {
+          if (binding.revision === state.revision && workspaceRegistry.get(id)?.createdAt === binding.incarnation) binding.revision = nextRevision;
+          else bindings.delete(id);
+        }
+        return { revision: nextRevision, workspaceId: c.workspaceId, enabled: false };
+      }
+      if (!resolveAccountScope) fail('unavailable', 503);
+      const wid = c.workspaceId, incarnation = workspace(wid), binding = bindings.get(wid), version = generation;
+      if (!Array.isArray(state.settings.workspaces[wid]) || !state.settings.workspaces[wid].length) fail('board_not_selected', 403);
+      if (!binding || binding.revision !== state.revision || binding.incarnation !== incarnation) fail('needs_reselect', 409);
+      const identity = binding.identity, selectedScope = binding.accountScope;
+      function check() {
+        signal.throwIfAborted();
+        workspace(wid, incarnation);
+        const now = current();
+        if (generation !== version || now.revision !== state.revision || !now.settings.connection ||
+            bindings.get(wid) !== binding || binding.revision !== state.revision || binding.identity !== identity ||
+            binding.accountScope !== selectedScope || binding.incarnation !== incarnation ||
+            !Array.isArray(now.settings.workspaces[wid]) || !now.settings.workspaces[wid].length) fail('needs_reselect', 409);
+      }
+      check();
+      const account = await session(signal); check();
+      const scope = await accountScope(account, signal); check();
+      if (account.identity !== identity || scope !== selectedScope) revokeAccount();
+      const afterAccount = await session(signal); check();
+      const afterScope = await accountScope(afterAccount, signal); check();
+      if (afterAccount.identity !== identity || afterScope !== selectedScope) revokeAccount();
+      const map = { ...state.settings.unattendedIssueCreation };
+      Object.defineProperty(map, wid, { value: { accountScope: scope, incarnation }, enumerable: true, configurable: true, writable: true });
+      const next = { ...state.settings, unattendedIssueCreation: map };
+      check();
+      const nextRevision = cas(c.expectedRevision, next);
+      invalidate(); retagBindings(state.revision, nextRevision, identity, scope);
+      return { revision: nextRevision, workspaceId: wid, enabled: c.enabled };
+    }
     if (c.op === 'links.read' || c.op === 'links.issue.read' || c.op === 'links.session.read' || c.op === 'links.set') return linksCommand(c, signal, state);
     if (c.op.startsWith('issue.')) {
       const scope = makeWorkspaceScope({ workspaceId: c.workspaceId, boardId: c.boardId, signal }, false);
@@ -352,8 +452,21 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
       if (afterAccount.identity !== account.identity || afterScope !== scope) revokeAccount();
       if (failure) throw failure;
       check();
-      bindings.set(wid, { identity: account.identity, accountScope: scope, incarnation, revision: startRevision });
-      return { revision: startRevision, workspaceId: wid, boardIds: [...c.boardIds] };
+      // A saved grant belongs to this account and incarnation only. If an owner
+      // reselects a different principal or replacement workspace, discard the old
+      // grant permanently so switching back cannot silently revive it.
+      let boundRevision = startRevision;
+      const saved = snapshot.unattendedIssueCreation;
+      if (saved && Object.hasOwn(saved, wid) && !optedIn(state, wid, scope, incarnation)) {
+        const map = { ...saved }; delete map[wid];
+        const nextSettings = { ...snapshot };
+        if (Object.keys(map).length) nextSettings.unattendedIssueCreation = map;
+        else delete nextSettings.unattendedIssueCreation;
+        check(); boundRevision = cas(startRevision, nextSettings);
+        invalidate(); retagBindings(startRevision, boundRevision, account.identity, scope);
+      }
+      bindings.set(wid, { identity: account.identity, accountScope: scope, incarnation, revision: boundRevision });
+      return { revision: boundRevision, workspaceId: wid, boardIds: [...c.boardIds] };
     }
     const incarnation = workspace(c.workspaceId);
     if (c.op === 'workspace.select') {
@@ -369,15 +482,18 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
       if (afterScope !== scope || afterAccount.identity !== account.identity) revokeAccount();
       if (c.boardIds.length && (evidence !== listing || evidence.expires <= Date.now())) fail('conflict', 409);
       const workspaces = { ...state.settings.workspaces, [c.workspaceId]: [...c.boardIds] };
-      workspace(c.workspaceId, incarnation); signal.throwIfAborted();
-      const nextRevision = cas(c.expectedRevision, { connection: state.settings.connection, workspaces });
-      invalidate();
-      // Settings revision changed, but previously activated workspaces retain their
-      // binding only while the same account and incarnation remain in force.
-      for (const [id, binding] of bindings) {
-        if (binding.revision === state.revision && binding.identity === account.identity && binding.accountScope === scope && workspaceRegistry.get(id)?.createdAt === binding.incarnation) binding.revision = nextRevision;
-        else bindings.delete(id);
+      const next = { ...state.settings, workspaces };
+      if (state.settings.unattendedIssueCreation) {
+        const map = { ...state.settings.unattendedIssueCreation };
+        delete map[c.workspaceId];
+        if (Object.keys(map).length) next.unattendedIssueCreation = map;
+        else delete next.unattendedIssueCreation;
       }
+      workspace(c.workspaceId, incarnation); signal.throwIfAborted();
+      const nextRevision = cas(c.expectedRevision, next);
+      invalidate();
+      // Retag only bindings still valid for this identity and workspace incarnation.
+      retagBindings(state.revision, nextRevision, account.identity, scope);
       bindings.set(c.workspaceId, { identity: account.identity, accountScope: scope, incarnation, revision: nextRevision });
       return { revision: nextRevision, workspaceId: c.workspaceId, boardIds: [...c.boardIds] };
     }
@@ -762,8 +878,10 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
   // Only the owner's authenticated HTTP command dispatcher may omit a session.
   // Session tools always use the wrapper above and retain all session checks.
   function makeWorkspaceScope(options, requireSession) {
-    shape(options, requireSession ? ['workspaceId', 'sessionId', 'signal'] : ['workspaceId', 'boardId', 'signal']);
-    const { workspaceId: wid, sessionId: sid, boardId: requestedBoard, signal: callerSignal } = options;
+    if (requireSession) fields(options, ['workspaceId', 'sessionId', 'signal'], ['assertCaller']);
+    else shape(options, ['workspaceId', 'boardId', 'signal']);
+    const { workspaceId: wid, sessionId: sid, boardId: requestedBoard, signal: callerSignal, assertCaller } = options;
+    if (assertCaller !== undefined && typeof assertCaller !== 'function') invalid();
     workspaceId(wid); if (requireSession) sessionId(sid); else boardId(requestedBoard);
     if (callerSignal !== undefined && !(callerSignal instanceof AbortSignal)) invalid();
     const initial = current(), incarnation = workspace(wid), binding = bindings.get(wid);
@@ -793,13 +911,45 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
           selected.some((id, index) => state.settings.workspaces[wid][index] !== id)) fail('needs_reselect', 409);
     }
     check(callerSignal ?? lifecycle.signal);
-    async function account(signal) {
+    // The unattended path additionally requires an unambiguous live owner and a
+    // trusted host callback. Neither capability can be supplied via tool JSON.
+    function checkUnattended(signal, expectedRevision, requireCaller = true) {
       check(signal);
+      if (requireCaller) {
+        if (typeof assertCaller !== 'function') fail('forbidden', 403);
+        const result = assertCaller();
+        if (result && (typeof result === 'object' || typeof result === 'function') && typeof result.then === 'function') {
+          // A rejected accidental async assertion must not become an unhandled rejection.
+          Promise.resolve(result).catch(() => {});
+          fail('forbidden', 403);
+        }
+        if (result === false) fail('forbidden', 403);
+        check(signal);
+      }
+      if (typeof workspaceRegistry.list !== 'function') fail('unavailable', 503);
+      const items = workspaceRegistry.list();
+      if (!Array.isArray(items)) fail('unavailable', 503);
+      let owners = 0;
+      for (const item of items) {
+        if (!item || !Array.isArray(item.sessionIds) || item.sessionIds.length > 100_000 ||
+            (item.archivedSessionIds != null && !Array.isArray(item.archivedSessionIds))) fail('unavailable', 503);
+        if (item.sessionIds.includes(sid) && !item.archivedSessionIds?.includes(sid)) {
+          owners++;
+          if (item.id !== wid || item.createdAt !== incarnation) fail('workspace_ambiguous', 409);
+        }
+      }
+      if (owners !== 1) fail('workspace_ambiguous', 409);
+      const state = current();
+      if (expectedRevision !== undefined && (state.revision !== expectedRevision || !optedIn(state, wid, selectedAccountScope, incarnation))) fail('unattended_not_enabled', 403);
+      return state;
+    }
+    async function account(signal, verify = () => check(signal)) {
+      verify();
       let result;
       let scope;
-      try { result = await session(signal); scope = await accountScope(result, signal); }
-      catch (error) { check(signal); throw error; }
-      check(signal);
+      try { result = await session(signal); verify(); scope = await accountScope(result, signal); }
+      catch (error) { verify(); throw error; }
+      verify();
       if (result.identity !== selectedIdentity || scope !== selectedAccountScope) revokeAccount();
       return result;
     }
@@ -940,12 +1090,12 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
       boardId(id);
       if (!selected.includes(id)) fail('board_not_selected', 403);
     }
-    async function creationQueue(a, id, queueKey, signal) {
+    async function creationQueue(a, id, queueKey, signal, verify = () => check(signal)) {
       const explicit = queueKey !== undefined;
       if (typeof a[explicit ? 'getExplicitCreationQueue' : 'getBoardCreationQueue'] !== 'function') fail('invalid_tracker_response', 502);
-      check(signal);
-      const capability = await raceAbort(() => explicit ? a.getExplicitCreationQueue(id, queueKey, { signal }) : a.getBoardCreationQueue(id, { signal }), signal);
-      check(signal);
+      verify();
+      const capability = await raceAbort(() => { verify(); return explicit ? a.getExplicitCreationQueue(id, queueKey, { signal }) : a.getBoardCreationQueue(id, { signal }); }, signal);
+      verify();
       const queue = safeQueue(capability);
       if (explicit && queue.key !== queueKey) fail('invalid_tracker_response', 502);
       // The API capability is an immutable object bound to this account session.
@@ -1011,6 +1161,19 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
     }
     return Object.freeze({
       ...(requireSession ? {
+        // This is only a boolean projection; it grants no authority to dispatch.
+        allowUnattendedIssueCreation: () => execute(async signal => {
+          check(signal);
+          await account(signal);
+          const state = current();
+          if (!optedIn(state, wid, selectedAccountScope, incarnation)) return { enabled: false, revision: state.revision };
+          try { checkUnattended(signal, undefined, false); }
+          catch (error) {
+            if (error instanceof ServiceError && ['workspace_ambiguous', 'unavailable'].includes(error.code)) return { enabled: false, revision: state.revision };
+            throw error;
+          }
+          return { enabled: true, revision: state.revision };
+        }),
         // The projection is safe for approval and is not itself a capability.
         previewCreate: input => {
           try {
@@ -1025,8 +1188,13 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
             return { queue };
           });
         },
-        createIssue: input => {
+        createIssue: (input, unattended) => {
           try {
+            if (unattended !== undefined) {
+              shape(unattended, ['unattendedRevision']); revision(unattended.unattendedRevision);
+              unattended = Object.freeze({ unattendedRevision: unattended.unattendedRevision });
+              checkUnattended(callerSignal ?? lifecycle.signal, unattended.unattendedRevision);
+            }
             fields(input, ['boardId', 'expectedQueue', 'summary'], ['description', 'queueKey']);
             creationBoard(input.boardId);
             const expectedQueue = safeQueue(input.expectedQueue, true);
@@ -1042,28 +1210,30 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
             // Resolve account first and use the capability obtained from this exact
             // immutable account session for the POST. The final live queue check
             // happens after approval and immediately before dispatch.
-            const a = await account(signal);
+            const creationCheck = () => unattended ? checkUnattended(signal, unattended.unattendedRevision) : check(signal);
+            creationCheck();
+            const a = await account(signal, creationCheck); creationCheck();
             if (typeof a.createIssue !== 'function') fail('invalid_tracker_response', 502);
-            const { capability, queue } = await creationQueue(a, input.boardId, input.queueKey, signal);
+            const { capability, queue } = await creationQueue(a, input.boardId, input.queueKey, signal, creationCheck); creationCheck();
             if (!sameQueue(queue, input.expectedQueue)) fail('conflict', 409);
             // Detect rotation while fetching the queue, while retaining a's exact
             // credential-bound capability for the eventual call.
-            await account(signal); check(signal);
+            await account(signal, creationCheck); creationCheck();
             let dispatched = false, returned = false, result;
             try {
               result = await raceAbort(() => {
-                check(signal); dispatched = true;
+                creationCheck(); dispatched = true;
                 return a.createIssue({ queue: capability, summary: input.summary,
                   ...(Object.hasOwn(input, 'description') ? { description: input.description } : {}) }, { signal });
               }, signal);
               returned = true;
-              check(signal); await account(signal); check(signal);
+              creationCheck(); await account(signal, creationCheck); creationCheck();
             } catch (error) {
               if (!dispatched) throw error;
               // A definitive Tracker rejection may be reported only while the
               // original scope and credentials still hold. Never retry a POST.
               if (!returned && !signal.aborted && error?.name === 'TrackerError' && ['unauthorized', 'forbidden', 'not_found', 'conflict', 'precondition_failed', 'unprocessable', 'rate_limited', 'invalid_input'].includes(error.code)) {
-                try { check(signal); await account(signal); check(signal); }
+                try { creationCheck(); await account(signal, creationCheck); creationCheck(); }
                 catch { fail('outcome_unknown', 502); }
                 const statuses = { unauthorized: 401, forbidden: 403, not_found: 404, conflict: 409, precondition_failed: 412, unprocessable: 422, rate_limited: 429, invalid_input: 400 };
                 fail(error.code, statuses[error.code]);

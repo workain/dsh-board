@@ -1096,7 +1096,7 @@ test('Tracker configuration, explicit workspace selection, and read-only partial
   h.click('trackerList'); assert.deepEqual(JSON.parse(h.requests[3].options.body), { op: 'boards.list' });
   await h.resolve(3, { boards: [{ id: '1', name: 'External' }, { id: '2', name: 'Other' }], complete: false, reason: 'page_limit' });
   assert.ok(h.nodes('p').some(n => h.text(n) === 'trackerListPartial'));
-  const checks = h.nodes('input').filter(n => n.props.type === 'checkbox'); assert.equal(checks.length, 2); assert.equal(checks[0].props.checked, false);
+  const checks = h.nodes('input').filter(n => n.props.type === 'checkbox' && n.props['aria-label'] !== 'trackerUnattended'); assert.equal(checks.length, 2); assert.equal(checks[0].props.checked, false);
   checks[0].props.onChange({ target: { checked: true } });
   checks[1].props.onChange({ target: { checked: true } });
   h.click('trackerSelect'); assert.deepEqual(JSON.parse(h.requests[4].options.body), { op: 'workspace.select', expectedRevision: 1, workspaceId: 'w', boardIds: ['1', '2'] });
@@ -1256,13 +1256,249 @@ test('restart requires fresh list and explicit reselection; stale listing never 
   assert.ok(h.nodes('p').some(n => h.text(n) === 'trackerReselect'));
   assert.equal(h.nodes('button').filter(n => n.props.className === 'dsh-board-tile').length, 1);
   h.click('trackerList'); await h.resolve(2, { boards: [{ id: '1', name: 'External' }], complete: true, reason: null });
-  assert.equal(h.nodes('input').find(n => n.props.type === 'checkbox').props.checked, true);
+  assert.equal(h.nodes('input').find(n => n.props.type === 'checkbox' && n.props['aria-label'] !== 'trackerUnattended').props.checked, true);
   h.click('trackerSelect'); assert.deepEqual(h.confirms, ['trackerConfirmSelection—']);
   await h.resolve(3, { error: { code: 'board_list_required' } }, 409);
   assert.ok(h.nodes('div').some(n => n.props.role === 'alert' && h.text(n) === 'trackerListRequired'));
   assert.equal(h.nodes('button').filter(n => n.props.className === 'dsh-board-tile').length, 1);
   await h.resolve(4, trackerSettings(4, true, { w: ['1'] }, ['w']));
-  assert.equal(h.nodes('input').filter(n => n.props.type === 'checkbox').length, 0); h.unmount();
+  assert.equal(h.nodes('input').filter(n => n.props.type === 'checkbox' && n.props['aria-label'] !== 'trackerUnattended').length, 0); h.unmount();
+});
+
+const unattendedCheck = h => h.nodes('input').find(n => n.props['aria-label'] === 'trackerUnattended');
+const withUnattended = (revision, enabled, workspaces = { w: ['101'] }, needs = [], stored = enabled) => ({ ...trackerSettings(revision, true, workspaces, needs), unattendedIssueCreation: { w: enabled }, unattendedIssueCreationStored: { w: stored } });
+async function unattendedReady(settings = trackerSettings(4, true, { w: ['101'] })) {
+  const h = harness({ manualTracker: true }); h.mount(); await h.resolve(0, base());
+  await h.resolve(1, settings); h.click('trackerConnect'); await h.resolve(2, settings);
+  h.change(h.nodes('select').find(n => n.children.some(c => c?.props?.value === 'w')), 'w');
+  return h;
+}
+
+test('unattended permission defaults off, confirms exact workspace, and reads back before checking', async () => {
+  const h = await unattendedReady();
+  try {
+    assert.equal(unattendedCheck(h).props.checked, false);
+    h.window.confirmResult = false; unattendedCheck(h).props.onChange({ target: { checked: true } });
+    assert.equal(h.requests.length, 3); assert.match(h.confirms[0], /trackerUnattendedWarning/); assert.match(h.confirms[0], /Workspace \(w\)/);
+    h.window.confirmResult = true;
+    const change = unattendedCheck(h).props.onChange; change({ target: { checked: true } }); change({ target: { checked: true } });
+    assert.deepEqual(JSON.parse(h.requests[3].options.body), { op: 'configuration.setUnattendedIssueCreation', workspaceId: 'w', expectedRevision: 4, enabled: true });
+    assert.equal(h.requests.length, 4); assert.equal(unattendedCheck(h), undefined);
+    await h.resolve(3, { revision: 5, workspaceId: 'w', enabled: true });
+    assert.equal(h.requests[4].path, 'api/dsh-board.tracker'); assert.equal(h.requests[4].options.method, 'GET');
+    assert.equal(unattendedCheck(h), undefined);
+    await h.resolve(4, withUnattended(5, true)); assert.equal(unattendedCheck(h).props.checked, true);
+    assert.equal(h.requests.length, 5); assert.equal(h.confirms.length, 2);
+    unattendedCheck(h).props.onChange({ target: { checked: false } });
+    assert.equal(h.confirms.length, 2, 'disable requires no confirmation');
+    assert.deepEqual(JSON.parse(h.requests[5].options.body), { op: 'configuration.setUnattendedIssueCreation', workspaceId: 'w', expectedRevision: 5, enabled: false });
+    await h.resolve(5, { revision: 6, workspaceId: 'w', enabled: false }); await h.resolve(6, withUnattended(6, false));
+    assert.equal(unattendedCheck(h).props.checked, false); assert.equal(h.requests.length, 7);
+  } finally { h.unmount(); }
+});
+
+test('unattended setting rejects ambiguous receipts, readbacks, revocation and timeout without retry', async () => {
+  for (const failure of ['receipt-revision', 'receipt-workspace', 'receipt-enabled', 'readback-revision', 'readback-enabled', 'readback-reselect', 'readback-malformed', 'readback-denied', 'denied', 'timeout']) {
+    const h = await unattendedReady();
+    try {
+      unattendedCheck(h).props.onChange({ target: { checked: true } });
+      if (failure === 'timeout') { h.requests[3].reject(new Error('timeout')); await settle(); }
+      else if (failure === 'denied') await h.resolve(3, { error: { code: 'forbidden' } }, 403);
+      else {
+        await h.resolve(3, { revision: failure === 'receipt-revision' ? 4 : 5, workspaceId: failure === 'receipt-workspace' ? 'other' : 'w', enabled: failure !== 'receipt-enabled' });
+        if (failure.startsWith('readback-')) {
+          if (failure === 'readback-denied') await h.resolve(4, { error: { code: 'forbidden' } }, 403);
+          else if (failure === 'readback-malformed') await h.resolve(4, { ...withUnattended(5, true), unattendedIssueCreation: { w: 'true' } });
+          else await h.resolve(4, withUnattended(failure === 'readback-revision' ? 6 : 5, failure !== 'readback-enabled', { w: ['101'] }, failure === 'readback-reselect' ? ['w'] : []));
+        }
+      }
+      assert.equal(unattendedCheck(h), undefined, failure);
+      assert.ok(h.nodes('div').some(n => n.props.role === 'alert' && ['trackerUncertain', 'trackerCredentials'].includes(h.text(n))), failure);
+      assert.equal(h.requests.filter(r => r.options.method === 'POST').length, 1, failure);
+    } finally { h.unmount(); }
+  }
+});
+
+test('unattended setting fences stale handlers and late responses across scope changes', async () => {
+  for (const cause of ['workspace', 'disconnect', 'account', 'incarnation', 'hidden', 'panel']) for (const late of [false, true]) {
+    const h = await unattendedReady();
+    try {
+      const change = unattendedCheck(h).props.onChange;
+      if (late) change({ target: { checked: true } });
+      if (cause === 'workspace') h.change(h.nodes('select').find(n => n.children.some(c => c?.props?.value === 'w')), '');
+      if (cause === 'disconnect') h.generation.set(undefined);
+      if (cause === 'account') h.generation.set({ id: 2, host: { home: '/' } });
+      if (cause === 'incarnation') h.ws.set({ ...h.ws.getSnapshot(), items: [{ workspaceId: 'w', title: 'New', sessionIds: [], createdAt: 'new' }] });
+      if (cause === 'hidden') { h.document.visibilityState = 'hidden'; h.documentEvents.get('visibilitychange')(); }
+      if (cause === 'panel') h.panelInfo.set({ activePanelId: 'other' });
+      h.nodes('main'); const count = h.requests.length;
+      if (late) { await h.resolve(3, { revision: 5, workspaceId: 'w', enabled: true }); assert.equal(h.requests.length, count, cause); }
+      else change({ target: { checked: true } });
+      assert.equal(h.requests.filter(r => r.options.method === 'POST').length, late ? 1 : 0, cause);
+      assert.notEqual(unattendedCheck(h)?.props.checked, true, cause);
+    } finally { h.unmount(); }
+  }
+});
+
+async function localPermissionReady() {
+  const h = harness({ manualTracker: true }); h.mount(); await h.resolve(0, base());
+  h.change(h.nodes('select').find(n => n.children.some(c => c?.props?.value === 'w')), 'w');
+  h.click('trackerConnect');
+  assert.equal(h.requests.length, 2); // settings GET remains unresolved
+  return h;
+}
+
+test('local fallback revokes during a hung Tracker GET without any automatic writes', async () => {
+  const h = await localPermissionReady();
+  try {
+    assert.equal(h.requests.filter(r => r.options.method === 'POST').length, 0);
+    h.click('trackerLocalPermissionRead');
+    assert.deepEqual(JSON.parse(h.requests[2].options.body), { op: 'configuration.unattendedRead' });
+    await h.resolve(2, { revision: 4, unattendedIssueCreationStored: { w: true, other: true } });
+    assert.ok(h.nodes('p').some(n => h.text(n).includes('trackerLocalPermissionOn Workspace (w)')));
+    assert.ok(!h.nodes('p').some(n => h.text(n).includes('other')));
+    h.click('trackerLocalPermissionRevoke');
+    assert.deepEqual(JSON.parse(h.requests[3].options.body), { op: 'configuration.setUnattendedIssueCreation', workspaceId: 'w', expectedRevision: 4, enabled: false });
+    assert.equal(h.confirms.length, 0);
+    await h.resolve(1, withUnattended(4, true)); // old Tracker GET cannot undo revocation
+    assert.equal(unattendedCheck(h), undefined);
+    await h.resolve(3, { revision: 5, workspaceId: 'w', enabled: false });
+    assert.deepEqual(JSON.parse(h.requests[4].options.body), { op: 'configuration.unattendedRead' });
+    await h.resolve(4, { revision: 5, unattendedIssueCreationStored: { other: true } });
+    assert.ok(h.nodes('p').some(n => h.text(n).includes('trackerLocalPermissionOff Workspace (w)')));
+    assert.ok(!h.nodes('button').some(n => h.text(n) === 'trackerLocalPermissionRevoke'));
+    assert.equal(h.requests.length, 5);
+  } finally { h.unmount(); }
+});
+
+test('hung settings GET stays single-flight across revoke, reopen and remount until settled', async () => {
+  const h = await localPermissionReady();
+  try {
+    h.click('trackerLocalPermissionRead'); await h.resolve(2, { revision: 4, unattendedIssueCreationStored: { w: true } });
+    h.click('trackerLocalPermissionRevoke'); await h.resolve(3, { revision: 5, workspaceId: 'w', enabled: false });
+    await h.resolve(4, { revision: 5, unattendedIssueCreationStored: {} });
+    h.click('trackerClose'); h.click('trackerConnect'); h.click('trackerClose'); h.click('trackerConnect');
+    assert.equal(h.requests.filter(r => r.path === 'api/dsh-board.tracker' && r.options.method === 'GET').length, 1);
+    h.unmount(); h.mount();
+    assert.equal(h.requests.filter(r => r.path === 'api/dsh-board.tracker' && r.options.method === 'GET').length, 1);
+    await h.resolve(1, withUnattended(4, true));
+    assert.equal(unattendedCheck(h), undefined, 'stale GET must not apply');
+    h.click('trackerConnect');
+    assert.equal(h.requests.filter(r => r.path === 'api/dsh-board.tracker' && r.options.method === 'GET').length, 2);
+    const index = h.requests.length - 1; await h.resolve(index, withUnattended(5, false));
+    assert.equal(unattendedCheck(h).props.checked, false);
+  } finally { h.unmount(); }
+});
+
+test('local fallback fails closed on unavailable, stale, malformed and uncertain results', async () => {
+  for (const failure of ['read-denied', 'read-invalid', 'read-timeout', 'conflict', 'receipt', 'readback-revision', 'readback-on', 'readback-denied', 'write-timeout']) {
+    const h = await localPermissionReady();
+    try {
+      h.click('trackerLocalPermissionRead');
+      if (failure === 'read-denied') await h.resolve(2, { error: { code: 'forbidden' } }, 403);
+      else if (failure === 'read-invalid') await h.resolve(2, { revision: 4, unattendedIssueCreationStored: { w: 'yes' } });
+      else if (failure === 'read-timeout') { [...h.timeouts][0](); await settle(); }
+      else {
+        await h.resolve(2, { revision: 4, unattendedIssueCreationStored: { w: true } }); h.click('trackerLocalPermissionRevoke');
+        if (failure === 'conflict') await h.resolve(3, { error: { code: 'conflict' } }, 409);
+        else if (failure === 'write-timeout') { [...h.timeouts][0](); await settle(); }
+        else {
+          await h.resolve(3, { revision: failure === 'receipt' ? 4 : 5, workspaceId: 'w', enabled: false });
+          if (failure.startsWith('readback')) {
+            if (failure === 'readback-denied') await h.resolve(4, { error: { code: 'forbidden' } }, 403);
+            else await h.resolve(4, { revision: failure === 'readback-revision' ? 6 : 5, unattendedIssueCreationStored: { w: failure === 'readback-on' } });
+          }
+        }
+      }
+      assert.ok(h.nodes('p').some(n => n.props.role === 'alert' && ['trackerLocalPermissionError', 'trackerLocalPermissionUnknown'].includes(h.text(n))), failure);
+      assert.ok(!h.nodes('button').some(n => h.text(n) === 'trackerLocalPermissionRevoke'), failure);
+      assert.ok(h.button('trackerLocalPermissionRead'), failure);
+      assert.equal(h.requests.filter(r => r.options.method === 'POST' && JSON.parse(r.options.body).op === 'configuration.setUnattendedIssueCreation').length, failure.startsWith('read-') ? 0 : 1, failure);
+    } finally { h.unmount(); }
+  }
+});
+
+test('local fallback fences workspace and privacy changes before revoke and readback', async () => {
+  for (const cause of ['workspace', 'disconnect', 'account', 'hidden', 'incarnation']) for (const phase of ['read', 'ready', 'write']) {
+    const h = await localPermissionReady();
+    try {
+      h.click('trackerLocalPermissionRead');
+      if (phase !== 'read') await h.resolve(2, { revision: 4, unattendedIssueCreationStored: { w: true } });
+      const revoke = phase === 'ready' ? h.button('trackerLocalPermissionRevoke').props.onClick : null;
+      if (phase === 'write') h.click('trackerLocalPermissionRevoke');
+      if (cause === 'workspace') h.change(h.nodes('select').find(n => n.children.some(c => c?.props?.value === 'w')), '');
+      if (cause === 'disconnect') h.generation.set(undefined);
+      if (cause === 'account') h.generation.set({ id: 2, host: { home: '/' } });
+      if (cause === 'hidden') { h.document.visibilityState = 'hidden'; h.documentEvents.get('visibilitychange')(); }
+      if (cause === 'incarnation') h.ws.set({ ...h.ws.getSnapshot(), items: [{ workspaceId: 'w', title: 'New', sessionIds: [], createdAt: 'new' }] });
+      h.nodes('main'); const count = h.requests.length;
+      if (phase === 'read') await h.resolve(2, { revision: 4, unattendedIssueCreationStored: { w: true } });
+      if (phase === 'ready') revoke();
+      if (phase === 'write') await h.resolve(3, { revision: 5, workspaceId: 'w', enabled: false });
+      assert.equal(h.requests.length, count, `${cause}/${phase}`);
+      assert.ok(!h.nodes('button').some(n => h.text(n) === 'trackerLocalPermissionRevoke'), `${cause}/${phase}`);
+    } finally { h.unmount(); }
+  }
+});
+
+test('unbound stale grant is visible and can be revoked without binding or confirmation', async () => {
+  for (const boards of [{ w: ['101'] }, { w: [] }, {}]) {
+    const h = await unattendedReady(withUnattended(4, false, boards, ['w'], true));
+    try {
+      assert.equal(unattendedCheck(h).props.checked, true); assert.equal(unattendedCheck(h).props.disabled, false);
+      assert.ok(h.nodes('p').some(n => h.text(n) === 'trackerUnattendedInactive'));
+      unattendedCheck(h).props.onChange({ target: { checked: false } });
+      assert.equal(h.confirms.length, 0);
+      assert.deepEqual(JSON.parse(h.requests[3].options.body), { op: 'configuration.setUnattendedIssueCreation', workspaceId: 'w', expectedRevision: 4, enabled: false });
+      await h.resolve(3, { revision: 5, workspaceId: 'w', enabled: false });
+      await h.resolve(4, withUnattended(5, false, boards, ['w']));
+      assert.equal(unattendedCheck(h).props.checked, false); assert.equal(unattendedCheck(h).props.disabled, true);
+      assert.equal(h.requests.length, 5);
+      unattendedCheck(h).props.onChange({ target: { checked: true } }); assert.equal(h.requests.length, 5);
+    } finally { h.unmount(); }
+  }
+});
+
+test('enable requires a nonempty bound selection even through stale handler', async () => {
+  for (const [boards, needs] of [[{}, []], [{ w: [] }, []], [{ w: ['101'] }, ['w']]]) {
+    const h = await unattendedReady(withUnattended(4, false, boards, needs));
+    try {
+      assert.equal(unattendedCheck(h).props.disabled, true);
+      unattendedCheck(h).props.onChange({ target: { checked: true } });
+      assert.equal(h.requests.length, 3); assert.equal(h.confirms.length, 0);
+    } finally { h.unmount(); }
+  }
+});
+
+test('unattended write timeout releases the lock and fences a late success', async () => {
+  const h = await unattendedReady();
+  try {
+    unattendedCheck(h).props.onChange({ target: { checked: true } });
+    assert.equal(h.timeouts.size, 1); [...h.timeouts][0](); await settle();
+    assert.ok(h.nodes('div').some(n => n.props.role === 'alert' && h.text(n) === 'trackerUncertain'));
+    assert.equal(unattendedCheck(h), undefined); assert.equal(h.requests.length, 4);
+    await h.resolve(3, { revision: 5, workspaceId: 'w', enabled: true });
+    assert.equal(h.requests.length, 4); assert.equal(unattendedCheck(h), undefined);
+  } finally { h.unmount(); }
+});
+
+test('unattended setting preserves board picker and local drafts', async () => {
+  const h = await unattendedReady();
+  try {
+    h.click('trackerList'); await h.resolve(3, { boards: [{ id: '101', name: 'One' }, { id: '202', name: 'Two' }], complete: true });
+    h.nodes('input').find(n => n.props.type === 'checkbox' && n.props['aria-label'] !== 'trackerUnattended' && !n.props.checked).props.onChange({ target: { checked: true } });
+    unattendedCheck(h).props.onChange({ target: { checked: true } });
+    await h.resolve(4, { revision: 5, workspaceId: 'w', enabled: true }); await h.resolve(5, withUnattended(5, true));
+    assert.deepEqual(h.nodes('input').filter(n => n.props.type === 'checkbox' && n.props['aria-label'] !== 'trackerUnattended').map(n => n.props.checked), [true, true]);
+    assert.equal(h.requests.length, 6); assert.equal(h.requests.filter(r => r.options.method === 'POST').length, 2);
+  } finally { h.unmount(); }
+  const local = await unattendedReady();
+  try {
+    local.change(local.nodes('select')[2], 'b'); local.editDraft();
+    unattendedCheck(local).props.onChange({ target: { checked: true } });
+    await local.resolve(3, { revision: 5, workspaceId: 'w', enabled: true }); await local.resolve(4, withUnattended(5, true));
+    assert.equal(local.nodes('textarea')[0].props.value, '  first\n\nsecond\t ');
+  } finally { local.unmount(); }
 });
 
 async function reselectReady(ids = ['101', '202']) {
@@ -1289,6 +1525,32 @@ test('owner reconfirms exactly the saved IDs without a listing and accepts uncha
     assert.ok(h.tile('tracker #202 — Workspace — tracker')); assert.ok(h.tile('tracker #101 — Workspace — tracker'));
     assert.equal(h.requests.length, 5); assert.ok(!h.nodes('button').some(n => h.text(n) === 'trackerConfirmPrevious'));
   } finally { h.unmount(); }
+});
+
+test('reconfirm under another account accepts purge revision but never carries stale grant', async () => {
+  const settings = withUnattended(4, false, { w: ['101'] }, ['w'], true);
+  const h = await unattendedReady(settings);
+  try {
+    assert.equal(unattendedCheck(h).props.checked, true);
+    h.click('trackerConfirmPrevious');
+    assert.deepEqual(JSON.parse(h.requests[3].options.body), { op: 'workspace.reselect', workspaceId: 'w', expectedRevision: 4, boardIds: ['101'] });
+    await h.resolve(3, { revision: 5, workspaceId: 'w', boardIds: ['101'] });
+    await h.resolve(4, withUnattended(5, false));
+    assert.equal(unattendedCheck(h).props.checked, false); assert.equal(unattendedCheck(h).props.disabled, false);
+    assert.equal(h.requests.length, 5); assert.equal(h.requests.filter(r => r.options.method === 'POST').length, 1);
+  } finally { h.unmount(); }
+});
+
+test('reconfirm accepts only expected or incremented receipt and exact readback revision', async () => {
+  for (const [receipt, readback] of [[5, 4], [5, 6], [3, null], [6, null]]) {
+    const h = await reselectReady(['101']);
+    try {
+      h.click('trackerConfirmPrevious'); await h.resolve(3, { revision: receipt, workspaceId: 'w', boardIds: ['101'] });
+      if (readback !== null) await h.resolve(4, trackerSettings(readback, true, { w: ['101'] }));
+      assert.ok(h.nodes('div').some(n => n.props.role === 'alert' && h.text(n) === 'trackerUncertain'));
+      assert.equal(h.requests.filter(r => r.options.method === 'POST').length, 1);
+    } finally { h.unmount(); }
+  }
 });
 
 test('reconfirm refreshes an already-open Tracker board after settings readback', async () => {
@@ -1338,7 +1600,7 @@ test('reconfirm fences invalid receipts, readbacks and unknown results without r
       if (failure === 'unknown') { h.requests[3].reject(new Error('timeout')); await settle(); }
       else if (failure === 'conflict') await h.resolve(3, { error: { code: 'conflict' } }, 409);
       else {
-        await h.resolve(3, { revision: failure === 'wrong-revision' ? 5 : 4, workspaceId: failure === 'wrong-workspace' ? 'other' : 'w', boardIds: failure === 'wrong-ids' ? ['101'] : ['101', '202'] });
+        await h.resolve(3, { revision: failure === 'wrong-revision' ? 6 : 4, workspaceId: failure === 'wrong-workspace' ? 'other' : 'w', boardIds: failure === 'wrong-ids' ? ['101'] : ['101', '202'] });
         if (failure.startsWith('readback-')) {
           if (failure === 'readback-error') await h.resolve(4, { error: { code: 'unavailable' } }, 503);
           else await h.resolve(4, trackerSettings(failure === 'readback-revision' ? 5 : 4, true, { w: failure === 'readback-ids' ? ['101'] : ['101', '202'] }, failure === 'readback-needs' ? ['w'] : []));
@@ -1374,11 +1636,11 @@ test('reconfirm retains local and board picker drafts', async () => {
   const h = await reselectReady();
   try {
     h.click('trackerList'); await h.resolve(3, { boards: [{ id: '101', name: 'First' }, { id: '303', name: 'New' }], complete: false });
-    h.nodes('input').find(n => n.props.type === 'checkbox' && !n.props.checked).props.onChange({ target: { checked: true } });
+    h.nodes('input').find(n => n.props.type === 'checkbox' && n.props['aria-label'] !== 'trackerUnattended' && !n.props.checked).props.onChange({ target: { checked: true } });
     h.click('trackerConfirmPrevious'); await h.resolve(4, { revision: 4, workspaceId: 'w', boardIds: ['101', '202'] });
     await h.resolve(5, trackerSettings(4, true, { w: ['101', '202'] }));
     h.click('trackerList'); await h.resolve(6, { boards: [{ id: '101', name: 'First' }, { id: '303', name: 'New' }], complete: false });
-    const checks = h.nodes('input').filter(n => n.props.type === 'checkbox');
+    const checks = h.nodes('input').filter(n => n.props.type === 'checkbox' && n.props['aria-label'] !== 'trackerUnattended');
     assert.equal(checks[0].props.checked, true); assert.equal(checks[1].props.checked, true);
     assert.ok(h.nodes('label').some(n => h.text(n) === 'trackerReviewDraft'));
   } finally { h.unmount(); }
@@ -1402,10 +1664,10 @@ test('Tracker service failure is isolated and local drafts survive settings', as
 test('Tracker cache is cleared on unmount and delayed settings from earlier mount are ignored', async () => {
   const h = harness({ manualTracker: true }); h.mount(); await h.resolve(0, base());
   h.unmount(); h.mount();
-  assert.equal(h.requests[2].path, 'api/dsh-board'); assert.equal(h.requests[3].path, 'api/dsh-board.tracker');
+  assert.equal(h.requests[2].path, 'api/dsh-board'); assert.equal(h.requests.length, 3, 'no duplicate settings GET while old request is pending');
   await h.resolve(1, trackerSettings(8, true, { w: ['1'] }, []));
   assert.ok(!h.nodes('button').some(n => n.props['aria-label']?.includes('tracker #1')));
-  await h.resolve(2, base()); await h.resolve(3, trackerSettings(0, false));
+  await h.resolve(2, base()); h.click('trackerConnect'); await h.resolve(3, trackerSettings(0, false));
   assert.ok(!h.nodes('button').some(n => n.props['aria-label']?.includes('tracker #1'))); h.unmount();
 });
 
@@ -1440,7 +1702,7 @@ test('partial listing retains present saved boards and confirms exact missing ID
   h.click('trackerConnect'); await h.resolve(2, trackerSettings(4, true, { w: ['1', '2'] }, ['w']));
   h.change(h.nodes('select').find(n => n.children.some(c => c?.props?.value === 'w')), 'w'); h.click('trackerList');
   await h.resolve(3, { boards: [{ id: '1', name: 'A' }, { id: '3', name: 'C' }], complete: false, reason: 'page_limit' });
-  const checks = h.nodes('input').filter(n => n.props.type === 'checkbox');
+  const checks = h.nodes('input').filter(n => n.props.type === 'checkbox' && n.props['aria-label'] !== 'trackerUnattended');
   assert.equal(checks[0].props.checked, true); assert.equal(checks[1].props.checked, false);
   checks[1].props.onChange({ target: { checked: true } }); h.window.confirmResult = false;
   h.click('trackerSelect'); assert.equal(h.requests.length, 4); assert.equal(h.confirms[0], 'trackerConfirmSelection2');
@@ -1481,7 +1743,7 @@ test('selection timeout after workspace switch invalidates and rereads profile r
   h.click('trackerConnect'); await h.resolve(2, trackerSettings(1, true));
   h.change(h.nodes('select').find(n => n.children.some(c => c?.props?.value === 'w')), 'w'); h.click('trackerList');
   await h.resolve(3, { boards: [{ id: '1', name: 'A' }], complete: true, reason: null });
-  h.nodes('input').find(n => n.props.type === 'checkbox').props.onChange({ target: { checked: true } }); h.click('trackerSelect');
+  h.nodes('input').find(n => n.props.type === 'checkbox' && n.props['aria-label'] !== 'trackerUnattended').props.onChange({ target: { checked: true } }); h.click('trackerSelect');
   h.change(h.nodes('select').find(n => n.children.some(c => c?.props?.value === 'w2')), 'w2');
   h.requests[4].reject(new Error('timeout')); await settle();
   assert.equal(h.requests[5].path, 'api/dsh-board.tracker');
@@ -1532,13 +1794,13 @@ test('refresh preserves picker IDs but requires relist and explicit review', asy
   await h.resolve(2, trackerSettings(1, true, { w: ['1'] })); await h.resolve(3, trackerBoard);
   h.click('trackerConnect'); await h.resolve(4, trackerSettings(1, true, { w: ['1'] })); await h.resolve(5, trackerBoard);
   h.click('trackerList'); await h.resolve(6, { boards: [{ id: '1', name: 'A' }, { id: '2', name: 'B' }], complete: true });
-  h.nodes('input').filter(n => n.props.type === 'checkbox')[1].props.onChange({ target: { checked: true } });
+  h.nodes('input').filter(n => n.props.type === 'checkbox' && n.props['aria-label'] !== 'trackerUnattended')[1].props.onChange({ target: { checked: true } });
   h.document.visibilityState = 'hidden'; h.documentEvents.get('visibilitychange')();
-  assert.equal(h.nodes('input').filter(n => n.props.type === 'checkbox').length, 0);
+  assert.equal(h.nodes('input').filter(n => n.props.type === 'checkbox' && n.props['aria-label'] !== 'trackerUnattended').length, 0);
   h.document.visibilityState = 'visible'; h.documentEvents.get('visibilitychange')();
   await h.resolveSupplementalLocal(7); await h.resolve(8, trackerSettings(1, true, { w: ['1'] })); await h.resolve(9, trackerBoard);
   h.click('trackerList'); await h.resolve(10, { boards: [{ id: '1', name: 'A' }, { id: '2', name: 'B' }], complete: true });
-  const checks = h.nodes('input').filter(n => n.props.type === 'checkbox');
+  const checks = h.nodes('input').filter(n => n.props.type === 'checkbox' && n.props['aria-label'] !== 'trackerUnattended');
   assert.equal(checks[0].props.checked, true); assert.equal(checks[1].props.checked, true);
   assert.equal(h.button('trackerSelect').props.disabled, true);
   checks[2].props.onChange({ target: { checked: true } }); h.click('trackerSelect');
@@ -1552,11 +1814,11 @@ test('selection receipt clears old picker draft before the next list', async () 
   h.change(h.nodes('select').find(n => n.children.some(c => c?.props?.value === 'w')), 'w');
   const listing = { boards: [{ id: '1', name: 'A' }, { id: '2', name: 'B' }], complete: true };
   h.click('trackerList'); await h.resolve(3, listing);
-  h.nodes('input').filter(n => n.props.type === 'checkbox')[1].props.onChange({ target: { checked: true } });
+  h.nodes('input').filter(n => n.props.type === 'checkbox' && n.props['aria-label'] !== 'trackerUnattended')[1].props.onChange({ target: { checked: true } });
   h.click('trackerSelect'); await h.resolve(4, { revision: 2, workspaceId: 'w', boardIds: ['1', '2'] });
   await h.resolve(5, trackerSettings(2, true, { w: ['1', '2'] }));
   h.click('trackerList'); await h.resolve(6, listing);
-  const checks = h.nodes('input').filter(n => n.props.type === 'checkbox');
+  const checks = h.nodes('input').filter(n => n.props.type === 'checkbox' && n.props['aria-label'] !== 'trackerUnattended');
   assert.equal(checks.length, 2); assert.ok(checks.every(n => n.props.checked)); h.unmount();
 });
 
@@ -1566,9 +1828,9 @@ test('workspace change asks before discarding picker selection', async () => {
   h.click('trackerConnect'); await h.resolve(2, trackerSettings(1, true, { w: ['1'] }));
   const workspace = () => h.nodes('select').find(n => n.children.some(c => c?.props?.value === 'w2'));
   h.change(workspace(), 'w'); h.click('trackerList'); await h.resolve(3, { boards: [{ id: '1', name: 'A' }, { id: '2', name: 'B' }], complete: true });
-  h.nodes('input').filter(n => n.props.type === 'checkbox')[1].props.onChange({ target: { checked: true } });
+  h.nodes('input').filter(n => n.props.type === 'checkbox' && n.props['aria-label'] !== 'trackerUnattended')[1].props.onChange({ target: { checked: true } });
   h.window.confirmResult = false; h.change(workspace(), 'w2');
-  assert.equal(workspace().props.value, 'w'); assert.equal(h.nodes('input').filter(n => n.props.type === 'checkbox')[1].props.checked, true);
+  assert.equal(workspace().props.value, 'w'); assert.equal(h.nodes('input').filter(n => n.props.type === 'checkbox' && n.props['aria-label'] !== 'trackerUnattended')[1].props.checked, true);
   h.window.confirmResult = true; h.change(workspace(), 'w2'); assert.equal(workspace().props.value, 'w2'); h.unmount();
 });
 test('card whale opens only current member links and rechecks live state', async () => {
@@ -1722,7 +1984,7 @@ async function sendReady(outcome) {
 }
 function selectSend(h, text = 'shared message') {
   h.change(h.nodes('textarea').find(n => n.props.value === ''), text);
-  for (const input of h.nodes('input').filter(n => n.props.type === 'checkbox')) input.props.onChange({ target: { checked: true } });
+  for (const input of h.nodes('input').filter(n => n.props.type === 'checkbox' && n.props['aria-label'] !== 'trackerUnattended')) input.props.onChange({ target: { checked: true } });
 }
 async function sendValidation(h, links = sendLinks) {
   await settle();
@@ -1743,7 +2005,7 @@ test('session send separately queues two targets and fences duplicate across dra
   h.click('close'); h.nodes('button').find(n => n.props['aria-label'] === 'issueDetails: <script>unsafe</script>').props.onClick();
   const i = h.requests.length - 1; await h.resolve(i, issueFixture); await h.resolve(i+1, issueComments); await h.resolve(i+2, issueTransitions); await h.resolve(i+3, sendLinks); await h.resolve(i+4, issueFixture);
   h.change(h.nodes('textarea').find(n => n.props.value === ''), 'shared message');
-  assert.ok(h.nodes('input').filter(n => n.props.type === 'checkbox').every(n => n.props.disabled)); assert.equal(service.calls.length, 2); h.unmount();
+  assert.ok(h.nodes('input').filter(n => n.props.type === 'checkbox' && n.props['aria-label'] !== 'trackerUnattended').every(n => n.props.disabled)); assert.equal(service.calls.length, 2); h.unmount();
 });
 test('session send timeout releases lock and fences late validation', async () => {
   const { h, service } = await sendReady();

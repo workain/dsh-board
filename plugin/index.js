@@ -11,7 +11,7 @@ export const inject = ['connection', 'workspaceRegistry', 'tools', 'approval'];
 // disabling the local board. Bootstrap modules and storage only on first use.
 export const trackerPlugin = {
   name: 'dsh-board-tracker',
-  inject: ['connection', 'workspaceRegistry', 'profileContext', 'credentials', 'tools', 'approval'],
+  inject: ['connection', 'workspaceRegistry', 'profileContext', 'credentials', 'tools', 'approval', 'agents'],
   apply(ctx) {
     let disposed = false, initializing, settings, links, namespace, service, credentialFlight;
     const stop = new AbortController();

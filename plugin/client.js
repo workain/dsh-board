@@ -13,6 +13,8 @@ window.__ModuleLoader__.load({
       issueAddSession: 'Add session', issueCancelAddSession: 'Cancel adding a session', issueUnlinkSession: 'Unlink session', issueConfirmUnlinkSession: 'Unlink this session from the issue?',
       issueEditComment: 'Edit comment', issueSaveCommentEdit: 'Save comment edit', issueEditCommentText: 'Comment text', issueDiscardCommentConflict: 'Discard edited comment and reload', issueCommentVersionUnavailable: 'Editing is unavailable because the comment version is unknown.', issueCommentRaceWarning: 'The version check before the remote request is best-effort, not atomic. This edit can overwrite a concurrent change.', issueEditedCommentMissing: 'The comment being edited is not in this partial result; the draft is retained.',
       sessionCardOpen: 'Open linked tasks', sessionCardTitle: 'Linked tasks', sessionCardBoard: 'Open full board to edit', sessionCardReadOnly: 'This view is read-only. Open the full board to edit. Access changes may not appear immediately.', sessionCardLocalHistory: 'Local links are historical and do not record workspace incarnation; verify them on the full board.', sessionCardNoLocal: 'No linked local tasks found.', trackerLocal: 'Local tasks', sessionCardPartial: 'Linked issues are a partial result; other links may exist.', sessionCardScanError: 'Some boards could not be checked.', sessionCardNoLinks: 'No linked issues found.', sessionCardNoLinksPartial: 'No linked issues found in this partial result.', sessionCardCurrentSession: 'Open current session', trackerNoBoardsSelected: 'No Tracker boards are selected.', sessionCardChoose: 'Choose a linked issue', sessionCardSelect: 'Select an issue',
+      trackerUnattended: 'Allow main session agents to create Tracker tasks without approval', trackerUnattendedWarning: 'Enable autonomous Tracker task creation for this workspace under the current Tracker account? Main (root) session agents can create tasks without per-task confirmation, even in full access mode. Model behavior or untrusted content can cause writes, including to other queues. Tracker access controls still apply. Dependent child agents are not allowed.', trackerUnattendedSaved: 'Task creation permission updated.', trackerUnattendedInactive: 'This saved permission is inactive for the current Tracker account. Disable it, or confirm the board selection before enabling access.',
+      trackerLocalPermissionRead: 'Check saved task creation permission locally', trackerLocalPermissionInfo: 'This check does not contact Tracker or verify account access. It can only turn the saved permission off.', trackerLocalPermissionOn: 'A saved permission exists for this workspace.', trackerLocalPermissionOff: 'No saved permission exists for this workspace.', trackerLocalPermissionRevoke: 'Turn off saved permission', trackerLocalPermissionError: 'Could not check or update the saved permission. Reload it explicitly before trying again.', trackerLocalPermissionUnknown: 'The result is unknown. Check the saved permission again before taking further action.',
       trackerReviewDraft: 'I reviewed the refreshed board list and my selection.', trackerUpdatedAt: 'Last successful partial update:',
       trackerConfirmPrevious: 'Confirm previous selection', trackerConfirmPreviousWarning: 'Confirm these exact saved board IDs for this workspace under the current Tracker account? The account identity used before restart is unknown; it may be different. No other boards will be selected.',
       panel: 'Board', workspace: 'Workspace', chooseWorkspace: 'Choose a workspace', board: 'Board',
@@ -49,6 +51,8 @@ window.__ModuleLoader__.load({
       issueAddSession: 'Добавить сессию', issueCancelAddSession: 'Отмена добавления сессии', issueUnlinkSession: 'Отвязать сессию', issueConfirmUnlinkSession: 'Отвязать эту сессию от задачи?',
       issueEditComment: 'Изменить комментарий', issueSaveCommentEdit: 'Сохранить изменение комментария', issueEditCommentText: 'Текст комментария', issueDiscardCommentConflict: 'Отменить изменение комментария и обновить', issueCommentVersionUnavailable: 'Редактирование недоступно: версия комментария неизвестна.', issueCommentRaceWarning: 'Проверка версии перед удалённым запросом выполняется по возможности и не атомарна. Изменение может перезаписать параллельную правку.', issueEditedCommentMissing: 'Редактируемый комментарий отсутствует в частичном списке; черновик сохранён.',
       sessionCardOpen: 'Открыть связанные задачи', sessionCardTitle: 'Связанные задачи', sessionCardBoard: 'Открыть доску для редактирования', sessionCardReadOnly: 'Просмотр без редактирования. Для изменений откройте доску. Изменения доступа могут появляться не сразу.', sessionCardLocalHistory: 'Локальные связи не хранят версию рабочего пространства; проверьте их на доске.', sessionCardNoLocal: 'Связанные локальные задачи не найдены.', trackerLocal: 'Локальные задачи', sessionCardPartial: 'Список связанных задач может быть неполным.', sessionCardScanError: 'Некоторые доски не удалось проверить.', sessionCardNoLinks: 'Связанные задачи не найдены.', sessionCardNoLinksPartial: 'В частичном списке связанные задачи не найдены.', sessionCardCurrentSession: 'Открыть текущую сессию', trackerNoBoardsSelected: 'Доски Трекера не выбраны.', sessionCardChoose: 'Выберите связанную задачу', sessionCardSelect: 'Выберите задачу',
+      trackerUnattended: 'Разрешить агентам основных сессий создавать задачи Трекера без подтверждения', trackerUnattendedWarning: 'Разрешить автономное создание задач Трекера для этого пространства в текущем аккаунте Трекера? Агенты основных (корневых) сессий смогут создавать задачи без отдельного подтверждения, в том числе в режиме полного доступа. Поведение модели или недоверенный контент могут вызвать запись, в том числе в другие очереди. Права доступа Трекера продолжают действовать. Дочерним агентам это не разрешено.', trackerUnattendedSaved: 'Разрешение на создание задач обновлено.', trackerUnattendedInactive: 'Сохранённое разрешение не действует для текущего аккаунта Трекера. Отключите его или подтвердите выбор досок перед включением доступа.',
+      trackerLocalPermissionRead: 'Проверить сохранённое разрешение локально', trackerLocalPermissionInfo: 'Проверка не обращается к Трекеру и не проверяет доступ аккаунта. Здесь можно только отключить сохранённое разрешение.', trackerLocalPermissionOn: 'Для этого пространства сохранено разрешение.', trackerLocalPermissionOff: 'Для этого пространства разрешение не сохранено.', trackerLocalPermissionRevoke: 'Отключить сохранённое разрешение', trackerLocalPermissionError: 'Не удалось проверить или изменить разрешение. Перед повторной попыткой загрузите его явно.', trackerLocalPermissionUnknown: 'Результат неизвестен. Снова проверьте сохранённое разрешение перед дальнейшими действиями.',
       trackerReviewDraft: 'Я проверил обновлённый список досок и свой выбор.', trackerUpdatedAt: 'Последнее успешное частичное обновление:',
       trackerConfirmPrevious: 'Подтвердить прежний выбор', trackerConfirmPreviousWarning: 'Подтвердить именно эти сохранённые ID досок для этого рабочего пространства в текущем аккаунте Трекера? После перезапуска неизвестно, совпадает ли текущий аккаунт с прежним. Другие доски выбраны не будут.',
       panel: 'Доска', workspace: 'Рабочее пространство', chooseWorkspace: 'Выберите рабочее пространство', board: 'Доска',
@@ -132,7 +136,7 @@ window.__ModuleLoader__.load({
     }
     // Local drafts outlive Page mounts; Tracker data is invalidated at each connection boundary.
     function emptyTracker(generation, open = false) {
-      return { open, settings: null, busy: false, mutating: false, error: '', notice: '', orgType: 'cloud', listing: null, listingStarted: 0, pickerWorkspace: '', picked: [], draftWorkspace: '', draftPicked: [], reviewRequired: false, board: null, boardLinks: null, boardUpdatedAt: null, incarnations: {}, generation };
+      return { open, settings: null, busy: false, mutating: false, error: '', notice: '', localPermission: null, localPermissionBusy: false, localPermissionError: '', orgType: 'cloud', listing: null, listingStarted: 0, pickerWorkspace: '', picked: [], draftWorkspace: '', draftPicked: [], reviewRequired: false, board: null, boardLinks: null, boardUpdatedAt: null, incarnations: {}, generation };
     }
     const memory = {
       snapshot: null, workspaceId: '', boardId: '', showContext: false, contextSessionId: '',
@@ -145,6 +149,9 @@ window.__ModuleLoader__.load({
       memory.listeners.forEach((listener) => listener());
     }
     let privacyEpoch = 0, trackerMutationPending = false, issueMutationPending = false, boardLinksGeneration = 0;
+    // Unlike UI loading state, this survives invalidation and remount until the
+    // underlying foreground settings request actually settles.
+    let trackerReadInFlight = null;
     // The currently visible loading indicator belongs to one foreground GET only.
     let localLoadOwner = null;
     function invalidateLocalLoad() {
@@ -225,8 +232,13 @@ window.__ModuleLoader__.load({
     function trackerSettings(value) {
       if (!value || !Number.isSafeInteger(value.revision) || value.revision < 0 || typeof value.configured !== 'boolean' || !value.workspaces || typeof value.workspaces !== 'object' || Array.isArray(value.workspaces) || (value.orgType !== null && !['cloud', 'org'].includes(value.orgType)) || (value.needsReselect !== undefined && (!Array.isArray(value.needsReselect) || value.needsReselect.some((id) => typeof id !== 'string')))) throw new Error('invalid response');
       for (const ids of Object.values(value.workspaces)) if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string')) throw new Error('invalid response');
+      const unattended = value.unattendedIssueCreation, stored = value.unattendedIssueCreationStored;
+      for (const map of [unattended, stored]) if (map !== undefined && (!map || typeof map !== 'object' || Array.isArray(map) || Object.values(map).some(enabled => typeof enabled !== 'boolean'))) throw new Error('invalid response');
+      // An old service has neither projection. A partial projection is ambiguous.
+      if ((unattended === undefined) !== (stored === undefined)) throw new Error('invalid response');
+      if (unattended && Object.keys(unattended).some(id => unattended[id] === true && stored[id] !== true)) throw new Error('invalid response');
       // Missing live-binding evidence must never be interpreted as authorization.
-      return { revision: value.revision, configured: value.configured, orgType: value.orgType, workspaces: value.workspaces, needsReselect: value.needsReselect || Object.keys(value.workspaces) };
+      return { revision: value.revision, configured: value.configured, orgType: value.orgType, workspaces: value.workspaces, unattendedIssueCreation: unattended || {}, unattendedIssueCreationStored: stored || {}, needsReselect: value.needsReselect || Object.keys(value.workspaces) };
     }
     function trackerListing(value) {
       if (!value || !Array.isArray(value.boards) || typeof value.complete !== 'boolean' || value.boards.some((board) => !board || typeof board.id !== 'string' || typeof board.name !== 'string') || new Set(value.boards.map((board) => board.id)).size !== value.boards.length) throw new Error('invalid response');
@@ -1926,7 +1938,7 @@ function createSessionSender({ sessions, validateSession }) {
           const draftWorkspace = current.pickerWorkspace || current.draftWorkspace;
           const draftPicked = current.pickerWorkspace ? [...current.picked] : current.draftPicked;
           if (memory.issue) { const writing = memory.issue.pending && !memory.issue.preflight && !memory.issue.sendOwner; if (writing) unknownIssues.add(issueUnknownKey(memory.issue)); memory.issue = { ...memory.issue, available: false, loading: false, unknown: memory.issue.unknown || writing, error: writing ? 'issueUnknown' : memory.issue.error, generation: memory.issue.generation + 1 }; }
-          updateTracker({ settings: null, incarnations: {}, board: null, boardLinks: null, boardUpdatedAt: null, listing: null, pickerWorkspace: '', draftWorkspace, draftPicked, draftIncarnation: current.draftIncarnation || current.incarnations[draftWorkspace], reviewRequired: Boolean(draftWorkspace) });
+          updateTracker({ settings: null, localPermission: null, localPermissionBusy: false, localPermissionError: '', incarnations: {}, board: null, boardLinks: null, boardUpdatedAt: null, listing: null, pickerWorkspace: '', draftWorkspace, draftPicked, draftIncarnation: current.draftIncarnation || current.incarnations[draftWorkspace], reviewRequired: Boolean(draftWorkspace) });
         };
         const drain = async () => {
           if (!alive || running || !queued || !active() || !connectionSource.getSnapshot() || memory.tracker.busy) return;
@@ -2001,17 +2013,77 @@ function createSessionSender({ sessions, validateSession }) {
         if (writing) unknownIssues.add(issueUnknownKey(issue));
         updateMemory({ issue: { ...issue, available: false, loading: false, generation: issue.generation + 1, unknown: issue.unknown || writing, error: writing ? 'issueUnknown' : issue.error } });
       }
+      function localPermissionSnapshot(value) {
+        const map = value?.unattendedIssueCreationStored;
+        if (!value || !Number.isSafeInteger(value.revision) || value.revision < 0 || !map || typeof map !== 'object' || Array.isArray(map) || Object.values(map).some(enabled => typeof enabled !== 'boolean')) throw new Error('invalid response');
+        return { revision: value.revision, stored: map };
+      }
+      async function localPermissionRead() {
+        const current = memory.tracker, target = memory.workspaceId, connectionId = connectionSource.getSnapshot()?.id;
+        const incarnation = workspaceIncarnation(target), epoch = privacyEpoch, generation = current.generation;
+        if (!current.open || !target || !incarnation || !trackerActive() || connectionId === undefined || current.localPermissionBusy || trackerMutationPending || issueMutationPending || current.settings) return;
+        const owner = {};
+        updateTracker({ localPermission: null, localPermissionBusy: owner, localPermissionError: '' });
+        const accepts = () => memory.tracker.localPermissionBusy === owner && memory.tracker.open && !memory.tracker.settings && memory.workspaceId === target && workspaceIncarnation(target) === incarnation && validPrivateRequest(generation, connectionId, epoch);
+        try {
+          let timer;
+          const result = await Promise.race([transport.trackerCommand({ op: 'configuration.unattendedRead' }), new Promise((_, reject) => { timer = window.setTimeout(() => reject(new Error('read timeout')), 15000); })]).finally(() => window.clearTimeout(timer));
+          const snapshot = localPermissionSnapshot(result);
+          if (accepts()) updateTracker({ localPermission: { workspaceId: target, incarnation, revision: snapshot.revision, enabled: snapshot.stored[target] === true }, localPermissionBusy: false });
+        } catch { if (accepts()) updateTracker({ localPermission: null, localPermissionBusy: false, localPermissionError: 'trackerLocalPermissionError' }); }
+        finally { if (memory.tracker.localPermissionBusy === owner) updateTracker({ localPermissionBusy: false }); }
+      }
+      async function revokeLocalPermission() {
+        const current = memory.tracker, permission = current.localPermission, target = memory.workspaceId;
+        const connectionId = connectionSource.getSnapshot()?.id;
+        if (!current.open || current.settings || current.localPermissionBusy || trackerMutationPending || issueMutationPending || !trackerActive() || connectionId === undefined || !permission?.enabled || permission.workspaceId !== target || workspaceIncarnation(target) !== permission.incarnation) return;
+        // Invalidate all private issue surfaces and fence the outstanding Tracker
+        // GET before dispatch; retain unknown-write guards when discarding drafts.
+        const generation = current.generation + 1, owner = {}, epoch = ++privacyEpoch;
+        trackerMutationPending = true;
+        discardTrackerIssue();
+        for (const holder of sessionIssueStores.values()) {
+          const issue = holder.memory.issue;
+          if (issue && ((issue.pending && !issue.preflight && !issue.sendOwner && !issue.confirmedWrite) || issue.unknown)) unknownIssues.add(issueUnknownKey(issue));
+          holder.epoch++;
+        }
+        sessionIssueStores.clear(); updateUnload();
+        updateTracker({ generation, busy: false, settings: null, board: null, boardLinks: null, boardUpdatedAt: null, localPermission: null, localPermissionBusy: owner, localPermissionError: '' });
+        const accepts = () => memory.tracker.localPermissionBusy === owner && memory.tracker.open && memory.workspaceId === target && workspaceIncarnation(target) === permission.incarnation && validPrivateRequest(generation, connectionId, epoch);
+        try {
+          let timer;
+          const receipt = await Promise.race([transport.trackerCommand({ op: 'configuration.setUnattendedIssueCreation', workspaceId: target, expectedRevision: permission.revision, enabled: false }), new Promise((_, reject) => { timer = window.setTimeout(() => reject(new Error('write timeout')), 15000); })]).finally(() => window.clearTimeout(timer));
+          if (!accepts()) return;
+          if (!receipt || receipt.revision !== permission.revision + 1 || receipt.workspaceId !== target || receipt.enabled !== false) throw new Error('invalid receipt');
+          let readTimer;
+          const result = await Promise.race([transport.trackerCommand({ op: 'configuration.unattendedRead' }), new Promise((_, reject) => { readTimer = window.setTimeout(() => reject(new Error('read timeout')), 15000); })]).finally(() => window.clearTimeout(readTimer));
+          const snapshot = localPermissionSnapshot(result);
+          if (!accepts()) return;
+          if (snapshot.revision !== receipt.revision || snapshot.stored[target] === true) throw new Error('invalid readback');
+          updateTracker({ localPermission: { ...permission, revision: snapshot.revision, enabled: false }, localPermissionBusy: false });
+        } catch (error) {
+          if (accepts()) updateTracker({ localPermission: null, localPermissionBusy: false, localPermissionError: error?.status >= 400 && error?.status < 500 ? 'trackerLocalPermissionError' : 'trackerLocalPermissionUnknown' });
+        } finally {
+          trackerMutationPending = false;
+          if (memory.tracker.localPermissionBusy === owner) updateTracker({ localPermission: null, localPermissionBusy: false, localPermissionError: 'trackerLocalPermissionUnknown' });
+        }
+      }
       async function loadTracker(accepts = () => document.visibilityState !== 'hidden' && (!panelSource || panelSource.getSnapshot()?.activePanelId === PANEL)) {
         const connectionId = connectionSource.getSnapshot()?.id;
-        if (memory.tracker.busy || connectionId === undefined || !accepts()) return;
+        if (memory.tracker.busy || memory.tracker.localPermissionBusy || trackerMutationPending || trackerReadInFlight || connectionId === undefined || !accepts()) return;
         const generation = memory.tracker.generation + 1, incarnations = workspaceIncarnations(), epoch = privacyEpoch;
         const target = memory.provider === 'tracker' && !memory.overview && !memory.showContext ? memory.workspaceId : '', id = memory.boardId;
         const draftWorkspace = memory.tracker.pickerWorkspace || memory.tracker.draftWorkspace;
         const draftPicked = memory.tracker.pickerWorkspace ? [...memory.tracker.picked] : memory.tracker.draftPicked;
+        const owner = {};
+        trackerReadInFlight = owner;
         suspendIssueForRefresh();
         updateTracker({ busy: true, error: '', notice: '', settings: null, pickerWorkspace: '', listing: null, draftWorkspace, draftPicked, reviewRequired: Boolean(draftWorkspace), board: null, boardLinks: null, boardUpdatedAt: null, incarnations: {}, generation });
         try {
-          const settings = trackerSettings(await transport.trackerRead());
+          let response;
+          try { response = await transport.trackerRead(); }
+          finally { if (trackerReadInFlight === owner) { trackerReadInFlight = null; updateMemory({}); } }
+          const settings = trackerSettings(response);
           if (!validPrivateRequest(generation, connectionId, epoch) || !accepts()) return;
           discardReselectedIssue(settings);
           updateTracker({ settings, orgType: settings.orgType || 'cloud', incarnations, board: null });
@@ -2143,6 +2215,37 @@ function createSessionSender({ sessions, validateSession }) {
           }
         }
       }
+      async function setUnattendedIssueCreation(enabled, target) {
+        const current = memory.tracker, settings = current.settings;
+        const connectionId = connectionSource.getSnapshot()?.id, incarnation = current.incarnations[target], confirmedEpoch = privacyEpoch;
+        if (typeof enabled !== 'boolean' || current.busy || issueMutationPending || trackerMutationPending || !trackerActive() || !current.open || connectionId === undefined || !settings?.configured || memory.workspaceId !== target || !currentWorkspace(target, incarnation) || (settings.unattendedIssueCreationStored[target] === true) === enabled || (enabled && (!settings.workspaces[target]?.length || settings.needsReselect.includes(target)))) return;
+        const revision = settings.revision;
+        const title = workspacesSource.getSnapshot().items.find(item => item.workspaceId === target)?.title;
+        if (enabled && !window.confirm(t('trackerUnattendedWarning') + '\n' + t('workspace') + ': ' + (title || target) + ' (' + target + ')')) return;
+        if (issueMutationPending || trackerMutationPending || memory.tracker !== current || !memory.tracker.open || memory.workspaceId !== target || !validPrivateRequest(current.generation, connectionId, confirmedEpoch) || !currentWorkspace(target, incarnation)) return;
+        const generation = current.generation + 1, epoch = privacyEpoch;
+        trackerMutationPending = true;
+        updateTracker({ busy: true, mutating: true, error: '', notice: '', settings: null, generation });
+        const accepts = () => validPrivateRequest(generation, connectionId, epoch) && memory.workspaceId === target && currentWorkspace(target, incarnation);
+        try {
+          let timer;
+          const receipt = await Promise.race([transport.trackerCommand({ op: 'configuration.setUnattendedIssueCreation', workspaceId: target, expectedRevision: revision, enabled }), new Promise((_, reject) => { timer = window.setTimeout(() => reject(new Error('write timeout')), 15000); })]).finally(() => window.clearTimeout(timer));
+          if (!accepts()) return;
+          if (!receipt || receipt.revision !== revision + 1 || receipt.workspaceId !== target || receipt.enabled !== enabled) throw new Error('invalid receipt');
+          let readTimer;
+          const fresh = trackerSettings(await Promise.race([transport.trackerRead(), new Promise((_, reject) => { readTimer = window.setTimeout(() => reject(new Error('readback timeout')), 15000); })]).finally(() => window.clearTimeout(readTimer)));
+          if (!accepts()) return;
+          if (fresh.revision !== receipt.revision || !fresh.configured || (enabled && (fresh.needsReselect.includes(target) || !fresh.workspaces[target]?.length)) || (fresh.unattendedIssueCreation[target] === true) !== enabled || (fresh.unattendedIssueCreationStored[target] === true) !== enabled) throw new Error('invalid readback');
+          discardReselectedIssue(fresh);
+          updateTracker({ settings: fresh, incarnations: workspaceIncarnations(), notice: 'trackerUnattendedSaved' });
+        } catch (err) {
+          if (accepts()) updateTracker({ settings: null, notice: '', error: err.status >= 400 && err.status < 500 ? trackerError(err) : 'trackerUncertain' });
+        } finally {
+          trackerMutationPending = false;
+          if (validTrackerRequest(generation, connectionId)) updateTracker({ busy: false, mutating: false, ...(!accepts() ? { settings: null, error: 'trackerUncertain' } : {}) });
+          else if (memory.tracker.mutating) updateTracker({ busy: false, mutating: false, settings: null, error: 'trackerUncertain' });
+        }
+      }
       async function reselectTrackerBoards() {
         const current = memory.tracker, target = memory.workspaceId, settings = current.settings;
         const connectionId = connectionSource.getSnapshot()?.id, incarnation = current.incarnations[target], confirmedEpoch = privacyEpoch;
@@ -2164,10 +2267,10 @@ function createSessionSender({ sessions, validateSession }) {
         try {
           const receipt = await transport.trackerCommand({ op: 'workspace.reselect', workspaceId: target, expectedRevision: revision, boardIds });
           if (!accepts()) return;
-          if (!receipt || receipt.revision !== revision || receipt.workspaceId !== target || !Array.isArray(receipt.boardIds) || JSON.stringify(receipt.boardIds) !== JSON.stringify(boardIds)) throw new Error('invalid receipt');
+          if (!receipt || ![revision, revision + 1].includes(receipt.revision) || receipt.workspaceId !== target || !Array.isArray(receipt.boardIds) || JSON.stringify(receipt.boardIds) !== JSON.stringify(boardIds)) throw new Error('invalid receipt');
           const fresh = trackerSettings(await transport.trackerRead());
           if (!accepts()) return;
-          if (fresh.revision !== revision || !fresh.configured || fresh.needsReselect.includes(target) || JSON.stringify(fresh.workspaces[target]) !== JSON.stringify(boardIds)) throw new Error('invalid readback');
+          if (fresh.revision !== receipt.revision || !fresh.configured || fresh.needsReselect.includes(target) || JSON.stringify(fresh.workspaces[target]) !== JSON.stringify(boardIds)) throw new Error('invalid readback');
           discardReselectedIssue(fresh);
           updateTracker({ settings: fresh, incarnations: workspaceIncarnations(), notice: 'trackerSelectionSaved' });
           const id = memory.boardId;
@@ -2459,11 +2562,22 @@ function createSessionSender({ sessions, validateSession }) {
         tracker.open && h('section', { className: 'dsh-board-form', 'aria-label': t('trackerSettings') },
           h('h2', null, t('trackerSettings')), h('p', { className: 'dsh-board-muted' }, t('trackerRefs')),
           tracker.busy && h('p', { role: 'status' }, t('loading')),
+          connection && !tracker.settings && workspaceId && workspaceReady && h(React.Fragment, null,
+            h('p', { className: 'dsh-board-muted' }, t('trackerLocalPermissionInfo')),
+            h('button', { type: 'button', disabled: Boolean(tracker.localPermissionBusy) || trackerMutationPending || !workspaceIncarnation(workspaceId), onClick: localPermissionRead }, t('trackerLocalPermissionRead')),
+            tracker.localPermissionBusy && h('p', { role: 'status' }, t('loading')),
+            tracker.localPermissionError && h('p', { role: 'alert' }, t(tracker.localPermissionError)),
+            tracker.localPermission?.workspaceId === workspaceId && workspaceIncarnation(workspaceId) === tracker.localPermission.incarnation && h(React.Fragment, null,
+              h('p', { role: 'status' }, t(tracker.localPermission.enabled ? 'trackerLocalPermissionOn' : 'trackerLocalPermissionOff'), ' ', workspace?.title || workspaceId, ' (', workspaceId, ')'),
+              tracker.localPermission.enabled && h('button', { type: 'button', disabled: Boolean(tracker.localPermissionBusy) || trackerMutationPending, onClick: revokeLocalPermission }, t('trackerLocalPermissionRevoke')))),
           connection && tracker.settings && h(React.Fragment, null,
             h('p', { className: 'dsh-board-muted' }, t(tracker.settings.configured ? 'trackerConfigured' : 'trackerNotConfigured')),
             h('label', null, t('trackerOrg'), h('select', { value: tracker.orgType, disabled: tracker.busy, onChange: (event) => updateTracker({ orgType: event.target.value }) }, h('option', { value: 'cloud' }, 'cloud'), h('option', { value: 'org' }, 'org'))),
             h('div', { className: 'dsh-board-row' }, h('button', { type: 'button', disabled: tracker.busy, onClick: configureTracker }, t('trackerConfiguring')), h('button', { type: 'button', disabled: tracker.busy, onClick: loadTracker }, t('trackerReload'))),
             tracker.settings.configured && workspaceId && workspaceReady && h(React.Fragment, null,
+              h('label', null, h('input', { type: 'checkbox', 'aria-label': t('trackerUnattended'), checked: tracker.settings.unattendedIssueCreationStored[workspaceId] === true, disabled: tracker.busy || !currentWorkspace(workspaceId) || (tracker.settings.unattendedIssueCreationStored[workspaceId] !== true && (!tracker.settings.workspaces[workspaceId]?.length || tracker.settings.needsReselect.includes(workspaceId))), onChange: (event) => setUnattendedIssueCreation(event.target.checked, workspaceId) }), t('trackerUnattended')),
+              tracker.settings.unattendedIssueCreationStored[workspaceId] === true && tracker.settings.unattendedIssueCreation[workspaceId] !== true && h('p', { className: 'dsh-board-alert', role: 'status' }, t('trackerUnattendedInactive')),
+              h('p', { className: 'dsh-board-muted' }, t('trackerUnattendedWarning')),
               h('h3', null, t('trackerChoose'), ' — ', workspace?.title || workspaceId),
               h('p', { className: 'dsh-board-muted' }, t('trackerPickerHint')),
               tracker.settings.needsReselect.includes(workspaceId) && h('p', { className: 'dsh-board-alert', role: 'status' }, t('trackerReselect')),
