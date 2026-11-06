@@ -136,6 +136,124 @@ test('mock transactions: mutations, conflict, persistence, rollback and projecti
   assert.equal(updated.boards[0].statuses.length, 2); assert.equal(updated.boards[1].statuses.length, 2); await reopened.close();
 });
 
+test('owner board.delete is atomic, exact and preserves unrelated boards and links', async t => {
+  const { db } = fixture(t), store = openBoardStore({ path: db }), s = createBoardService(store, registry());
+  const { b, c, t: taskId } = await setup(s);
+  let snap = await s.mutate(cmd(3, 'link.set', { boardId: b, taskId, sessionId: 's', linked: true }));
+  snap = await s.mutate(cmd(4, 'board.create', { name: 'Keep' }));
+  const keep = snap.boards.find(board => board.id !== b).id;
+  snap = await s.mutate(cmd(5, 'status.save', { boardId: keep, status: { name: 'Keep status' } }));
+  const keepStatus = snap.boards.find(board => board.id === keep).statuses[0].id;
+  snap = await s.mutate(cmd(6, 'task.save', { boardId: keep, task: { title: 'Keep task', description: '', statusId: keepStatus } }));
+  const keepTask = snap.boards.find(board => board.id === keep).tasks[0].id;
+  snap = await s.mutate(cmd(7, 'link.set', { boardId: keep, taskId: keepTask, sessionId: 's', linked: true }));
+  // Set the target as default and add hidden data to prove the identity covers
+  // more than the visible projection; this is a synthetic fixture, not a live DB.
+  store.transaction(8, current => {
+    current.state = core.setDefaultBoard(current.state, 'w', b);
+    current.state = core.createIteration(current.state, b, { id: 'iteration', name: 'Hidden iteration' });
+    current.state = core.createComment(current.state, b, taskId, { id: 'comment', body: 'Hidden comment' });
+    current.revision++;
+    return current;
+  });
+  snap = await s.read();
+  const target = snap.boards.find(board => board.id === b), identity = target.deletionIdentity;
+  assert.deepEqual({ ...identity, digest: '<digest>' }, { digest: '<digest>', taskCount: 1, linkCount: 1, statusCount: 1 });
+  assert.match(identity.digest, /^[0-9a-f]{64}$/);
+  const command = cmd(9, 'board.delete', { boardId: b, expectedIdentity: identity });
+  const before = store.read(), oldKeep = structuredClone(before.state.boards.find(board => board.id === keep));
+  const response = await s.fetch(post(command));
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.equal(result.revision, 10); assert.deepEqual(result.boards.map(board => board.id), [keep]);
+  const after = store.read();
+  assert.deepEqual(after.state.boards, [oldKeep]);
+  assert.deepEqual(after.state.workspaces, [{ id: 'w', boardIds: [keep], defaultBoardId: null }]);
+  assert.deepEqual(after.links, [{ boardId: keep, taskId: keepTask, sessionId: 's' }]);
+  assert.equal((await s.fetch(post(command))).status, 409);
+  await s.close();
+  const reopened = openBoardStore({ path: db }); assert.deepEqual(reopened.read(), after); reopened.close();
+});
+
+test('board.delete rejects malformed, stale, changed, unauthorized and shared targets', async () => {
+  const store = mockStore(), s = createBoardService(store, registry()), { b } = await setup(s);
+  const snap = await s.read(), identity = snap.boards[0].deletionIdentity;
+  const command = cmd(3, 'board.delete', { boardId: b, expectedIdentity: identity });
+  const invalids = [
+    { ...command, expectedIdentity: undefined }, { ...command, expectedIdentity: {} },
+    { ...command, expectedIdentity: { ...identity, extra: 1 } },
+    { ...command, expectedIdentity: { ...identity, digest: 'A'.repeat(64) } },
+    { ...command, expectedIdentity: { ...identity, taskCount: -1 } },
+    { ...command, expectedIdentity: { ...identity, linkCount: 0.5 } },
+    { ...command, extra: true }, { ...command, expectedRevision: null },
+    { ...command, boardId: ' b' },
+  ];
+  for (const bad of invalids) assert.equal((await s.fetch(post(bad))).status, 400);
+  for (const [bad, status, code] of [
+    [{ ...command, expectedRevision: 2 }, 409, 'conflict'],
+    [{ ...command, workspaceId: 'missing' }, 404, 'workspace_not_found'],
+    [{ ...command, workspaceId: 'w2' }, 404, 'not_found'],
+    [{ ...command, boardId: 'missing' }, 404, 'not_found'],
+    [{ ...command, expectedIdentity: { ...identity, taskCount: 0 } }, 409, 'board_changed'],
+    [{ ...command, expectedIdentity: { ...identity, digest: '0'.repeat(64) } }, 409, 'board_changed'],
+  ]) {
+    const response = await s.fetch(post(bad)); assert.equal(response.status, status); assert.equal((await response.json()).error.code, code);
+  }
+  assert.equal(store.saved.revision, 3);
+  store.fail(true); assert.equal((await s.fetch(post(command))).status, 500); store.fail(false);
+  assert.equal(store.saved.revision, 3);
+  // Shared board assignment is not authorization to destroy another workspace's view.
+  const shared = store.saved; shared.state = core.assignBoard(core.ensureWorkspace(shared.state, 'w2'), 'w2', b);
+  const sharedStore = mockStore(shared), sharedService = createBoardService(sharedStore, registry());
+  const sharedIdentity = (await sharedService.read()).boards[0].deletionIdentity;
+  const result = await sharedService.fetch(post({ ...command, expectedIdentity: sharedIdentity }));
+  assert.equal(result.status, 409); assert.equal((await result.json()).error.code, 'board_shared');
+  assert.deepEqual(sharedStore.saved, shared);
+  await s.close(); await sharedService.close();
+});
+
+test('board.delete identity detects hidden data and membership drift even at the same revision', async () => {
+  const baseStore = mockStore(), base = createBoardService(baseStore, registry()), { b, t: taskId } = await setup(base);
+  const identity = (await base.read()).boards[0].deletionIdentity, original = baseStore.saved;
+  const changes = [
+    state => core.createComment(state, b, taskId, { id: 'comment', body: 'new' }),
+    state => core.createIteration(state, b, { id: 'iteration', name: 'new' }),
+    state => core.setDefaultBoard(state, 'w', b),
+    state => core.assignBoard(core.ensureWorkspace(state, 'w2'), 'w2', b),
+  ];
+  for (const change of changes) {
+    const changed = structuredClone(original); changed.state = change(changed.state);
+    const store = mockStore(changed), s = createBoardService(store, registry());
+    const result = await s.fetch(post(cmd(3, 'board.delete', { boardId: b, expectedIdentity: identity })));
+    assert.equal(result.status, 409); assert.equal((await result.json()).error.code, 'board_changed');
+    assert.deepEqual(store.saved, changed); await s.close();
+  }
+  // Membership is rechecked after the store transaction begins.
+  const mutable = { allowed: true }, store = mockStore(original);
+  const s = createBoardService(store, { get: id => mutable.allowed ? registry().get(id) : undefined });
+  store.before(() => { mutable.allowed = false; });
+  const response = await s.fetch(post(cmd(3, 'board.delete', { boardId: b, expectedIdentity: identity })));
+  assert.equal(response.status, 404); assert.deepEqual(store.saved, original);
+  await base.close(); await s.close();
+});
+
+test('board.delete handles empty and large boards and snapshots queued command input', async () => {
+  const emptyStore = mockStore(), empty = createBoardService(emptyStore, registry());
+  let snap = await empty.mutate(cmd(0, 'board.create', { name: 'Empty' }));
+  const command = cmd(1, 'board.delete', { boardId: snap.boards[0].id, expectedIdentity: snap.boards[0].deletionIdentity });
+  assert.deepEqual({ ...command.expectedIdentity, digest: '<digest>' }, { digest: '<digest>', taskCount: 0, linkCount: 0, statusCount: 0 });
+  const blocker = empty.read(), pending = empty.mutate(command); command.boardId = 'changed'; command.expectedIdentity.taskCount = 100;
+  await blocker; snap = await pending; assert.equal(snap.revision, 2); assert.deepEqual(snap.boards, []); await empty.close();
+  const state = core.createState();
+  state.boards.push({ id: 'large', name: 'Large', archived: false, columns: [{ id: 'c', name: 'Status', archived: false }], iterations: [], tasks: Array.from({ length: 1000 }, (_, i) => ({ id: `t${i}`, title: `Task ${i}`, description: '', columnId: 'c', iterationId: null, assignee: null, labels: [], priority: null, comments: [] })) });
+  state.workspaces.push({ id: 'w', boardIds: ['large'], defaultBoardId: null });
+  const large = createBoardService(mockStore({ revision: 0, state, links: [] }), registry());
+  const largeSnap = await large.read(), largeIdentity = largeSnap.boards[0].deletionIdentity;
+  assert.equal(largeIdentity.taskCount, 1000);
+  assert.deepEqual((await large.mutate(cmd(0, 'board.delete', { boardId: 'large', expectedIdentity: largeIdentity }))).boards, []);
+  await large.close();
+});
+
 test('real SQLite: exact routes, direct approval and tool/API race across instances', async t => {
   const { dir } = fixture(t);
   await inHome(dir, async () => {

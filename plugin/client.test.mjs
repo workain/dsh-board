@@ -1265,6 +1265,132 @@ test('restart requires fresh list and explicit reselection; stale listing never 
   assert.equal(h.nodes('input').filter(n => n.props.type === 'checkbox').length, 0); h.unmount();
 });
 
+async function reselectReady(ids = ['101', '202']) {
+  const h = harness({ manualTracker: true }); h.mount(); await h.resolve(0, base());
+  await h.resolve(1, trackerSettings(4, true, { w: ids }, ['w']));
+  h.click('trackerConnect'); await h.resolve(2, trackerSettings(4, true, { w: ids }, ['w']));
+  h.change(h.nodes('select').find(n => n.children.some(c => c?.props?.value === 'w')), 'w');
+  return h;
+}
+
+test('owner reconfirms exactly the saved IDs without a listing and accepts unchanged revision', async () => {
+  const h = await reselectReady(['202', '101']);
+  try {
+    assert.ok(!h.nodes('button').some(n => n.props['aria-label']?.includes('tracker #')));
+    h.window.confirmResult = false; h.click('trackerConfirmPrevious');
+    assert.equal(h.requests.length, 3); assert.match(h.confirms[0], /trackerConfirmPreviousWarning/);
+    assert.match(h.confirms[0], /Workspace \(w\)/); assert.match(h.confirms[0], /\["202","101"\]/);
+    h.window.confirmResult = true; const click = h.button('trackerConfirmPrevious').props.onClick; click(); click();
+    assert.deepEqual(JSON.parse(h.requests[3].options.body), { op: 'workspace.reselect', workspaceId: 'w', expectedRevision: 4, boardIds: ['202', '101'] });
+    assert.equal(h.requests.length, 4);
+    await h.resolve(3, { revision: 4, workspaceId: 'w', boardIds: ['202', '101'] });
+    assert.equal(h.requests[4].options.method, 'GET'); assert.equal(h.requests[4].path, 'api/dsh-board.tracker');
+    await h.resolve(4, trackerSettings(4, true, { w: ['202', '101'] }));
+    assert.ok(h.tile('tracker #202 — Workspace — tracker')); assert.ok(h.tile('tracker #101 — Workspace — tracker'));
+    assert.equal(h.requests.length, 5); assert.ok(!h.nodes('button').some(n => h.text(n) === 'trackerConfirmPrevious'));
+  } finally { h.unmount(); }
+});
+
+test('reconfirm refreshes an already-open Tracker board after settings readback', async () => {
+  const h = harness({ manualTracker: true });
+  try {
+    h.mount(); await h.resolve(0, base()); await h.resolve(1, trackerSettings(4, true, { w: ['1'] }));
+    h.tile('tracker #1 — Workspace — tracker').props.onClick(); await h.resolve(2, trackerSettings(4, true, { w: ['1'] })); await h.resolve(3, trackerBoard);
+    h.click('trackerConnect'); await h.resolve(4, trackerSettings(4, true, { w: ['1'] }, ['w']));
+    h.click('trackerConfirmPrevious'); await h.resolve(5, { revision: 4, workspaceId: 'w', boardIds: ['1'] });
+    await h.resolve(6, trackerSettings(4, true, { w: ['1'] }));
+    assert.deepEqual(JSON.parse(h.requests[7].options.body), { op: 'board.read', workspaceId: 'w', boardId: '1', issueKeys: [] });
+    await h.resolve(7, trackerBoard); assert.equal(h.nodes('article').length, 3);
+  } finally { h.unmount(); }
+});
+
+test('reconfirm button requires nonempty saved IDs and needsReselect', async () => {
+  for (const [ids, needs] of [[[], ['w']], [undefined, ['w']], [['1'], []]]) {
+    const h = harness({ manualTracker: true });
+    try {
+      h.mount(); await h.resolve(0, base()); await h.resolve(1, trackerSettings(4, true, ids ? { w: ids } : {}, needs));
+      h.click('trackerConnect'); await h.resolve(2, trackerSettings(4, true, ids ? { w: ids } : {}, needs));
+      h.change(h.nodes('select').find(n => n.children.some(c => c?.props?.value === 'w')), 'w');
+      assert.ok(!h.nodes('button').some(n => h.text(n) === 'trackerConfirmPrevious')); assert.equal(h.requests.length, 3);
+    } finally { h.unmount(); }
+  }
+});
+
+test('reconfirm rejects stale handlers across workspace or account boundaries', async () => {
+  for (const cause of ['workspace', 'account', 'incarnation', 'hidden']) {
+    const h = await reselectReady();
+    try {
+      const click = h.button('trackerConfirmPrevious').props.onClick;
+      if (cause === 'workspace') h.change(h.nodes('select').find(n => n.children.some(c => c?.props?.value === 'w')), '');
+      if (cause === 'account') h.generation.set({ id: 2, host: { home: '/' } });
+      if (cause === 'incarnation') h.ws.set({ ...h.ws.getSnapshot(), items: [{ workspaceId: 'w', title: 'New', sessionIds: [], createdAt: 'new' }] });
+      if (cause === 'hidden') { h.document.visibilityState = 'hidden'; h.documentEvents.get('visibilitychange')(); }
+      click(); assert.ok(!h.requests.some(r => r.options.method === 'POST' && JSON.parse(r.options.body).op === 'workspace.reselect'), cause);
+    } finally { h.unmount(); }
+  }
+});
+
+test('reconfirm fences invalid receipts, readbacks and unknown results without retry', async () => {
+  for (const failure of ['wrong-ids', 'wrong-revision', 'wrong-workspace', 'readback-ids', 'readback-needs', 'readback-revision', 'readback-error', 'conflict', 'unknown']) {
+    const h = await reselectReady();
+    try {
+      h.click('trackerConfirmPrevious');
+      if (failure === 'unknown') { h.requests[3].reject(new Error('timeout')); await settle(); }
+      else if (failure === 'conflict') await h.resolve(3, { error: { code: 'conflict' } }, 409);
+      else {
+        await h.resolve(3, { revision: failure === 'wrong-revision' ? 5 : 4, workspaceId: failure === 'wrong-workspace' ? 'other' : 'w', boardIds: failure === 'wrong-ids' ? ['101'] : ['101', '202'] });
+        if (failure.startsWith('readback-')) {
+          if (failure === 'readback-error') await h.resolve(4, { error: { code: 'unavailable' } }, 503);
+          else await h.resolve(4, trackerSettings(failure === 'readback-revision' ? 5 : 4, true, { w: failure === 'readback-ids' ? ['101'] : ['101', '202'] }, failure === 'readback-needs' ? ['w'] : []));
+        }
+      }
+      assert.ok(!h.nodes('button').some(n => n.props['aria-label']?.includes('tracker #')), failure);
+      assert.ok(h.nodes('div').some(n => n.props.role === 'alert' && h.text(n) === (failure === 'conflict' ? 'trackerConflict' : 'trackerUncertain')), failure);
+      assert.equal(h.requests.filter(r => r.options.method === 'POST' && JSON.parse(r.options.body).op === 'workspace.reselect').length, 1, failure);
+      assert.ok(!h.requests.some(r => r.options.method === 'POST' && JSON.parse(r.options.body).op === 'boards.list'), failure);
+    } finally { h.unmount(); }
+  }
+});
+
+test('late reconfirm responses do not authorize a changed account or workspace incarnation', async () => {
+  for (const cause of ['account', 'incarnation', 'hidden', 'workspace']) {
+    const h = await reselectReady();
+    try {
+      h.click('trackerConfirmPrevious');
+      if (cause === 'account') h.generation.set({ id: 2, host: { home: '/' } });
+      if (cause === 'incarnation') h.ws.set({ ...h.ws.getSnapshot(), items: [{ workspaceId: 'w', title: 'New', sessionIds: [], createdAt: 'new' }] });
+      if (cause === 'hidden') { h.document.visibilityState = 'hidden'; h.documentEvents.get('visibilitychange')(); }
+      if (cause === 'workspace') h.change(h.nodes('select').find(n => n.children.some(c => c?.props?.value === 'w')), '');
+      h.nodes('main'); const count = h.requests.length;
+      await h.resolve(3, { revision: 4, workspaceId: 'w', boardIds: ['101', '202'] });
+      if (cause !== 'workspace') assert.equal(h.requests.length, count, cause);
+      assert.ok(!h.nodes('button').some(n => n.props['aria-label']?.includes('tracker #')), cause);
+      assert.equal(h.requests.filter(r => r.options.method === 'POST' && JSON.parse(r.options.body).op === 'workspace.reselect').length, 1);
+    } finally { h.unmount(); }
+  }
+});
+
+test('reconfirm retains local and board picker drafts', async () => {
+  const h = await reselectReady();
+  try {
+    h.click('trackerList'); await h.resolve(3, { boards: [{ id: '101', name: 'First' }, { id: '303', name: 'New' }], complete: false });
+    h.nodes('input').find(n => n.props.type === 'checkbox' && !n.props.checked).props.onChange({ target: { checked: true } });
+    h.click('trackerConfirmPrevious'); await h.resolve(4, { revision: 4, workspaceId: 'w', boardIds: ['101', '202'] });
+    await h.resolve(5, trackerSettings(4, true, { w: ['101', '202'] }));
+    h.click('trackerList'); await h.resolve(6, { boards: [{ id: '101', name: 'First' }, { id: '303', name: 'New' }], complete: false });
+    const checks = h.nodes('input').filter(n => n.props.type === 'checkbox');
+    assert.equal(checks[0].props.checked, true); assert.equal(checks[1].props.checked, true);
+    assert.ok(h.nodes('label').some(n => h.text(n) === 'trackerReviewDraft'));
+  } finally { h.unmount(); }
+  const local = harness({ manualTracker: true });
+  try {
+    local.mount(); await local.resolve(0, base()); await local.resolve(1, trackerSettings(4, true, { w: ['101'] }, ['w']));
+    await local.choose(); local.editDraft(); local.click('trackerConnect'); await local.resolve(2, trackerSettings(4, true, { w: ['101'] }, ['w']));
+    local.click('trackerConfirmPrevious'); await local.resolve(3, { revision: 4, workspaceId: 'w', boardIds: ['101'] }); await local.resolve(4, trackerSettings(4, true, { w: ['101'] }));
+    assert.equal(local.nodes('textarea')[0].props.value, '  first\n\nsecond\t ');
+  } finally { local.unmount(); }
+});
+
 test('Tracker service failure is isolated and local drafts survive settings', async () => {
   const h = harness({ manualTracker: true }); h.mount(); await h.resolve(0, base()); await h.choose(); h.editDraft(); h.click('trackerConnect'); await h.resolve(1, { error: { code: 'unavailable' } }, 503);
   assert.ok(h.nodes('div').some(n => n.props.role === 'alert' && h.text(n) === 'trackerError'));

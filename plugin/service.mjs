@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import * as core from './core.mjs';
 
 export const MAX_BODY_BYTES = 64 * 1024;
@@ -31,6 +31,16 @@ function validateAggregate(value) {
   }
   return value;
 }
+// Hash the full persisted board, its links, and its workspace assignments, not
+// the lossy UI projection. Array order is significant. The token is an opaque
+// content/version guard, not proof of owner authorization or a backup.
+function deletionIdentity(value, board) {
+  const assignments = value.state.workspaces.filter(w => w.boardIds.includes(board.id))
+    .map(w => ({ workspaceId: w.id, defaultBoard: w.defaultBoardId === board.id }));
+  const links = value.links.filter(link => link.boardId === board.id);
+  const digest = createHash('sha256').update(JSON.stringify({ board, assignments, links })).digest('hex');
+  return { digest, taskCount: board.tasks.length, linkCount: links.length, statusCount: board.columns.length };
+}
 function snapshot(value) {
   validateAggregate(value);
   const boards = [];
@@ -42,7 +52,8 @@ function snapshot(value) {
       const board = value.state.boards.find(b => b.id === boardId);
       const view = { id: board.id, workspaceId: workspace.id, name: board.name,
         statuses: board.columns.filter(c => !c.archived).map((c, position) => ({ id: c.id, name: c.name, position })),
-        tasks: board.tasks.map(t => ({ id: t.id, title: t.title, description: t.description, statusId: t.columnId, assignee: t.assignee })) };
+        tasks: board.tasks.map(t => ({ id: t.id, title: t.title, description: t.description, statusId: t.columnId, assignee: t.assignee })),
+        deletionIdentity: deletionIdentity(value, board) };
       bytes += Buffer.byteLength(JSON.stringify(view)) + 1;
       if (bytes > MAX_SNAPSHOT_BYTES) throw new InputError('too_large', 413);
       boards.push(view);
@@ -51,11 +62,12 @@ function snapshot(value) {
   return { revision: value.revision, boards, links: structuredClone(value.links) };
 }
 function commandShape(c) {
-  shape(c, ['expectedRevision', 'op', 'workspaceId', 'boardId', 'name', 'status', 'task', 'taskId', 'sessionId', 'linked'], ['expectedRevision', 'op', 'workspaceId']);
+  shape(c, ['expectedRevision', 'op', 'workspaceId', 'boardId', 'name', 'status', 'task', 'taskId', 'sessionId', 'linked', 'expectedIdentity'], ['expectedRevision', 'op', 'workspaceId']);
   if (!Number.isSafeInteger(c.expectedRevision) || c.expectedRevision < 0) invalid();
   id(c.workspaceId);
   const fields = {
     'board.create': ['expectedRevision', 'op', 'workspaceId', 'name'],
+    'board.delete': ['expectedRevision', 'op', 'workspaceId', 'boardId', 'expectedIdentity'],
     'status.save': ['expectedRevision', 'op', 'workspaceId', 'boardId', 'status'],
     'task.save': ['expectedRevision', 'op', 'workspaceId', 'boardId', 'task'],
     'link.set': ['expectedRevision', 'op', 'workspaceId', 'boardId', 'taskId', 'sessionId', 'linked'],
@@ -64,6 +76,13 @@ function commandShape(c) {
   shape(c, fields);
   if (c.op === 'board.create') text(c.name);
   else id(c.boardId);
+  if (c.op === 'board.delete') {
+    shape(c.expectedIdentity, ['digest', 'taskCount', 'linkCount', 'statusCount']);
+    if (typeof c.expectedIdentity.digest !== 'string' || !/^[0-9a-f]{64}$/.test(c.expectedIdentity.digest)) invalid();
+    for (const key of ['taskCount', 'linkCount', 'statusCount']) {
+      if (!Number.isSafeInteger(c.expectedIdentity[key]) || c.expectedIdentity[key] < 0) invalid();
+    }
+  }
   if (c.op === 'status.save') {
     shape(c.status, ['id', 'name', 'position'], ['name']);
     if (own(c.status, 'id')) id(c.status.id);
@@ -92,7 +111,19 @@ function applyCommand(value, c, registry) {
     state = core.assignBoard(core.ensureWorkspace(core.createBoard(state, { id: boardId, name: c.name }), c.workspaceId), c.workspaceId, boardId);
   } else {
     const board = assigned(state, c.workspaceId, c.boardId);
-    if (c.op === 'status.save') {
+    if (c.op === 'board.delete') {
+      const identity = deletionIdentity(value, board);
+      if (Object.keys(identity).some(key => identity[key] !== c.expectedIdentity[key])) throw new InputError('board_changed', 409);
+      // A board is a shared object, not a per-workspace copy. Never silently
+      // remove it from a second workspace with this single-workspace command.
+      if (state.workspaces.some(w => w.id !== c.workspaceId && w.boardIds.includes(c.boardId))) throw new InputError('board_shared', 409);
+      state = structuredClone(state);
+      state.boards = state.boards.filter(b => b.id !== c.boardId);
+      const owner = state.workspaces.find(w => w.id === c.workspaceId);
+      owner.boardIds = owner.boardIds.filter(id => id !== c.boardId);
+      if (owner.defaultBoardId === c.boardId) owner.defaultBoardId = null;
+      links = links.filter(l => l.boardId !== c.boardId);
+    } else if (c.op === 'status.save') {
       const columnId = c.status.id || randomUUID();
       state = c.status.id ? core.renameColumn(state, c.boardId, columnId, c.status.name) : core.createColumn(state, c.boardId, { id: columnId, name: c.status.name });
       if (own(c.status, 'position')) {
@@ -162,8 +193,11 @@ export function createBoardService(store, registry) {
   }
   const service = {
     read: signal => serialize(() => snapshot(store.read({ signal })), signal),
-    mutate: (c, signal) => serialize(() => {
-      commandShape(c);
+    mutate: (command, signal) => {
+      // Detach queued input so callers cannot alter a validated destructive command.
+      commandShape(command);
+      const c = structuredClone(command);
+      return serialize(() => {
       const next = store.transaction(c.expectedRevision, current => {
         const next = applyCommand(validateAggregate(current), c, registry);
         // Refuse a mutation whose response cannot be represented within the bound.
@@ -171,7 +205,8 @@ export function createBoardService(store, registry) {
         return next;
       }, { signal });
       return snapshot(next);
-    }, signal),
+      }, signal);
+    },
     linkCurrentSession: (args, sessionId, signal) => serialize(() => {
       shape(args, ['workspaceId', 'boardId', 'taskId', 'linked']);
       id(sessionId);

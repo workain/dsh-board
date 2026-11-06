@@ -15,6 +15,7 @@ const TOOL_SCOPE_TTL_MS = 60_000;
 const MAX_COMMENT = 48 * 1024;
 const MAX_SESSION_LINK_LOOKUPS = 100;
 const SESSION_LINK_CONCURRENCY = 5;
+const RESELECT_CONCURRENCY = 5;
 
 class ServiceError extends Error {
   constructor(code, status) { super(code); this.code = code; this.status = status; }
@@ -74,7 +75,7 @@ function checkCommand(c) {
       shape(c, ['op', 'expectedRevision', 'orgType']); revision(c.expectedRevision);
       if (!['cloud', 'org'].includes(c.orgType)) invalid(); break;
     case 'boards.list': shape(c, ['op']); break;
-    case 'workspace.select':
+    case 'workspace.select': case 'workspace.reselect':
       shape(c, ['op', 'expectedRevision', 'workspaceId', 'boardIds']); revision(c.expectedRevision); workspaceId(c.workspaceId); boardIds(c.boardIds); break;
     case 'board.read':
       shape(c, ['op', 'workspaceId', 'boardId', 'issueKeys']); workspaceId(c.workspaceId); boardId(c.boardId); issueKeys(c.issueKeys); break;
@@ -296,6 +297,63 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
       }
       listing = { ids, identity: account.identity, accountScope: scope, revision: state.revision, expires: Date.now() + LIST_TTL_MS };
       return { boards, complete: result.complete, reason: result.reason };
+    }
+    // Reconfirmation authorizes the saved IDs for the current principal; it does
+    // not establish continuity with an account used before a restart. The host
+    // must obtain explicit owner confirmation before invoking this operation.
+    if (c.op === 'workspace.reselect') {
+      const wid = c.workspaceId;
+      // Fail closed even when a valid command fails its preconditions. Invalidate
+      // listing evidence and in-flight reselect/list operations at the outset.
+      bindings.delete(wid); invalidate();
+      const version = generation;
+      const incarnation = workspace(wid);
+      if (state.revision !== c.expectedRevision) fail('conflict', 409);
+      if (!Object.hasOwn(state.settings.workspaces, wid)) fail('conflict', 409);
+      const selected = state.settings.workspaces[wid];
+      if (!Array.isArray(selected) || !selected.length || selected.length !== c.boardIds.length ||
+          selected.some((id, index) => id !== c.boardIds[index])) fail('conflict', 409);
+      // The store normally returns copies, but pin a snapshot even if a custom
+      // store returns mutable references. Compare all settings, not just IDs.
+      const snapshot = structuredClone(state.settings), startRevision = state.revision;
+      const sameSettings = (a, b) => {
+        if (a === b) return true;
+        if (!a || !b || typeof a !== 'object' || typeof b !== 'object' || Array.isArray(a) !== Array.isArray(b)) return false;
+        const ak = Object.keys(a), bk = Object.keys(b);
+        return ak.length === bk.length && ak.every(key => Object.hasOwn(b, key) && sameSettings(a[key], b[key]));
+      };
+      function check() {
+        signal.throwIfAborted();
+        workspace(wid, incarnation);
+        const now = current();
+        if (generation !== version || now.revision !== startRevision || !sameSettings(now.settings, snapshot)) fail('conflict', 409);
+      }
+      const account = await session(signal); check();
+      const scope = await accountScope(account, signal); check();
+      if (typeof account.getBoardIdentity !== 'function') fail('invalid_tracker_response', 502);
+      let next = 0, failure;
+      async function worker() {
+        while (!failure && next < c.boardIds.length) {
+          const id = c.boardIds[next++];
+          try {
+            check();
+            const board = await raceAbort(() => account.getBoardIdentity(id, { signal }), signal);
+            check();
+            if (!board || typeof board !== 'object' || board.id !== id || typeof board.name !== 'string' || board.name.length < 1 || board.name.length > 256) fail('invalid_tracker_response', 502);
+          } catch (error) { if (!failure) failure = error; }
+        }
+      }
+      await Promise.all(Array.from({ length: Math.min(RESELECT_CONCURRENCY, c.boardIds.length) }, () => worker()));
+      // Re-resolve even after a failed lookup, so credential rotation revokes all
+      // bindings instead of leaving other workspaces tied to a stale account.
+      check();
+      const afterAccount = await session(signal); check();
+      const afterScope = await accountScope(afterAccount, signal); check();
+      if (afterAccount.identity !== account.identity || afterScope !== scope) revokeAccount();
+      if (failure) throw failure;
+      check();
+      bindings.set(wid, { identity: account.identity, accountScope: scope, incarnation, revision: startRevision });
+      return { revision: startRevision, workspaceId: wid, boardIds: [...c.boardIds] };
     }
     const incarnation = workspace(c.workspaceId);
     if (c.op === 'workspace.select') {

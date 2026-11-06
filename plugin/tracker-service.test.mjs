@@ -20,6 +20,7 @@ function fixture(options = {}) {
     identity: 'identity-A',
     async listBoards() { return { boards: [{ id: '1', name: 'First' }, { id: '2', name: 'Second' }], complete: true, reason: null }; },
     async getBoardOverview(id, options) { return { board: { id, name: 'First' }, columns: [], issues: [], issuesComplete: false, issuesReason: 'explicit_keys_only', keys: options.issueKeys, searchByBoard: options.searchByBoard }; },
+    async getBoardIdentity(id) { return { id, name: 'Board' }; },
     async getIssue(key) { return { key, id: 'id-1', summary: 'Example', description: 'Description', status: { id: '1', key: 'open', display: 'Open' }, assigneeKnown: true, assignee: null, boards: [{ id: '1' }, { id: '99' }], version: 1 }; },
     async getIssueById(id) { return { id, key: 'ABC-1', boards: [{ id: '1' }] }; },
     async listTransitions() { return [{ id: 'start', display: 'Start', to: { id: '2', key: 'progress', display: 'In progress' } }]; },
@@ -34,7 +35,7 @@ function fixture(options = {}) {
     async createIssue() { return { id: 'issue-1', key: 'DOC-1', version: 1 }; },
     async openSession() {
       const capabilities = new WeakSet();
-      return { identity: this.identity, listBoards: (...args) => this.listBoards(...args), getBoardOverview: (...args) => this.getBoardOverview(...args), getIssue: (...args) => this.getIssue(...args), getIssueById: (...args) => this.getIssueById(...args), getComments: (...args) => this.getComments(...args), getComment: (...args) => this.getComment(...args), editComment: (...args) => this.editComment(...args), updateIssue: (...args) => this.updateIssue(...args), listTransitions: (...args) => this.listTransitions(...args), addComment: (...args) => this.addComment(...args), executeTransition: (...args) => this.executeTransition(...args),
+      return { identity: this.identity, listBoards: (...args) => this.listBoards(...args), getBoardIdentity: (...args) => this.getBoardIdentity(...args), getBoardOverview: (...args) => this.getBoardOverview(...args), getIssue: (...args) => this.getIssue(...args), getIssueById: (...args) => this.getIssueById(...args), getComments: (...args) => this.getComments(...args), getComment: (...args) => this.getComment(...args), editComment: (...args) => this.editComment(...args), updateIssue: (...args) => this.updateIssue(...args), listTransitions: (...args) => this.listTransitions(...args), addComment: (...args) => this.addComment(...args), executeTransition: (...args) => this.executeTransition(...args),
         getBoardCreationQueue: async (...args) => { const queue = await this.getBoardCreationQueue(...args); if (queue && typeof queue === 'object') capabilities.add(queue); return queue; },
         getExplicitCreationQueue: async (...args) => { const queue = await this.getExplicitCreationQueue(...args); if (queue && typeof queue === 'object') capabilities.add(queue); return queue; },
         createIssue: (...args) => { assert.ok(capabilities.has(args[0].queue), 'capability must come from same account session'); return this.createIssue(...args); } };
@@ -538,6 +539,84 @@ test('restart and identity rotation require explicit reselect, never emit opaque
   await rejected(select(f.service, 2), 'needs_reselect');
   await f.service.command({ op: 'boards.list' }); await select(f.service, 2);
   assert.deepEqual((await f.service.read()).needsReselect, []);
+});
+
+test('explicit reselect authorizes exact saved boards after restart without list or writes', async () => {
+  const f = fixture(); await config(f.service); await f.service.command({ op: 'boards.list' }); await select(f.service, 1, ['2', '1']);
+  const before = f.settings.read(), calls = [];
+  const restarted = createTrackerService({ settings: f.settings, tracker: f.tracker, workspaceRegistry: f.registry });
+  await rejected(boardRead(restarted), 'needs_reselect');
+  f.tracker.identity = 'current-account';
+  f.tracker.listBoards = () => { throw Error('list forbidden'); };
+  f.settings.compareAndSet = () => { throw Error('write forbidden'); };
+  f.tracker.getBoardIdentity = async (id, { signal }) => { signal.throwIfAborted(); calls.push(id); return { id, name: 'visible', extra: 'private' }; };
+  const command = { op: 'workspace.reselect', expectedRevision: 2, workspaceId: 'ws', boardIds: ['2', '1'] };
+  assert.deepEqual(await restarted.command(command), { revision: 2, workspaceId: 'ws', boardIds: ['2', '1'] });
+  assert.deepEqual(calls, ['2', '1']); assert.deepEqual(f.settings.read(), before);
+  assert.deepEqual((await restarted.read()).needsReselect, []);
+  assert.equal((await boardRead(restarted)).board.id, '1');
+});
+
+test('reselect rejects invalid and stale confirmations before lookup and revokes old binding', async () => {
+  const f = fixture(); await config(f.service); await f.service.command({ op: 'boards.list' }); await select(f.service, 1, ['2', '1']);
+  let calls = 0; f.tracker.getBoardIdentity = async id => { calls++; return { id, name: 'x' }; };
+  const base = { op: 'workspace.reselect', expectedRevision: 2, workspaceId: 'ws', boardIds: ['2', '1'] };
+  for (const command of [{ ...base, extra: true }, { ...base, boardIds: ['1', '1'] }, { ...base, boardIds: ['01'] }, { ...base, expectedRevision: -1 }]) await rejected(f.service.command(command), 'invalid');
+  for (const command of [{ ...base, expectedRevision: 1 }, { ...base, boardIds: [] }, { ...base, boardIds: ['1', '2'] }, { ...base, boardIds: ['1'] }, { ...base, workspaceId: 'ws2' }]) await rejected(f.service.command(command), 'conflict');
+  assert.equal(calls, 0); await rejected(boardRead(f.service), 'needs_reselect');
+  await rejected(select(f.service, 2, ['1']), 'board_list_required');
+});
+
+test('reselect verifies every identity and fails without partial binding', async () => {
+  for (const bad of [null, {}, { id: '9', name: 'x' }, { id: '2', name: '' }, { id: '2', name: 'x'.repeat(257) }]) {
+    const f = fixture(); await config(f.service); await f.service.command({ op: 'boards.list' }); await select(f.service, 1, ['1', '2']);
+    f.tracker.getBoardIdentity = async id => id === '2' ? bad : { id, name: 'ok' };
+    await rejected(f.service.command({ op: 'workspace.reselect', expectedRevision: 2, workspaceId: 'ws', boardIds: ['1', '2'] }), 'invalid_tracker_response');
+    await rejected(boardRead(f.service), 'needs_reselect');
+  }
+  const f = fixture(); await config(f.service); await f.service.command({ op: 'boards.list' }); await select(f.service);
+  f.tracker.getBoardIdentity = async () => { throw Object.assign(new Error('private'), { name: 'TrackerError', code: 'forbidden' }); };
+  await rejected(f.service.command({ op: 'workspace.reselect', expectedRevision: 2, workspaceId: 'ws', boardIds: ['1'] }), 'forbidden');
+  await rejected(boardRead(f.service), 'needs_reselect');
+});
+
+test('reselect bounds parallel exact lookups and preserves captured input', async () => {
+  const f = fixture(); await config(f.service);
+  const ids = Array.from({ length: 20 }, (_, i) => String(i + 1));
+  f.tracker.listBoards = async () => ({ boards: ids.map(id => ({ id, name: 'x' })), complete: true, reason: null });
+  await f.service.command({ op: 'boards.list' }); await select(f.service, 1, ids);
+  let active = 0, max = 0; const seen = [];
+  f.tracker.getBoardIdentity = async (id, { signal }) => { signal.throwIfAborted(); seen.push(id); active++; max = Math.max(max, active); await new Promise(resolve => setImmediate(resolve)); active--; return { id, name: 'x' }; };
+  const command = { op: 'workspace.reselect', expectedRevision: 2, workspaceId: 'ws', boardIds: [...ids] };
+  const pending = f.service.command(command); command.boardIds[0] = '999';
+  assert.deepEqual((await pending).boardIds, ids); assert.deepEqual(seen, ids); assert.equal(max, 5); assert.equal(active, 0);
+});
+
+test('reselect rejects abort, concurrent settings, workspace, listing and principal changes', async () => {
+  for (const change of ['abort', 'timeout', 'revision', 'settings', 'workspace', 'removed', 'list', 'reselect', 'identity', 'scope']) {
+    const links = linkStore(), control = { scope: 'a'.repeat(64) };
+    const f = fixture({ links, resolveAccountScope: async () => control.scope });
+    await config(f.service); await f.service.command({ op: 'boards.list' }); await select(f.service);
+    let started, release, observed; const ready = new Promise(resolve => { started = resolve; });
+    f.tracker.getBoardIdentity = (id, { signal }) => new Promise(resolve => { observed = signal; release = () => resolve({ id, name: 'x' }); started(); });
+    const controller = new AbortController();
+    const command = { op: 'workspace.reselect', expectedRevision: 2, workspaceId: 'ws', boardIds: ['1'] };
+    const pending = f.service.command(command, controller.signal); await ready;
+    if (change === 'abort') controller.abort();
+    if (change === 'timeout') controller.abort(new DOMException('timeout', 'TimeoutError'));
+    if (change === 'revision') { const s = f.settings.read(); f.settings.compareAndSet(s.revision, s.settings); }
+    if (change === 'settings') { const original = f.settings.read; f.settings.read = () => { const s = original(); s.settings.connection.orgType = 'cloud'; return s; }; }
+    if (change === 'workspace') f.registry.get('ws').createdAt = 'new';
+    if (change === 'removed') f.registry.delete('ws');
+    if (change === 'list') await f.service.command({ op: 'boards.list' });
+    if (change === 'reselect') { f.tracker.getBoardIdentity = async id => ({ id, name: 'x' }); await f.service.command(command); }
+    if (change === 'identity') f.tracker.identity = 'other';
+    if (change === 'scope') control.scope = 'b'.repeat(64);
+    release();
+    await assert.rejects(pending, e => ['aborted', 'timeout', 'conflict', 'needs_reselect', 'workspace_not_found', 20, 'AbortError', 'TimeoutError'].includes(e.code) || ['AbortError', 'TimeoutError'].includes(e.name), change);
+    if (change === 'abort' || change === 'timeout') assert.equal(observed.aborted, true);
+    if (change !== 'reselect' && change !== 'removed') await rejected(boardRead(f.service), 'needs_reselect');
+  }
 });
 
 test('account or workspace incarnation change during remote call fails closed', async () => {

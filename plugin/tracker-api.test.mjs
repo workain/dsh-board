@@ -66,6 +66,69 @@ test('page limit is explicit and repeated/out-of-order pages fail closed', async
   await rejects(harness([json(Array.from({ length: 100 }, (_, i) => makeBoard(i + 1))), json([makeBoard(100)])]).client.listBoards(), 'invalid_response');
 });
 
+test('board identity uses one fixed origin GET and projects only id and name', async () => {
+  const mutable = { ...credentials };
+  const h = harness([json({ ...makeBoard(42), defaultQueue: { id: '3', key: 'SECRET' }, issues: ['private'],
+    self: 'https://evil.invalid', secret: 'private' }, 200, { link: '<https://evil.invalid>; rel="next"' })], mutable);
+  const session = await h.client.openSession();
+  mutable.token = 'rotated-token';
+  const result = await session.getBoardIdentity('42');
+  assert.deepEqual(result, { id: '42', name: 'Board 42' });
+  assert.equal(h.calls.length, 1);
+  const { url, init } = h.calls[0];
+  assert.equal(url, 'https://api.tracker.yandex.net/v3/boards/42');
+  assert.equal(init.method, 'GET'); assert.equal(init.redirect, 'error'); assert.equal(init.body, undefined);
+  assert.equal(init.headers.Authorization, 'OAuth synthetic-token');
+  assert.doesNotMatch(JSON.stringify(result), /evil\.invalid|private|SECRET|synthetic-token|synthetic-org/);
+  const boundary = await (await harness([json({ id: '999999999999999', name: 'x'.repeat(256) })]).client.openSession())
+    .getBoardIdentity(999999999999999);
+  assert.deepEqual(boundary, { id: '999999999999999', name: 'x'.repeat(256) });
+});
+
+test('board identity rejects unsafe inputs and mismatched or malformed responses', async () => {
+  const h = harness([]), session = await h.client.openSession();
+  for (const id of ['', '0', '01', '-1', '1.0', '1e2', '1/columns', '../1', '1?x=1',
+    'https://evil.invalid', '1\n', '1000000000000000', 0, -1, 1.5, 9007199254740992, null, {}])
+    await rejects(session.getBoardIdentity(id), 'invalid_input');
+  await rejects(session.getBoardIdentity('42', { signal: {} }), 'invalid_input');
+  assert.equal(h.calls.length, 0);
+  for (const value of [null, [], {}, { id: '43', name: 'Board' }, { id: '042', name: 'Board' },
+    { id: 0, name: 'Board' }, { id: 42.5, name: 'Board' }, { id: 42, name: '' },
+    { id: 42, name: '   ' }, { id: 42, name: 'bad\nname' }, { id: 42, name: '\u202espoof' },
+    { id: 42, name: 'x'.repeat(257) }, { id: 42, name: null }]) {
+    const next = harness([json(value)]);
+    await rejects((await next.client.openSession()).getBoardIdentity('42'), 'invalid_response');
+    assert.equal(next.calls.length, 1);
+  }
+  for (const [status, code] of [[401, 'unauthorized'], [403, 'forbidden'], [404, 'not_found'],
+    [429, 'rate_limited'], [302, 'redirect'], [500, 'http_error']]) {
+    const next = harness([new Response('synthetic-token', { status })]);
+    await rejects((await next.client.openSession()).getBoardIdentity('42'), code);
+    assert.equal(next.calls.length, 1);
+  }
+  const malformed = harness([new Response('{bad synthetic-token')]);
+  await rejects((await malformed.client.openSession()).getBoardIdentity('42'), 'invalid_response');
+  const oversized = harness([new Response('{}', { headers: { 'content-length': '2097153' } })]);
+  await rejects((await oversized.client.openSession()).getBoardIdentity('42'), 'response_too_large');
+});
+
+test('board identity abort and ten-second transport timeout do not retry', async t => {
+  const h = harness([() => new Promise(() => {}), () => new Promise(() => {})]);
+  const session = await h.client.openSession();
+  const already = new AbortController(); already.abort();
+  await rejects(session.getBoardIdentity('42', { signal: already.signal }), 'cancelled');
+  assert.equal(h.calls.length, 0);
+  const active = new AbortController();
+  const pending = session.getBoardIdentity('42', { signal: active.signal });
+  active.abort(); await rejects(pending, 'cancelled'); assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0].init.signal.aborted, true);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const timed = session.getBoardIdentity('42'); const checked = rejects(timed, 'timeout');
+  t.mock.timers.tick(9_999); assert.equal(h.calls.length, 2);
+  t.mock.timers.tick(1); await checked; assert.equal(h.calls.length, 2);
+  assert.equal(h.calls[1].init.signal.aborted, true);
+});
+
 test('real board and column shapes, unsupported issue listing without keys', async () => {
   const { client, calls } = harness([json(makeBoard(42)), json(makeColumns())]);
   const result = await client.getBoardOverview('42');

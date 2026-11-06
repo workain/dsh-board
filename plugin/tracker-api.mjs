@@ -255,7 +255,7 @@ async function readJson(response, signal, principal = false, exactQueueId = fals
  * createTrackerClient({getCredentials, fetch}) -> {listBoards, getBoardOverview}.
  * getCredentials(): {token, tokenType:'OAuth'|'Bearer', orgId, orgType:'org'|'cloud'}.
  * openSession({signal}) snapshots credentials and exposes an opaque identity and
- * getIssue, getIssueById, getComments, updateIssue, listTransitions, addComment and executeTransition. The caller must
+ * getBoardIdentity, getIssue, getIssueById, getComments, updateIssue, listTransitions, addComment and executeTransition. The caller must
  * verify issue.boards against its authorized boards before reads or writes.
  * For creation, authorize the selected board first; getBoardCreationQueue(id, options)
  * or getExplicitCreationQueue(id, queueKey, options) returns an immutable queue
@@ -343,6 +343,18 @@ export function createTrackerClient({ getCredentials, fetch: fetchFn = globalThi
       if (result.length < PER_PAGE) return { boards, complete: true, reason: null };
     }
     return { boards, complete: false, reason: 'page_limit' };
+  }
+
+  // Resolve only the selected board's identity, without columns, searches or queues.
+  async function getBoardIdentity(credentials, id, { signal } = {}) {
+    id = boardId(id);
+    return request(`${ORIGIN}/v3/boards/${id}`, 'GET', undefined, signal, credentials, {
+      project(value) {
+        const result = board(value);
+        if (result.id !== id) fail('invalid_response');
+        return result;
+      },
+    });
   }
 
   async function getBoardOverview(credentials, id, { issueKeys = [], searchByBoard = false, signal } = {}) {
@@ -638,6 +650,7 @@ export function createTrackerClient({ getCredentials, fetch: fetchFn = globalThi
       const approvedQueues = new WeakSet();
       return Object.freeze({ identity,
         listBoards: options => listBoards(credentials, options),
+        getBoardIdentity: (id, options) => getBoardIdentity(credentials, id, options),
         getBoardOverview: (id, options) => getBoardOverview(credentials, id, options),
         getBoardCreationQueue: (id, options) => getBoardCreationQueue(credentials, id, approvedQueues, options),
         getExplicitCreationQueue: (id, key, options) => getExplicitCreationQueue(credentials, id, key, approvedQueues, options),
