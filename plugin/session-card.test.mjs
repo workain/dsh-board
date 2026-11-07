@@ -155,11 +155,70 @@ test('discovery reads once for many selected boards', async () => {
   const many = Array.from({ length: 20 }, (_, n) => String(n + 1)); const h = harness({ settings: () => ({ ...settings, workspaces: { w: many } }) }); await ready(h);
   assert.equal(h.calls.filter(c => c.op === 'links.session.read').length, 1); assert.ok(h.editor); assert.equal(h.calls.filter(c => c.op === 'issue.comments').length, 0);
 });
+test('verification unavailable hides session data and retry restores it', async () => {
+  let current = { ...settings, verificationUnavailable: ['w'] };
+  const h = harness({ settings: () => current });
+  await ready(h);
+  assert.equal(h.editor, null);
+  assert.match(h.text(), /temporarily unavailable/);
+  assert.doesNotMatch(h.text(), /selection needs confirmation/);
+  assert.equal(h.calls.filter(c => c.op === 'links.session.read').length, 0);
+  current = settings;
+  h.nodes('button').find(node => h.text(node) === 'Retry').props.onClick();
+  await settle(); h.render(); await settle(); h.render();
+  assert.ok(h.editor);
+});
+test('late unavailable discovery exposes retry and hides linked issue', async () => {
+  let reads = 0;
+  const h = harness({ settings: () => ({ ...settings, verificationUnavailable: ++reads === 2 ? ['w'] : [] }) });
+  await ready(h);
+  assert.equal(h.editor, null);
+  assert.match(h.text(), /temporarily unavailable/);
+  assert.ok(h.nodes('button').some(node => h.text(node) === 'Retry'));
+});
+test('unavailable editor authorization and reconciliation expose retry', async () => {
+  for (const kind of ['authorize', 'reconcile']) {
+    let current = settings;
+    const h = harness({ settings: () => current }); await ready(h);
+    const editor = h.editor;
+    current = { ...settings, verificationUnavailable: ['w'] };
+    if (kind === 'authorize') assert.equal((await h.flow(editor)).value, null);
+    else assert.equal(await editor.authorization.reconcileLink({ sessionId: 'other', linked: true, expectedRevision: 1 }, { revision: 2 }, () => true), false);
+    h.render(); assert.equal(h.editor, null);
+    assert.match(h.text(), /temporarily unavailable/);
+    assert.ok(h.nodes('button').some(node => h.text(node) === 'Retry'));
+    h.unmount();
+  }
+});
 test('settings changes and invalid settings fail authorization closed', async () => {
-  for (const mode of ['revision', 'unconfigured', 'reselect', 'selection', 'invalid']) {
+  for (const mode of ['revision', 'unconfigured', 'reselect', 'unavailable', 'bad-unavailable', 'selection', 'invalid']) {
     let current = settings; const h = harness({ settings: () => current }); await ready(h); const old = h.editor;
-    current = mode === 'revision' ? { ...settings, revision: 2 } : mode === 'unconfigured' ? { ...settings, configured: false } : mode === 'reselect' ? { ...settings, needsReselect: ['w'] } : mode === 'selection' ? { ...settings, workspaces: { w: ['2'] } } : { ...settings, revision: 'bad' };
+    current = mode === 'revision' ? { ...settings, revision: 2 } : mode === 'unconfigured' ? { ...settings, configured: false } : mode === 'reselect' ? { ...settings, needsReselect: ['w'] } : mode === 'unavailable' ? { ...settings, verificationUnavailable: ['w'] } : mode === 'bad-unavailable' ? { ...settings, verificationUnavailable: [5] } : mode === 'selection' ? { ...settings, workspaces: { w: ['2'] } } : { ...settings, revision: 'bad' };
     const flow = await h.flow(old); assert.deepEqual(flow.events, ['authorize:before'], mode); assert.equal(flow.value, null, mode); assert.equal(h.calls.filter(c => c.op === 'issue.read').length, 0, mode);
+  }
+});
+test('verification loss during discovery or issue request fences late data', async () => {
+  for (const stage of ['discovery', 'issue']) {
+    let current = settings;
+    const slow = defer();
+    const h = harness({ settings: () => current, command(c) {
+      if (stage === 'discovery' && c.op === 'links.session.read') return slow.promise;
+      if (stage === 'issue' && c.op === 'issue.read') return slow.promise;
+    } });
+    if (stage === 'discovery') {
+      h.render(); await settle();
+      current = { ...settings, verificationUnavailable: ['w'] };
+      slow.resolve({ revision: 1, incomplete: false, links: [{ sessionId: 's', boardId: '1', issueKey: 'ABC-1', issueId: 'id-1' }] });
+      await settle(); h.render(); await settle(); h.render();
+      assert.equal(h.editor, null);
+    } else {
+      await ready(h);
+      const pending = h.flow(h.editor); await settle();
+      current = { ...settings, verificationUnavailable: ['w'] };
+      slow.resolve(issue('ABC-1', 'id-1'));
+      assert.equal((await pending).value, null);
+    }
+    h.unmount();
   }
 });
 test('settings revision ABA during a mocked request rejects old content', async () => {

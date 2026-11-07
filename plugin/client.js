@@ -16,7 +16,7 @@ window.__ModuleLoader__.load({
       trackerUnattended: 'Allow main session agents to create Tracker tasks without approval', trackerUnattendedWarning: 'Enable autonomous Tracker task creation for this workspace under the current Tracker account? Main (root) session agents can create tasks without per-task confirmation, even in full access mode. Model behavior or untrusted content can cause writes, including to other queues. Tracker access controls still apply. Dependent child agents are not allowed.', trackerUnattendedSaved: 'Task creation permission updated.', trackerUnattendedInactive: 'This saved permission is inactive for the current Tracker account. Disable it, or confirm the board selection before enabling access.',
       trackerLocalPermissionRead: 'Check saved task creation permission locally', trackerLocalPermissionInfo: 'This check does not contact Tracker or verify account access. It can only turn the saved permission off.', trackerLocalPermissionOn: 'A saved permission exists for this workspace.', trackerLocalPermissionOff: 'No saved permission exists for this workspace.', trackerLocalPermissionRevoke: 'Turn off saved permission', trackerLocalPermissionError: 'Could not check or update the saved permission. Reload it explicitly before trying again.', trackerLocalPermissionUnknown: 'The result is unknown. Check the saved permission again before taking further action.',
       trackerReviewDraft: 'I reviewed the refreshed board list and my selection.', trackerUpdatedAt: 'Last successful partial update:',
-      trackerConfirmPrevious: 'Confirm previous selection', trackerConfirmPreviousWarning: 'Confirm these exact saved board IDs for this workspace under the current Tracker account? The account identity used before restart is unknown; it may be different. No other boards will be selected.',
+      trackerConfirmPrevious: 'Confirm previous selection', trackerConfirmPreviousWarning: 'Confirm these exact saved board IDs for this workspace under the current Tracker account? The previous account could not be verified or has changed. No other boards will be selected.', trackerVerificationUnavailable: 'Tracker access could not be verified temporarily. Your saved selection is unchanged; reload settings to try again.',
       panel: 'Board', workspace: 'Workspace', chooseWorkspace: 'Choose a workspace', board: 'Board',
       chooseBoard: 'Choose a board', noWorkspaces: 'No workspaces are available.', workspaceError: 'Workspaces could not be loaded.',
       noBoards: 'There are no boards in this workspace yet.', newBoard: 'New board', boardName: 'Board name',
@@ -42,7 +42,7 @@ window.__ModuleLoader__.load({
       boardArgsUnsupported: 'The /board command does not accept arguments. Open /board without arguments.',
       assignee: 'Assignee', allAssignees: 'All assignees', unassigned: 'Unassigned', assigneeUnknown: 'Assignee unknown', assigneeUnavailable: 'Selected assignee is not in the current results', sessionFilter: 'Session in this workspace', allSessions: 'All tasks', withSession: 'With linked session', withoutSession: 'Without linked session', sessionFilterUnavailable: 'Workspace session membership is unavailable.',
       boards: 'Boards', allBoards: 'All boards', noBoardsAnywhere: 'No boards yet', noBoardsHelp: 'Choose a workspace to create your first board.', linkCurrent: 'Link this session', unlinkCurrent: 'Unlink this session', sessionHelp: 'Choose a board and link this session to a task.', linkUnavailable: 'This session is not available in this workspace.', returnToBoards: 'All boards', sessionCount: 'Sessions',
-      tracker: 'Yandex Tracker', trackerConnect: 'Connect Yandex Tracker', trackerSettings: 'Tracker settings', trackerOrg: 'Organization type', trackerConfigured: 'Configured in this profile', trackerNotConfigured: 'Not configured in this profile', trackerRefs: 'Credentials and organization ID must already be stored on the server. They are never entered here.', trackerConfigureWarning: 'Reconnecting clears all workspace board selections. Continue?', trackerChoose: 'Choose Tracker boards', trackerList: 'Load available boards', trackerSelect: 'Save board selection', trackerReselect: 'Selection needs confirmation after restart or account change. Confirm the saved selection, or load the board list to choose different boards.', trackerNoSelection: 'No Tracker boards selected for this workspace.', trackerListPartial: 'Board list is partial; not all available boards may appear.', trackerPartial: 'Partial results as of the last request: board membership is approximate and the list may be incomplete, even when empty. Access changes are not shown instantly.', trackerReadOnly: 'read only', trackerPartialBadge: 'partial', trackerUnmapped: 'Unmapped', trackerEmpty: 'No issues returned in this partial result.', trackerError: 'Tracker is unavailable or the request failed. Try again.', trackerReload: 'Reload settings', trackerPickerHint: 'Select boards explicitly for this workspace. The list expires; reload it if saving fails.', trackerContext: 'Open a Tracker issue to link this workspace’s sessions.', trackerRefreshBoard: 'Refresh Tracker board', trackerSelectionSaved: 'Selection saved.', trackerUncertain: 'The result is unknown. Reload settings and review before trying again.', trackerMissingSelection: 'Some saved boards are absent from this list. They will be removed if you save.', trackerConfirmSelection: 'Confirm this workspace board selection? Removed board IDs: ', trackerNoBoards: 'No boards returned.', trackerStatus: 'Status', trackerClose: 'Close Tracker settings', trackerListRequired: 'The board list expired or changed. Load it again and reselect.', trackerConflict: 'Tracker settings changed. Reload settings and review your selection.', trackerNotSelected: 'This board is no longer selected. Reload settings.', trackerCredentials: 'Server credentials are unavailable or rejected. Check the server configuration.', trackerRate: 'Tracker is busy or rate-limited. Try again later.', trackerConfiguring: 'Save connection', trackerLocal: 'Local', trackerSettingsUnknown: 'Tracker is not loaded. Open its settings to check available boards.', trackerBindingsPending: 'Some workspace selections need confirmation. Open Tracker settings and choose a workspace to reselect.',
+      tracker: 'Yandex Tracker', trackerConnect: 'Connect Yandex Tracker', trackerSettings: 'Tracker settings', trackerOrg: 'Organization type', trackerConfigured: 'Configured in this profile', trackerNotConfigured: 'Not configured in this profile', trackerRefs: 'Credentials and organization ID must already be stored on the server. They are never entered here.', trackerConfigureWarning: 'Reconnecting clears all workspace board selections. Continue?', trackerChoose: 'Choose Tracker boards', trackerList: 'Load available boards', trackerSelect: 'Save board selection', trackerReselect: 'The previous account could not be verified or has changed. Confirm the saved selection, or load the board list to choose different boards.', trackerNoSelection: 'No Tracker boards selected for this workspace.', trackerListPartial: 'Board list is partial; not all available boards may appear.', trackerPartial: 'Partial results as of the last request: board membership is approximate and the list may be incomplete, even when empty. Access changes are not shown instantly.', trackerReadOnly: 'read only', trackerPartialBadge: 'partial', trackerUnmapped: 'Unmapped', trackerEmpty: 'No issues returned in this partial result.', trackerError: 'Tracker is unavailable or the request failed. Try again.', trackerReload: 'Reload settings', trackerPickerHint: 'Select boards explicitly for this workspace. The list expires; reload it if saving fails.', trackerContext: 'Open a Tracker issue to link this workspace’s sessions.', trackerRefreshBoard: 'Refresh Tracker board', trackerSelectionSaved: 'Selection saved.', trackerUncertain: 'The result is unknown. Reload settings and review before trying again.', trackerMissingSelection: 'Some saved boards are absent from this list. They will be removed if you save.', trackerConfirmSelection: 'Confirm this workspace board selection? Removed board IDs: ', trackerNoBoards: 'No boards returned.', trackerStatus: 'Status', trackerClose: 'Close Tracker settings', trackerListRequired: 'The board list expired or changed. Load it again and reselect.', trackerConflict: 'Tracker settings changed. Reload settings and review your selection.', trackerNotSelected: 'This board is no longer selected. Reload settings.', trackerCredentials: 'Server credentials are unavailable or rejected. Check the server configuration.', trackerRate: 'Tracker is busy or rate-limited. Try again later.', trackerConfiguring: 'Save connection', trackerLocal: 'Local', trackerSettingsUnknown: 'Tracker is not loaded. Open its settings to check available boards.', trackerBindingsPending: 'Some workspace selections need confirmation. Open Tracker settings and choose a workspace to reselect.',
     };
     const ru = {
       issueMissingId: 'Карточка недоступна: отсутствует неизменяемый ID задачи.', issueDetails: 'Карточка задачи', issueSaveFields: 'Сохранить поля', issueChangeStatus: 'Изменить статус', issueAddComment: 'Добавить комментарий', issueComments: 'Комментарии и активность', issueCommentsLoaded: 'Загружено комментариев:', issueCommentsComplete: 'Обход завершён; за время загрузки комментарии могли измениться.', issueCommentsPartial: 'Могут быть доступны другие комментарии.', issueCommentsTerminalPartial: 'Обход остановлен без курсора продолжения; могут существовать другие комментарии.', issueCommentsLoading: 'Загрузка комментариев…', issueCommentsError: 'Не удалось загрузить комментарии. Ранее загруженные комментарии сохранены.', issueCommentsInvalid: 'Некорректная пагинация комментариев; обновите задачу, чтобы начать заново.', issueCommentsLimit: 'Достигнут предел количества или размера комментариев.', issueCommentsMore: 'Загрузить ещё', issueNewComment: 'Новый комментарий', issueAssigneeId: 'ID исполнителя (пусто — снять назначение)', issueTransitions: 'Доступные переходы', issueNoTransition: 'Выберите переход', issueTransitionsUnavailable: 'Нет доступных или разрешённых переходов статуса.', issueConfirmTransition: 'Выполнить этот переход статуса? Проверка выполняется по возможности: удалённый API не поддерживает атомарное предусловие.', issueSessionsPending: 'Связывание сессий с задачами Трекера пока недоступно.', issueUnknown: 'Результат операции неизвестен. Не повторяйте её до самостоятельной проверки в Трекере: она ещё может выполниться.', issueConflict: 'Задача изменилась или переход больше недоступен. Обновите данные и проверьте черновик.', issueRejected: 'Операция отклонена. Проверьте значения.', issueSaved: 'Операция сохранена.', issueReload: 'Обновить задачу', issueDiscardConflict: 'Отменить черновик полей и обновить', issueReview: 'Я проверил Трекер и принимаю неопределённость', issueUnavailable: 'Данные задачи скрыты до повторной проверки доступа.', issueInvalid: 'Введите допустимые непустые значения в пределах ограничений.', issueVersionUnavailable: 'Изменение полей недоступно: версия задачи неизвестна.', issueSessionPartial: 'Список связей неполный; недоступные связи могут отсутствовать.', issueLinkSave: 'Сохранить связь с сессией', issueChooseSession: 'Выберите сессию рабочего пространства', issueLinkAction: 'Связать сессию', issueUnlinkAction: 'Отвязать сессию', issueLinkUnavailable: 'Не удалось загрузить связи сессий.',
@@ -54,7 +54,7 @@ window.__ModuleLoader__.load({
       trackerUnattended: 'Разрешить агентам основных сессий создавать задачи Трекера без подтверждения', trackerUnattendedWarning: 'Разрешить автономное создание задач Трекера для этого пространства в текущем аккаунте Трекера? Агенты основных (корневых) сессий смогут создавать задачи без отдельного подтверждения, в том числе в режиме полного доступа. Поведение модели или недоверенный контент могут вызвать запись, в том числе в другие очереди. Права доступа Трекера продолжают действовать. Дочерним агентам это не разрешено.', trackerUnattendedSaved: 'Разрешение на создание задач обновлено.', trackerUnattendedInactive: 'Сохранённое разрешение не действует для текущего аккаунта Трекера. Отключите его или подтвердите выбор досок перед включением доступа.',
       trackerLocalPermissionRead: 'Проверить сохранённое разрешение локально', trackerLocalPermissionInfo: 'Проверка не обращается к Трекеру и не проверяет доступ аккаунта. Здесь можно только отключить сохранённое разрешение.', trackerLocalPermissionOn: 'Для этого пространства сохранено разрешение.', trackerLocalPermissionOff: 'Для этого пространства разрешение не сохранено.', trackerLocalPermissionRevoke: 'Отключить сохранённое разрешение', trackerLocalPermissionError: 'Не удалось проверить или изменить разрешение. Перед повторной попыткой загрузите его явно.', trackerLocalPermissionUnknown: 'Результат неизвестен. Снова проверьте сохранённое разрешение перед дальнейшими действиями.',
       trackerReviewDraft: 'Я проверил обновлённый список досок и свой выбор.', trackerUpdatedAt: 'Последнее успешное частичное обновление:',
-      trackerConfirmPrevious: 'Подтвердить прежний выбор', trackerConfirmPreviousWarning: 'Подтвердить именно эти сохранённые ID досок для этого рабочего пространства в текущем аккаунте Трекера? После перезапуска неизвестно, совпадает ли текущий аккаунт с прежним. Другие доски выбраны не будут.',
+      trackerConfirmPrevious: 'Подтвердить прежний выбор', trackerConfirmPreviousWarning: 'Подтвердить именно эти сохранённые ID досок для этого рабочего пространства в текущем аккаунте Трекера? Прежний аккаунт не удалось установить или он изменился. Другие доски выбраны не будут.', trackerVerificationUnavailable: 'Временно не удалось проверить доступ к Трекеру. Сохранённый выбор не изменён; обновите настройки, чтобы повторить попытку.',
       panel: 'Доска', workspace: 'Рабочее пространство', chooseWorkspace: 'Выберите рабочее пространство', board: 'Доска',
       chooseBoard: 'Выберите доску', noWorkspaces: 'Нет доступных рабочих пространств.', workspaceError: 'Не удалось загрузить рабочие пространства.',
       noBoards: 'В этом рабочем пространстве пока нет досок.', newBoard: 'Новая доска', boardName: 'Название доски',
@@ -80,7 +80,7 @@ window.__ModuleLoader__.load({
       boardArgsUnsupported: 'Команда /board не принимает аргументы. Откройте /board без аргументов.',
       assignee: 'Исполнитель', allAssignees: 'Все исполнители', unassigned: 'Не назначен', assigneeUnknown: 'Исполнитель неизвестен', assigneeUnavailable: 'Выбранного исполнителя нет в текущих результатах', sessionFilter: 'Сессия в этом пространстве', allSessions: 'Все задачи', withSession: 'Есть связанная сессия', withoutSession: 'Нет связанной сессии', sessionFilterUnavailable: 'Сведения о сессиях пространства недоступны.',
       boards: 'Доски', allBoards: 'Все доски', noBoardsAnywhere: 'Досок пока нет', noBoardsHelp: 'Выберите рабочее пространство и создайте первую доску.', linkCurrent: 'Привязать сессию', unlinkCurrent: 'Отвязать сессию', sessionHelp: 'Выберите доску и привяжите текущую сессию к задаче.', linkUnavailable: 'Эта сессия недоступна в выбранном пространстве.', returnToBoards: 'Все доски', sessionCount: 'Сессии',
-      tracker: 'Яндекс Трекер', trackerConnect: 'Подключить Яндекс Трекер', trackerSettings: 'Настройки Трекера', trackerOrg: 'Тип организации', trackerConfigured: 'Настроен в этом профиле', trackerNotConfigured: 'Не настроен в этом профиле', trackerRefs: 'Данные доступа и идентификатор организации должны быть заранее сохранены на сервере. Здесь они не вводятся.', trackerConfigureWarning: 'Повторное подключение удалит выбор досок всех пространств. Продолжить?', trackerChoose: 'Выбрать доски Трекера', trackerList: 'Загрузить доступные доски', trackerSelect: 'Сохранить выбор досок', trackerReselect: 'После перезапуска или смены аккаунта подтвердите сохранённый выбор либо загрузите список, чтобы выбрать другие доски.', trackerNoSelection: 'Для этого пространства доски Трекера не выбраны.', trackerListPartial: 'Список досок неполный: доступны могут быть и другие.', trackerPartial: 'Данные на момент последнего запроса частичные: принадлежность к доске определена приблизительно, список может быть неполным, даже если он пуст. Изменения доступа отображаются не мгновенно.', trackerReadOnly: 'только чтение', trackerPartialBadge: 'частично', trackerUnmapped: 'Без соответствия', trackerEmpty: 'В этом частичном результате задачи не найдены.', trackerError: 'Трекер недоступен или запрос не выполнен. Повторите попытку.', trackerReload: 'Обновить настройки', trackerPickerHint: 'Выберите доски для этого пространства явно. Список действует недолго; при ошибке загрузите его снова.', trackerContext: 'Откройте задачу Трекера, чтобы связать сессии этого рабочего пространства.', trackerRefreshBoard: 'Обновить доску Трекера', trackerSelectionSaved: 'Выбор сохранён.', trackerUncertain: 'Результат неизвестен. Обновите настройки и проверьте их перед повтором.', trackerMissingSelection: 'Некоторых сохранённых досок нет в списке. При сохранении они будут удалены.', trackerConfirmSelection: 'Подтвердить выбор досок для пространства? Удаляемые ID досок: ', trackerNoBoards: 'Доски не найдены.', trackerStatus: 'Статус', trackerClose: 'Закрыть настройки Трекера', trackerListRequired: 'Список досок устарел или изменился. Загрузите его и выберите доски снова.', trackerConflict: 'Настройки Трекера изменились. Обновите их и проверьте выбор.', trackerNotSelected: 'Эта доска больше не выбрана. Обновите настройки.', trackerCredentials: 'Данные доступа на сервере недоступны или отклонены. Проверьте настройки сервера.', trackerRate: 'Трекер занят или ограничил частоту запросов. Повторите позже.', trackerConfiguring: 'Сохранить подключение', trackerLocal: 'Локальная',
+      tracker: 'Яндекс Трекер', trackerConnect: 'Подключить Яндекс Трекер', trackerSettings: 'Настройки Трекера', trackerOrg: 'Тип организации', trackerConfigured: 'Настроен в этом профиле', trackerNotConfigured: 'Не настроен в этом профиле', trackerRefs: 'Данные доступа и идентификатор организации должны быть заранее сохранены на сервере. Здесь они не вводятся.', trackerConfigureWarning: 'Повторное подключение удалит выбор досок всех пространств. Продолжить?', trackerChoose: 'Выбрать доски Трекера', trackerList: 'Загрузить доступные доски', trackerSelect: 'Сохранить выбор досок', trackerReselect: 'Прежний аккаунт не удалось установить или он изменился. Подтвердите сохранённый выбор либо загрузите список, чтобы выбрать другие доски.', trackerNoSelection: 'Для этого пространства доски Трекера не выбраны.', trackerListPartial: 'Список досок неполный: доступны могут быть и другие.', trackerPartial: 'Данные на момент последнего запроса частичные: принадлежность к доске определена приблизительно, список может быть неполным, даже если он пуст. Изменения доступа отображаются не мгновенно.', trackerReadOnly: 'только чтение', trackerPartialBadge: 'частично', trackerUnmapped: 'Без соответствия', trackerEmpty: 'В этом частичном результате задачи не найдены.', trackerError: 'Трекер недоступен или запрос не выполнен. Повторите попытку.', trackerReload: 'Обновить настройки', trackerPickerHint: 'Выберите доски для этого пространства явно. Список действует недолго; при ошибке загрузите его снова.', trackerContext: 'Откройте задачу Трекера, чтобы связать сессии этого рабочего пространства.', trackerRefreshBoard: 'Обновить доску Трекера', trackerSelectionSaved: 'Выбор сохранён.', trackerUncertain: 'Результат неизвестен. Обновите настройки и проверьте их перед повтором.', trackerMissingSelection: 'Некоторых сохранённых досок нет в списке. При сохранении они будут удалены.', trackerConfirmSelection: 'Подтвердить выбор досок для пространства? Удаляемые ID досок: ', trackerNoBoards: 'Доски не найдены.', trackerStatus: 'Статус', trackerClose: 'Закрыть настройки Трекера', trackerListRequired: 'Список досок устарел или изменился. Загрузите его и выберите доски снова.', trackerConflict: 'Настройки Трекера изменились. Обновите их и проверьте выбор.', trackerNotSelected: 'Эта доска больше не выбрана. Обновите настройки.', trackerCredentials: 'Данные доступа на сервере недоступны или отклонены. Проверьте настройки сервера.', trackerRate: 'Трекер занят или ограничил частоту запросов. Повторите позже.', trackerConfiguring: 'Сохранить подключение', trackerLocal: 'Локальная',
     };
 
     // Keep the transport in one seam. The server remains authoritative for access and writes.
@@ -174,13 +174,40 @@ window.__ModuleLoader__.load({
       updateMemory({ issue: null });
     }
     function discardReselectedIssue(settings) {
-      if (memory.issue && (settings.needsReselect.includes(memory.issue.workspaceId) || settings.revision !== memory.issue.settingsRevision)) discardTrackerIssue(memory.issue.workspaceId);
+      const unavailable = new Set(settings.verificationUnavailable || []);
+      let changed = false;
+      const suspend = issue => {
+        const writing = issue.pending && !issue.preflight && !issue.sendOwner && !issue.confirmedWrite;
+        if (writing || issue.unknown) unknownIssues.add(issueUnknownKey(issue));
+        return { ...issue, generation: issue.generation + 1, available: false, loading: false, pending: false, preflight: false, comments: [], commentsOwner: null, unknown: issue.unknown || writing, error: writing ? 'issueUnknown' : issue.error };
+      };
+      if (memory.issue && unavailable.has(memory.issue.workspaceId)) {
+        memory.issue = suspend(memory.issue);
+        changed = true;
+      } else if (memory.issue && (settings.needsReselect.includes(memory.issue.workspaceId) || settings.revision !== memory.issue.settingsRevision)) discardTrackerIssue(memory.issue.workspaceId);
       for (const [key, holder] of sessionIssueStores) {
         const issue = holder.memory.issue;
+        if (issue && unavailable.has(issue.workspaceId)) {
+          holder.epoch++;
+          holder.memory.issue = suspend(issue);
+          holder.memory.tracker.settings = { ...holder.memory.tracker.settings, verificationUnavailable: [...unavailable] };
+          changed = true;
+          continue;
+        }
         if (!issue || (settings.revision === issue.settingsRevision && settings.configured && !settings.needsReselect.includes(issue.workspaceId) && settings.workspaces[issue.workspaceId]?.includes(issue.boardId))) continue;
         if ((issue.pending && !issue.preflight && !issue.sendOwner && !issue.confirmedWrite) || issue.unknown) unknownIssues.add(issueUnknownKey(issue));
         holder.epoch++; sessionIssueStores.delete(key);
       }
+      const current = memory.tracker, old = current.settings;
+      if (old && old.revision === settings.revision && unavailable.size) {
+        const previous = old.verificationUnavailable || [];
+        const next = [...new Set([...previous, ...unavailable])];
+        if (next.length !== previous.length || (unavailable.has(memory.workspaceId) && (current.board || current.boardLinks))) {
+          memory.tracker = { ...current, settings: { ...old, verificationUnavailable: next }, ...(unavailable.has(memory.workspaceId) ? { board: null, boardLinks: null, boardUpdatedAt: null, error: 'trackerVerificationUnavailable' } : {}) };
+          changed = true;
+        }
+      }
+      if (changed) updateMemory({});
       updateUnload();
     }
     function invalidateTracker(preserveOpen = true, preserveDraft = false) {
@@ -230,7 +257,7 @@ window.__ModuleLoader__.load({
       return useSyncExternalStore((fn) => source.subscribe(fn), () => source.getSnapshot(), () => source.getSnapshot());
     }
     function trackerSettings(value) {
-      if (!value || !Number.isSafeInteger(value.revision) || value.revision < 0 || typeof value.configured !== 'boolean' || !value.workspaces || typeof value.workspaces !== 'object' || Array.isArray(value.workspaces) || (value.orgType !== null && !['cloud', 'org'].includes(value.orgType)) || (value.needsReselect !== undefined && (!Array.isArray(value.needsReselect) || value.needsReselect.some((id) => typeof id !== 'string')))) throw new Error('invalid response');
+      if (!value || !Number.isSafeInteger(value.revision) || value.revision < 0 || typeof value.configured !== 'boolean' || !value.workspaces || typeof value.workspaces !== 'object' || Array.isArray(value.workspaces) || (value.orgType !== null && !['cloud', 'org'].includes(value.orgType)) || (value.needsReselect !== undefined && (!Array.isArray(value.needsReselect) || value.needsReselect.some((id) => typeof id !== 'string'))) || (value.verificationUnavailable !== undefined && (!Array.isArray(value.verificationUnavailable) || value.verificationUnavailable.some((id) => typeof id !== 'string')))) throw new Error('invalid response');
       for (const ids of Object.values(value.workspaces)) if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string')) throw new Error('invalid response');
       const unattended = value.unattendedIssueCreation, stored = value.unattendedIssueCreationStored;
       for (const map of [unattended, stored]) if (map !== undefined && (!map || typeof map !== 'object' || Array.isArray(map) || Object.values(map).some(enabled => typeof enabled !== 'boolean'))) throw new Error('invalid response');
@@ -238,7 +265,7 @@ window.__ModuleLoader__.load({
       if ((unattended === undefined) !== (stored === undefined)) throw new Error('invalid response');
       if (unattended && Object.keys(unattended).some(id => unattended[id] === true && stored[id] !== true)) throw new Error('invalid response');
       // Missing live-binding evidence must never be interpreted as authorization.
-      return { revision: value.revision, configured: value.configured, orgType: value.orgType, workspaces: value.workspaces, unattendedIssueCreation: unattended || {}, unattendedIssueCreationStored: stored || {}, needsReselect: value.needsReselect || Object.keys(value.workspaces) };
+      return { revision: value.revision, configured: value.configured, orgType: value.orgType, workspaces: value.workspaces, unattendedIssueCreation: unattended || {}, unattendedIssueCreationStored: stored || {}, needsReselect: value.needsReselect || Object.keys(value.workspaces), verificationUnavailable: value.verificationUnavailable || [] };
     }
     function trackerListing(value) {
       if (!value || !Array.isArray(value.boards) || typeof value.complete !== 'boolean' || value.boards.some((board) => !board || typeof board.id !== 'string' || typeof board.name !== 'string') || new Set(value.boards.map((board) => board.id)).size !== value.boards.length) throw new Error('invalid response');
@@ -677,7 +704,7 @@ function groupTrackerStatuses({ columns, issues }) {
 
     return { groupTrackerStatuses };
   })(),
-  // session-card.mjs sha256:12df96c599fda6ce3b8756e8aaa2c3967a624b19401eed770f1927df5c03461d
+  // session-card.mjs sha256:1cde222b5d7e5e70bd02f80a524fd7ad4d030fd544f45f50b3df4374cc6718ed
   ...(() => {
 // Session-scoped discovery and authorization for the shared Tracker editor.
 function createSessionCard(React, deps) {
@@ -705,7 +732,8 @@ function createSessionCard(React, deps) {
     return { workspaceId: owners[0].workspaceId, incarnation: owners[0].createdAt, connectionId: live.id };
   }
   const sameScope = (a, b) => Boolean(a && b && a.workspaceId === b.workspaceId && a.incarnation === b.incarnation && a.connectionId === b.connectionId);
-  const settingsValid = settings => settings && Number.isSafeInteger(settings.revision) && settings.revision >= 0 && typeof settings.configured === 'boolean' && settings.workspaces && typeof settings.workspaces === 'object' && !Array.isArray(settings.workspaces) && Array.isArray(settings.needsReselect) && settings.needsReselect.every(x => typeof x === 'string');
+  const settingsValid = settings => settings && Number.isSafeInteger(settings.revision) && settings.revision >= 0 && typeof settings.configured === 'boolean' && settings.workspaces && typeof settings.workspaces === 'object' && !Array.isArray(settings.workspaces) && Array.isArray(settings.needsReselect) && settings.needsReselect.every(x => typeof x === 'string') && (settings.verificationUnavailable === undefined || (Array.isArray(settings.verificationUnavailable) && settings.verificationUnavailable.every(x => typeof x === 'string')));
+  const unavailable = (settings, wid) => settings.verificationUnavailable?.includes(wid) === true;
   const selectedBoards = (settings, wid) => {
     const value = settings.workspaces[wid];
     if (value === undefined) return [];
@@ -810,8 +838,8 @@ function createSessionCard(React, deps) {
           if (!settingsValid(settings)) throw Error('invalid settings');
           const boards = selectedBoards(settings, currentScope.workspaceId);
           deps.onSettings?.(settings);
-          if (!settings.configured || settings.needsReselect.includes(currentScope.workspaceId)) {
-            await publish({ links: [], settings, message: settings.needsReselect.includes(currentScope.workspaceId) ? 'reselect' : 'unconfigured' }); return;
+          if (!settings.configured || settings.needsReselect.includes(currentScope.workspaceId) || unavailable(settings, currentScope.workspaceId)) {
+            await publish({ links: [], settings, message: unavailable(settings, currentScope.workspaceId) ? 'verification_unavailable' : settings.needsReselect.includes(currentScope.workspaceId) ? 'reselect' : 'unconfigured' }); return;
           }
           if (boards.length === 0) { await publish({ links: [], settings, message: 'no_boards' }); return; }
           const result = await readCommand({ op: 'links.session.read', workspaceId: currentScope.workspaceId, sessionId }, accepts);
@@ -830,6 +858,7 @@ function createSessionCard(React, deps) {
           const after = await transport.trackerRead();
           if (!accepts()) return;
           if (settingsValid(after)) deps.onSettings?.(after);
+          if (settingsValid(after) && unavailable(after, currentScope.workspaceId)) { await publish({ links: [], settings: after, message: 'verification_unavailable' }); return; }
           if (!settingsValid(after) || after.revision !== settings.revision || !after.configured || after.needsReselect.includes(currentScope.workspaceId) || JSON.stringify(selectedBoards(after, currentScope.workspaceId)) !== JSON.stringify(boards)) throw Error('settings changed');
           await publish({ links, settings: after, partialError });
         } catch { if (accepts()) await publish({ links: [], message: 'unavailable' }); }
@@ -846,6 +875,13 @@ function createSessionCard(React, deps) {
     const revisionIdentity = JSON.stringify([sessionId, currentScope?.workspaceId, currentScope?.incarnation, currentScope?.connectionId, data?.settings?.revision, selectedId, generation]);
     if (chosen && revisionRef.current?.identity !== revisionIdentity) revisionRef.current = { identity: revisionIdentity, revision: chosen.linkRevision };
     const editorValid = () => valid() && selectionEpoch.current === selectionGeneration && selectedRef.current === selectedId && Boolean(data?.settings && chosen);
+    const reportUnavailable = settings => {
+      if (!editorValid() || !settingsValid(settings) || !unavailable(settings, currentScope.workspaceId)) return false;
+      selectionEpoch.current++; selectedRef.current = '';
+      setChoice('');
+      setState({ ...data, links: [], settings, message: 'verification_unavailable' });
+      return true;
+    };
     const authorization = {
       valid: editorValid,
       async reconcileLink(command, receipt, accepts) {
@@ -856,15 +892,15 @@ function createSessionCard(React, deps) {
           return false;
         }
         const settings = await transport.trackerRead();
-        if (allowed() && settingsValid(settings)) deps.onSettings?.(settings);
-        if (!allowed() || !settingsValid(settings) || settings.revision !== data.settings.revision || !settings.configured || settings.needsReselect.includes(currentScope.workspaceId) || !selectedBoards(settings, currentScope.workspaceId).includes(chosen.boardId)) return false;
+        if (allowed() && settingsValid(settings)) { if (unavailable(settings, currentScope.workspaceId)) reportUnavailable(settings); deps.onSettings?.(settings); }
+        if (!allowed() || !settingsValid(settings) || settings.revision !== data.settings.revision || !settings.configured || settings.needsReselect.includes(currentScope.workspaceId) || unavailable(settings, currentScope.workspaceId) || !selectedBoards(settings, currentScope.workspaceId).includes(chosen.boardId)) return false;
         const result = await readCommand({ op: 'links.issue.read', workspaceId: currentScope.workspaceId, boardId: chosen.boardId, issueKey: chosen.issueKey, issueId: chosen.issueId }, allowed);
         if (!allowed() || !result || result.incomplete !== false || result.revision !== receipt.revision || !Array.isArray(result.links) || result.links.length > 10000) return false;
         const seen = new Set();
         if (result.links.some(link => !link || typeof link.sessionId !== 'string' || !link.sessionId || link.issueKey !== chosen.issueKey || link.issueId !== chosen.issueId || seen.has(link.sessionId) || (seen.add(link.sessionId), false)) || !seen.has(sessionId) || seen.has(command.sessionId) !== command.linked) return false;
         const after = await transport.trackerRead();
-        if (allowed() && settingsValid(after)) deps.onSettings?.(after);
-        if (!allowed() || !settingsValid(after) || after.revision !== settings.revision || !after.configured || after.needsReselect.includes(currentScope.workspaceId) || !selectedBoards(after, currentScope.workspaceId).includes(chosen.boardId)) return false;
+        if (allowed() && settingsValid(after)) { if (unavailable(after, currentScope.workspaceId)) reportUnavailable(after); deps.onSettings?.(after); }
+        if (!allowed() || !settingsValid(after) || after.revision !== settings.revision || !after.configured || after.needsReselect.includes(currentScope.workspaceId) || unavailable(after, currentScope.workspaceId) || !selectedBoards(after, currentScope.workspaceId).includes(chosen.boardId)) return false;
         revisionRef.current.revision = receipt.revision;
         return true;
       },
@@ -874,8 +910,8 @@ function createSessionCard(React, deps) {
         const checkSettings = async () => {
           const settings = await transport.trackerRead();
           if (!allowed()) return false;
-          if (settingsValid(settings)) deps.onSettings?.(settings);
-          if (!settingsValid(settings) || settings.revision !== data.settings.revision || !settings.configured || settings.needsReselect.includes(currentScope.workspaceId) || !selectedBoards(settings, currentScope.workspaceId).includes(chosen.boardId)) throw Error('settings changed');
+          if (settingsValid(settings)) { if (unavailable(settings, currentScope.workspaceId)) reportUnavailable(settings); deps.onSettings?.(settings); }
+          if (!settingsValid(settings) || settings.revision !== data.settings.revision || !settings.configured || settings.needsReselect.includes(currentScope.workspaceId) || unavailable(settings, currentScope.workspaceId) || !selectedBoards(settings, currentScope.workspaceId).includes(chosen.boardId)) throw Error('settings changed');
           return true;
         };
         try {
@@ -913,7 +949,8 @@ function createSessionCard(React, deps) {
           h('p', { style: styles.muted }, text('sessionCardLocalHistory', 'Local links are historical and do not record workspace incarnation; verify them on the full board.')),
           data.localError ? h('p', { style: styles.muted }, text('loadError', 'Local tasks could not be loaded.')) : data.locals.length ? h('ul', { style: { paddingLeft: '18px', marginBottom: 0 } }, data.locals.map(task => h('li', { key: JSON.stringify([task.boardId, task.id]) }, h('strong', null, task.title), h('div', { style: styles.muted }, task.boardName, task.status ? ' · ' + task.status : '')))) : h('p', { style: styles.muted }, text('sessionCardNoLocal', 'No linked local tasks found.'))),
         h('section', { style: styles.panel }, h('strong', null, text('tracker', 'Yandex Tracker')),
-          data.message && h('p', { role: 'status', style: styles.muted }, data.message === 'reselect' ? text('trackerReselect', 'Tracker board selection needs confirmation.') : data.message === 'unconfigured' ? text('trackerNotConfigured', 'Tracker is not configured.') : data.message === 'no_boards' ? text('trackerNoBoardsSelected', 'No Tracker boards are selected.') : text('trackerError', 'Tracker is unavailable; issue details are hidden.')),
+          data.message && h('p', { role: 'status', style: styles.muted }, data.message === 'verification_unavailable' ? text('trackerVerificationUnavailable', 'Tracker verification is temporarily unavailable. Your saved selection is unchanged; try again.') : data.message === 'reselect' ? text('trackerReselect', 'Tracker board selection needs confirmation.') : data.message === 'unconfigured' ? text('trackerNotConfigured', 'Tracker is not configured.') : data.message === 'no_boards' ? text('trackerNoBoardsSelected', 'No Tracker boards are selected.') : text('trackerError', 'Tracker is unavailable; issue details are hidden.')),
+          data.message === 'verification_unavailable' && h('button', { type: 'button', style: styles.button, onClick: () => { if (valid()) { epoch.current++; setState(null); setRefresh(value => value + 1); } } }, text('retry', 'Retry')),
           data.partialError && h('p', { role: 'status', style: styles.muted }, text('sessionCardPartial', 'Linked issues are a partial result; other links may exist.')),
           !data.message && data.links.length === 0 && h('p', { style: styles.muted }, data.partialError ? text('sessionCardNoLinksPartial', 'No linked issues found in this partial result.') : text('sessionCardNoLinks', 'No linked issues found.')),
           data.links.length > 1 && h('label', null, text('sessionCardChoose', 'Choose a linked issue'), h('select', { style: styles.select, value: choice, onChange: event => { if (valid()) { selectionEpoch.current++; selectedRef.current = event.target.value; setClosed(false); setChoice(event.target.value); } } }, h('option', { value: '' }, text('sessionCardSelect', 'Select an issue')), data.links.map(link => h('option', { key: identity(link), value: identity(link) }, link.issueKey + ' · ' + text('board', 'Board') + ' ' + link.boardId)))),
@@ -1284,7 +1321,7 @@ function createSessionSender({ sessions, validateSession }) {
       function openIssue(issue) {
         if (!/^[A-Z][A-Z0-9_]{0,31}-[1-9][0-9]{0,14}$/.test(issue.key) || typeof issue.id !== 'string' || !issue.id || memory.tracker.busy || !setForm(null)) return;
         const connectionId = connectionSource.getSnapshot()?.id, incarnation = memory.tracker.incarnations[workspaceId];
-        if (connectionId === undefined || !currentWorkspace(workspaceId, incarnation) || !memory.tracker.settings || memory.tracker.settings.needsReselect.includes(workspaceId) || !memory.tracker.settings.workspaces[workspaceId]?.includes(boardId)) return;
+        if (connectionId === undefined || !currentWorkspace(workspaceId, incarnation) || !memory.tracker.settings || memory.tracker.settings.needsReselect.includes(workspaceId) || memory.tracker.settings.verificationUnavailable.includes(workspaceId) || !memory.tracker.settings.workspaces[workspaceId]?.includes(boardId)) return;
         const draft = { token: {}, generation: 0, workspaceId, boardId, key: issue.key, issueId: issue.id || '', connectionId, incarnation, settingsRevision: memory.tracker.settings.revision, draft: null, comment: '', editComment: null, transitionId: '', linkSessionId: '', addingSession: false, sendTargets: [], sendResult: null, savedComment: null, editingFields: false, dirty: false, pending: false, unknown: false, loading: false, available: false, error: '', notice: '' };
         draft.unknown = unknownIssues.has(issueUnknownKey(draft));
         issueOrigin.current = document.activeElement;
@@ -1648,11 +1685,12 @@ function createSessionSender({ sessions, validateSession }) {
         const cached = sessionIssueStores.get(identity);
         const issue = cached?.memory.issue || { token: {}, generation: 0, workspaceId: target.workspaceId, boardId: target.boardId, key: target.key, issueId: target.issueId, connectionId: target.connectionId, incarnation: target.incarnation, settingsRevision: target.settings.revision, draft: null, comment: '', editComment: null, transitionId: '', linkSessionId: '', addingSession: false, sendTargets: [], sendResult: null, savedComment: null, editingFields: false, dirty: false, pending: false, unknown: false, loading: false, available: false, error: '', notice: '' };
         issue.unknown = issue.unknown || unknownIssues.has(issueUnknownKey(issue));
+        if (cached && !target.settings.verificationUnavailable?.includes(target.workspaceId)) cached.memory.tracker.settings = target.settings;
         store.current = cached || { identity, target: { sessionId: target.sessionId, workspaceId: target.workspaceId, incarnation: target.incarnation, connectionId: target.connectionId }, epoch: 0, globalEpoch: privacyEpoch, active: false, memory: { issue, tracker: { settings: target.settings, incarnations: { [target.workspaceId]: target.incarnation }, generation: 0, busy: false, board: null }, workspaceId: target.workspaceId, boardId: target.boardId, provider: 'tracker', overview: false, showContext: false } };
         sessionIssueStores.set(identity, store.current);
       }
       const holder = store.current, local = holder.memory;
-      const current = () => store.current === holder && sessionIssueStores.get(identity) === holder && holder.active && !trackerMutationPending && holder.globalEpoch === privacyEpoch && authorization.valid() && connectionSource.getSnapshot()?.id === target.connectionId;
+      const current = () => store.current === holder && sessionIssueStores.get(identity) === holder && holder.active && !trackerMutationPending && !holder.memory.tracker.settings.verificationUnavailable?.includes(target.workspaceId) && holder.globalEpoch === privacyEpoch && authorization.valid() && connectionSource.getSnapshot()?.id === target.connectionId;
       const update = patch => { if (store.current !== holder || !holder.active) return; Object.assign(local, patch); updateUnload(); render(value => value + 1); };
       const revoke = issue => {
         if (store.current !== holder || local.issue?.token !== issue?.token) return;
@@ -1808,7 +1846,7 @@ function createSessionSender({ sessions, validateSession }) {
           if (connectionSource.getSnapshot()) loadTracker();
         }
       }, [workspaces]);
-      const trackerLive = (id) => connection && tracker.settings && Object.hasOwn(tracker.settings.workspaces, id) && !tracker.settings.needsReselect.includes(id) && workspaces.phase === 'ready' && workspaces.state !== 'error' && workspaces.items.some((item) => item.workspaceId === id && typeof item.createdAt === 'string' && item.createdAt && tracker.incarnations[id] === item.createdAt);
+      const trackerLive = (id) => connection && tracker.settings && Object.hasOwn(tracker.settings.workspaces, id) && !tracker.settings.needsReselect.includes(id) && !tracker.settings.verificationUnavailable.includes(id) && workspaces.phase === 'ready' && workspaces.state !== 'error' && workspaces.items.some((item) => item.workspaceId === id && typeof item.createdAt === 'string' && item.createdAt && tracker.incarnations[id] === item.createdAt);
       const trackerTiles = connection && tracker.settings && tracker.settings.configured && !showContext && workspaces.phase === 'ready' && workspaces.state !== 'error' ? workspaces.items.flatMap((item) => (!workspaceId || workspaceId === item.workspaceId) && trackerLive(item.workspaceId) ? (tracker.settings.workspaces[item.workspaceId] || []).map((id) => ({ id, workspaceId: item.workspaceId, name: tracker.listing?.boards.find((b) => b.id === id)?.name || `${t('tracker')} #${id}` })) : []) : [];
       const visibleBoards = snapshot && workspaces.phase === 'ready' && workspaces.state !== 'error'
         ? snapshot.boards.filter((board) => (!workspaceId || board.workspaceId === workspaceId) && workspaces.items.some((item) => item.workspaceId === board.workspaceId) && (!showContext || !contextSessionId || workspaces.items.some((item) => item.workspaceId === board.workspaceId && item.sessionIds.includes(contextSessionId)))) : [];
@@ -2088,6 +2126,7 @@ function createSessionSender({ sessions, validateSession }) {
           discardReselectedIssue(settings);
           updateTracker({ settings, orgType: settings.orgType || 'cloud', incarnations, board: null });
           if (target && memory.provider === 'tracker' && !memory.overview && !memory.showContext && memory.workspaceId === target && memory.boardId === id && currentWorkspace(target, incarnations[target])) {
+            if (settings.verificationUnavailable.includes(target)) { updateTracker({ error: 'trackerVerificationUnavailable' }); return; }
             if (settings.needsReselect.includes(target) || !settings.workspaces[target]?.includes(id)) { updateTracker({ error: 'trackerReselect' }); return; }
             const board = trackerBoard(await transport.trackerCommand({ op: 'board.read', workspaceId: target, boardId: id, issueKeys: [] }), id);
             if (validPrivateRequest(generation, connectionId, epoch) && accepts() && memory.provider === 'tracker' && !memory.overview && !memory.showContext && memory.workspaceId === target && memory.boardId === id && currentWorkspace(target, incarnations[target])) updateTracker({ board, boardUpdatedAt: Date.now() });
@@ -2102,7 +2141,7 @@ function createSessionSender({ sessions, validateSession }) {
         const current = memory.tracker, settings = current.settings;
         const target = memory.workspaceId, id = memory.boardId, incarnation = current.incarnations[target];
         const connectionId = connectionSource.getSnapshot()?.id, generation = current.generation, epoch = privacyEpoch;
-        if (silentTracker.current.running || !trackerActive() || connectionId === undefined || current.busy || trackerMutationPending || issueMutationPending || memory.issue?.pending || !settings || !current.board || memory.provider !== 'tracker' || memory.overview || memory.showContext || !currentWorkspace(target, incarnation) || settings.needsReselect.includes(target) || !settings.workspaces[target]?.includes(id)) return;
+        if (silentTracker.current.running || !trackerActive() || connectionId === undefined || current.busy || trackerMutationPending || issueMutationPending || memory.issue?.pending || !settings || !current.board || memory.provider !== 'tracker' || memory.overview || memory.showContext || !currentWorkspace(target, incarnation) || settings.needsReselect.includes(target) || settings.verificationUnavailable.includes(target) || !settings.workspaces[target]?.includes(id)) return;
         const sequence = ++silentTracker.current.sequence;
         silentTracker.current.running = true;
         const scope = () => sequence === silentTracker.current.sequence && validPrivateRequest(generation, connectionId, epoch) && memory.tracker.settings?.revision === settings.revision && memory.tracker.incarnations[target] === incarnation && currentWorkspace(target, incarnation) && memory.provider === 'tracker' && !memory.overview && !memory.showContext && memory.workspaceId === target && memory.boardId === id;
@@ -2117,7 +2156,10 @@ function createSessionSender({ sessions, validateSession }) {
         try {
           const fresh = trackerSettings(await transport.trackerRead());
           if (!scope()) return;
-          if (fresh.revision !== settings.revision || !fresh.configured || fresh.needsReselect.includes(target) || !fresh.workspaces[target]?.includes(id)) { discardReselectedIssue(fresh); revoke('trackerReselect'); return; }
+          discardReselectedIssue(fresh);
+          if (fresh.revision !== settings.revision || !fresh.configured || !fresh.workspaces[target]?.includes(id)) { revoke('trackerReselect'); return; }
+          if (fresh.verificationUnavailable.includes(target)) return;
+          if (fresh.needsReselect.includes(target)) { discardReselectedIssue(fresh); revoke('trackerReselect'); return; }
           if (!accepts()) return;
           const board = trackerBoard(await transport.trackerCommand({ op: 'board.read', workspaceId: target, boardId: id, issueKeys: [] }), id);
           if (!accepts()) return;
@@ -2218,7 +2260,7 @@ function createSessionSender({ sessions, validateSession }) {
       async function setUnattendedIssueCreation(enabled, target) {
         const current = memory.tracker, settings = current.settings;
         const connectionId = connectionSource.getSnapshot()?.id, incarnation = current.incarnations[target], confirmedEpoch = privacyEpoch;
-        if (typeof enabled !== 'boolean' || current.busy || issueMutationPending || trackerMutationPending || !trackerActive() || !current.open || connectionId === undefined || !settings?.configured || memory.workspaceId !== target || !currentWorkspace(target, incarnation) || (settings.unattendedIssueCreationStored[target] === true) === enabled || (enabled && (!settings.workspaces[target]?.length || settings.needsReselect.includes(target)))) return;
+        if (typeof enabled !== 'boolean' || current.busy || issueMutationPending || trackerMutationPending || !trackerActive() || !current.open || connectionId === undefined || !settings?.configured || memory.workspaceId !== target || !currentWorkspace(target, incarnation) || (settings.unattendedIssueCreationStored[target] === true) === enabled || (enabled && (!settings.workspaces[target]?.length || settings.needsReselect.includes(target) || settings.verificationUnavailable.includes(target)))) return;
         const revision = settings.revision;
         const title = workspacesSource.getSnapshot().items.find(item => item.workspaceId === target)?.title;
         if (enabled && !window.confirm(t('trackerUnattendedWarning') + '\n' + t('workspace') + ': ' + (title || target) + ' (' + target + ')')) return;
@@ -2233,9 +2275,18 @@ function createSessionSender({ sessions, validateSession }) {
           if (!accepts()) return;
           if (!receipt || receipt.revision !== revision + 1 || receipt.workspaceId !== target || receipt.enabled !== enabled) throw new Error('invalid receipt');
           let readTimer;
+          if (!enabled) {
+            const snapshot = localPermissionSnapshot(await Promise.race([transport.trackerCommand({ op: 'configuration.unattendedRead' }), new Promise((_, reject) => { readTimer = window.setTimeout(() => reject(new Error('readback timeout')), 15000); })]).finally(() => window.clearTimeout(readTimer)));
+            if (!accepts()) return;
+            if (snapshot.revision !== receipt.revision || snapshot.stored[target] === true) throw new Error('invalid readback');
+            // The local read proves revocation, not Tracker access; retain only the
+            // local projection and require an independent fresh settings read.
+            updateTracker({ settings: null, localPermission: { workspaceId: target, incarnation, revision: snapshot.revision, enabled: false }, notice: 'trackerUnattendedSaved' });
+            return;
+          }
           const fresh = trackerSettings(await Promise.race([transport.trackerRead(), new Promise((_, reject) => { readTimer = window.setTimeout(() => reject(new Error('readback timeout')), 15000); })]).finally(() => window.clearTimeout(readTimer)));
           if (!accepts()) return;
-          if (fresh.revision !== receipt.revision || !fresh.configured || (enabled && (fresh.needsReselect.includes(target) || !fresh.workspaces[target]?.length)) || (fresh.unattendedIssueCreation[target] === true) !== enabled || (fresh.unattendedIssueCreationStored[target] === true) !== enabled) throw new Error('invalid readback');
+          if (fresh.revision !== receipt.revision || !fresh.configured || (enabled && (fresh.needsReselect.includes(target) || fresh.verificationUnavailable.includes(target) || !fresh.workspaces[target]?.length)) || (fresh.unattendedIssueCreation[target] === true) !== enabled || (fresh.unattendedIssueCreationStored[target] === true) !== enabled) throw new Error('invalid readback');
           discardReselectedIssue(fresh);
           updateTracker({ settings: fresh, incarnations: workspaceIncarnations(), notice: 'trackerUnattendedSaved' });
         } catch (err) {
@@ -2250,7 +2301,7 @@ function createSessionSender({ sessions, validateSession }) {
         const current = memory.tracker, target = memory.workspaceId, settings = current.settings;
         const connectionId = connectionSource.getSnapshot()?.id, incarnation = current.incarnations[target], confirmedEpoch = privacyEpoch;
         const ids = settings?.workspaces[target];
-        if (current.busy || issueMutationPending || trackerMutationPending || !trackerActive() || connectionId === undefined || !settings?.configured || !settings.needsReselect.includes(target) || !Array.isArray(ids) || !ids.length || !currentWorkspace(target, incarnation)) return;
+        if (current.busy || issueMutationPending || trackerMutationPending || !trackerActive() || connectionId === undefined || !settings?.configured || !settings.needsReselect.includes(target) || settings.verificationUnavailable.includes(target) || !Array.isArray(ids) || !ids.length || !currentWorkspace(target, incarnation)) return;
         const boardIds = [...ids], revision = settings.revision;
         const title = workspacesSource.getSnapshot().items.find(item => item.workspaceId === target)?.title;
         if (!window.confirm(t('trackerConfirmPreviousWarning') + '\n' + t('workspace') + ': ' + (title || target) + ' (' + target + ')\nIDs: ' + JSON.stringify(boardIds))) return;
@@ -2270,7 +2321,7 @@ function createSessionSender({ sessions, validateSession }) {
           if (!receipt || ![revision, revision + 1].includes(receipt.revision) || receipt.workspaceId !== target || !Array.isArray(receipt.boardIds) || JSON.stringify(receipt.boardIds) !== JSON.stringify(boardIds)) throw new Error('invalid receipt');
           const fresh = trackerSettings(await transport.trackerRead());
           if (!accepts()) return;
-          if (fresh.revision !== receipt.revision || !fresh.configured || fresh.needsReselect.includes(target) || JSON.stringify(fresh.workspaces[target]) !== JSON.stringify(boardIds)) throw new Error('invalid readback');
+          if (fresh.revision !== receipt.revision || !fresh.configured || fresh.needsReselect.includes(target) || fresh.verificationUnavailable.includes(target) || JSON.stringify(fresh.workspaces[target]) !== JSON.stringify(boardIds)) throw new Error('invalid readback');
           discardReselectedIssue(fresh);
           updateTracker({ settings: fresh, incarnations: workspaceIncarnations(), notice: 'trackerSelectionSaved' });
           const id = memory.boardId;
@@ -2288,7 +2339,7 @@ function createSessionSender({ sessions, validateSession }) {
       }
       async function readTrackerBoard(target, id) {
         const settings = memory.tracker.settings, connectionId = connectionSource.getSnapshot()?.id;
-        if (memory.tracker.busy || connectionId === undefined || !currentWorkspace(target) || !settings || settings.needsReselect.includes(target) || !settings.workspaces[target]?.includes(id)) return;
+        if (memory.tracker.busy || connectionId === undefined || !currentWorkspace(target) || !settings || settings.needsReselect.includes(target) || settings.verificationUnavailable.includes(target) || !settings.workspaces[target]?.includes(id)) return;
         const incarnation = memory.tracker.incarnations[target], generation = memory.tracker.generation + 1, epoch = privacyEpoch;
         const current = memory.tracker, draftWorkspace = current.pickerWorkspace || current.draftWorkspace;
         const draftPicked = current.pickerWorkspace ? [...current.picked] : current.draftPicked;
@@ -2300,6 +2351,7 @@ function createSessionSender({ sessions, validateSession }) {
           if (!accepts()) return;
           discardReselectedIssue(fresh);
           updateTracker({ settings: fresh });
+          if (fresh.verificationUnavailable.includes(target)) { updateTracker({ error: 'trackerVerificationUnavailable' }); return; }
           if (fresh.needsReselect.includes(target) || !fresh.workspaces[target]?.includes(id)) { updateTracker({ error: 'trackerReselect' }); return; }
           const board = trackerBoard(await transport.trackerCommand({ op: 'board.read', workspaceId: target, boardId: id, issueKeys: [] }), id);
           if (accepts()) updateTracker({ board, boardUpdatedAt: Date.now() });
@@ -2449,7 +2501,7 @@ function createSessionSender({ sessions, validateSession }) {
       }
       async function loadBoardLinks() {
         const target = memory.workspaceId, board = memory.boardId, connectionId = connectionSource.getSnapshot()?.id, generation = memory.tracker.generation, epoch = privacyEpoch, incarnation = memory.tracker.incarnations[target], linksGeneration = ++boardLinksGeneration;
-        const accepts = () => linksGeneration === boardLinksGeneration && validPrivateRequest(generation, connectionId, epoch) && currentWorkspace(target, incarnation) && memory.provider === 'tracker' && !memory.overview && !memory.showContext && memory.workspaceId === target && memory.boardId === board && memory.tracker.settings?.workspaces[target]?.includes(board) && !memory.tracker.settings?.needsReselect.includes(target);
+        const accepts = () => linksGeneration === boardLinksGeneration && validPrivateRequest(generation, connectionId, epoch) && currentWorkspace(target, incarnation) && memory.provider === 'tracker' && !memory.overview && !memory.showContext && memory.workspaceId === target && memory.boardId === board && memory.tracker.settings?.workspaces[target]?.includes(board) && !memory.tracker.settings?.needsReselect.includes(target) && !memory.tracker.settings?.verificationUnavailable.includes(target);
         if (!accepts()) return;
         try {
           let result;
@@ -2487,7 +2539,7 @@ function createSessionSender({ sessions, validateSession }) {
           const settings = memory.tracker.settings;
           return Boolean(issue && memory.issue?.token === issue.token && connectionSource.getSnapshot()?.id === issue.connectionId && trackerActive() &&
             memory.provider === 'tracker' && !memory.overview && !memory.showContext && memory.workspaceId === issue.workspaceId && memory.boardId === issue.boardId &&
-            currentWorkspace(issue.workspaceId, issue.incarnation) && (!requireAccess || (settings && settings.revision === issue.settingsRevision && !settings.needsReselect.includes(issue.workspaceId) && settings.workspaces[issue.workspaceId]?.includes(issue.boardId))));
+            currentWorkspace(issue.workspaceId, issue.incarnation) && (!requireAccess || (settings && settings.revision === issue.settingsRevision && !settings.needsReselect.includes(issue.workspaceId) && !settings.verificationUnavailable.includes(issue.workspaceId) && settings.workspaces[issue.workspaceId]?.includes(issue.boardId))));
         },
         get privacyEpoch() { return privacyEpoch; },
         get issueMutationPending() { return issueMutationPending; }, set issueMutationPending(value) { issueMutationPending = value; },
@@ -2497,7 +2549,7 @@ function createSessionSender({ sessions, validateSession }) {
       function openTrackerSession(issue, sessionId, event) {
         const tr = memory.tracker, ws = workspacesSource.getSnapshot(), sess = sessionsSource.getSnapshot();
         const board = tr.board, owner = ws.items.find(item => item.workspaceId === memory.workspaceId);
-        if (!trackerActive() || !connectionSource.getSnapshot() || memory.provider !== 'tracker' || memory.overview || memory.showContext || !currentWorkspace(memory.workspaceId) || !tr.settings?.workspaces[memory.workspaceId]?.includes(memory.boardId) || tr.settings.needsReselect.includes(memory.workspaceId) || !board?.issues.some(item => item.key === issue.key && item.id && item.id === issue.id) || !tr.boardLinks?.links.some(link => link.issueKey === issue.key && link.issueId === issue.id && link.sessionId === sessionId) || !owner?.sessionIds?.includes(sessionId) || sessionState(sessionId, sess, ws) !== 'available') return;
+        if (!trackerActive() || !connectionSource.getSnapshot() || memory.provider !== 'tracker' || memory.overview || memory.showContext || !currentWorkspace(memory.workspaceId) || !tr.settings?.workspaces[memory.workspaceId]?.includes(memory.boardId) || tr.settings.needsReselect.includes(memory.workspaceId) || tr.settings.verificationUnavailable.includes(memory.workspaceId) || !board?.issues.some(item => item.key === issue.key && item.id && item.id === issue.id) || !tr.boardLinks?.links.some(link => link.issueKey === issue.key && link.issueId === issue.id && link.sessionId === sessionId) || !owner?.sessionIds?.includes(sessionId) || sessionState(sessionId, sess, ws) !== 'available') return;
         setSessionMenu(null);
         if (modifiedSessionClick(event)) newTabSession(memory.workspaceId, sessionId);
         else openSession(sessionId);
@@ -2573,17 +2625,18 @@ function createSessionSender({ sessions, validateSession }) {
           connection && tracker.settings && h(React.Fragment, null,
             h('p', { className: 'dsh-board-muted' }, t(tracker.settings.configured ? 'trackerConfigured' : 'trackerNotConfigured')),
             h('label', null, t('trackerOrg'), h('select', { value: tracker.orgType, disabled: tracker.busy, onChange: (event) => updateTracker({ orgType: event.target.value }) }, h('option', { value: 'cloud' }, 'cloud'), h('option', { value: 'org' }, 'org'))),
-            h('div', { className: 'dsh-board-row' }, h('button', { type: 'button', disabled: tracker.busy, onClick: configureTracker }, t('trackerConfiguring')), h('button', { type: 'button', disabled: tracker.busy, onClick: loadTracker }, t('trackerReload'))),
+            h('div', { className: 'dsh-board-row' }, h('button', { type: 'button', disabled: tracker.busy, onClick: configureTracker }, t('trackerConfiguring')), h('button', { type: 'button', disabled: tracker.busy, onClick: () => loadTracker() }, t('trackerReload'))),
             tracker.settings.configured && workspaceId && workspaceReady && h(React.Fragment, null,
-              h('label', null, h('input', { type: 'checkbox', 'aria-label': t('trackerUnattended'), checked: tracker.settings.unattendedIssueCreationStored[workspaceId] === true, disabled: tracker.busy || !currentWorkspace(workspaceId) || (tracker.settings.unattendedIssueCreationStored[workspaceId] !== true && (!tracker.settings.workspaces[workspaceId]?.length || tracker.settings.needsReselect.includes(workspaceId))), onChange: (event) => setUnattendedIssueCreation(event.target.checked, workspaceId) }), t('trackerUnattended')),
+              h('label', null, h('input', { type: 'checkbox', 'aria-label': t('trackerUnattended'), checked: tracker.settings.unattendedIssueCreationStored[workspaceId] === true, disabled: tracker.busy || !currentWorkspace(workspaceId) || (tracker.settings.unattendedIssueCreationStored[workspaceId] !== true && (!tracker.settings.workspaces[workspaceId]?.length || tracker.settings.needsReselect.includes(workspaceId) || tracker.settings.verificationUnavailable.includes(workspaceId))), onChange: (event) => setUnattendedIssueCreation(event.target.checked, workspaceId) }), t('trackerUnattended')),
               tracker.settings.unattendedIssueCreationStored[workspaceId] === true && tracker.settings.unattendedIssueCreation[workspaceId] !== true && h('p', { className: 'dsh-board-alert', role: 'status' }, t('trackerUnattendedInactive')),
               h('p', { className: 'dsh-board-muted' }, t('trackerUnattendedWarning')),
               h('h3', null, t('trackerChoose'), ' — ', workspace?.title || workspaceId),
               h('p', { className: 'dsh-board-muted' }, t('trackerPickerHint')),
-              tracker.settings.needsReselect.includes(workspaceId) && h('p', { className: 'dsh-board-alert', role: 'status' }, t('trackerReselect')),
+              tracker.settings.verificationUnavailable.includes(workspaceId) && h('p', { className: 'dsh-board-alert', role: 'status' }, t('trackerVerificationUnavailable')),
+              !tracker.settings.verificationUnavailable.includes(workspaceId) && tracker.settings.needsReselect.includes(workspaceId) && h('p', { className: 'dsh-board-alert', role: 'status' }, t('trackerReselect')),
               !tracker.settings.workspaces[workspaceId]?.length && h('p', { className: 'dsh-board-muted' }, t('trackerNoSelection')),
               h('button', { type: 'button', disabled: tracker.busy, onClick: listTrackerBoards }, t('trackerList')),
-              tracker.settings.needsReselect.includes(workspaceId) && tracker.settings.workspaces[workspaceId]?.length > 0 && h('button', { type: 'button', disabled: tracker.busy, onClick: reselectTrackerBoards }, t('trackerConfirmPrevious')),
+              !tracker.settings.verificationUnavailable.includes(workspaceId) && tracker.settings.needsReselect.includes(workspaceId) && tracker.settings.workspaces[workspaceId]?.length > 0 && h('button', { type: 'button', disabled: tracker.busy, onClick: reselectTrackerBoards }, t('trackerConfirmPrevious')),
               tracker.listing && tracker.pickerWorkspace === workspaceId && h(React.Fragment, null,
                 !tracker.listing.complete && h('p', { className: 'dsh-board-alert' }, t('trackerListPartial')),
                 (tracker.settings.workspaces[workspaceId] || []).some((id) => !tracker.listing.boards.some((board) => board.id === id)) && h('p', { className: 'dsh-board-alert' }, t('trackerMissingSelection')),
@@ -2591,7 +2644,7 @@ function createSessionSender({ sessions, validateSession }) {
                 tracker.picked.filter((id) => !tracker.listing.boards.some((board) => board.id === id)).map((id) => h('label', { key: id }, h('input', { type: 'checkbox', checked: true, onChange: () => updateTracker({ picked: memory.tracker.picked.filter((value) => value !== id) }) }), t('trackerMissingSelection'), ' #', id)),
                 tracker.reviewRequired && h('label', null, h('input', { type: 'checkbox', checked: false, onChange: (event) => { if (event.target.checked) updateTracker({ reviewRequired: false }); } }), t('trackerReviewDraft')),
                 h('button', { type: 'button', disabled: tracker.busy || tracker.reviewRequired, onClick: selectTrackerBoards }, t('trackerSelect'))))),
-          !tracker.settings && !tracker.busy && h('button', { type: 'button', onClick: loadTracker }, t('trackerReload'))),
+          !tracker.settings && !tracker.busy && h('button', { type: 'button', onClick: () => loadTracker() }, t('trackerReload'))),
         tracker.error && h('div', { className: 'dsh-board-alert', role: 'alert' }, t(tracker.error)),
         tracker.notice && h('p', { className: 'dsh-board-muted', role: 'status' }, t(tracker.notice)),
         error && h('div', { className: 'dsh-board-alert', role: 'alert' }, t(error), ' ', h('button', { type: 'button', disabled: busy || loading, onClick: load }, t('retry'))),
@@ -2609,8 +2662,9 @@ function createSessionSender({ sessions, validateSession }) {
         overview && !form && snapshot && workspaces.phase === 'ready' && workspaces.state !== 'error' && h('section', { className: 'dsh-board-overview', 'aria-label': t('boards') },
           h('div', { className: 'dsh-board-section-head' }, h('div', { className: 'dsh-board-section-title' }, h('h2', null, t('boards'))), h('span', { className: 'dsh-board-overview-count' }, visibleBoards.length + trackerTiles.length)),
           showContext && h('p', { className: 'dsh-board-muted', role: 'status' }, t('trackerContext')),
-          !showContext && tracker.settings?.needsReselect.some((id) => (!workspaceId || workspaceId === id) && workspaces.items.some((item) => item.workspaceId === id)) && h('p', { className: 'dsh-board-alert', role: 'status' }, t('trackerReselect')),
-          !showContext && !tracker.settings && h('p', { className: 'dsh-board-muted', role: 'status' }, t(tracker.busy ? 'loading' : 'trackerError')),
+          !showContext && tracker.settings?.verificationUnavailable.some((id) => (!workspaceId || workspaceId === id) && workspaces.items.some((item) => item.workspaceId === id)) && h('p', { className: 'dsh-board-alert', role: 'status' }, t('trackerVerificationUnavailable'), ' ', h('button', { type: 'button', disabled: tracker.busy, onClick: () => loadTracker() }, t('retry'))),
+          !showContext && tracker.settings?.needsReselect.some((id) => !tracker.settings.verificationUnavailable.includes(id) && (!workspaceId || workspaceId === id) && workspaces.items.some((item) => item.workspaceId === id)) && h('p', { className: 'dsh-board-alert', role: 'status' }, t('trackerReselect')),
+          !showContext && !tracker.settings && h('p', { className: 'dsh-board-muted', role: 'status' }, t(tracker.busy ? 'loading' : tracker.error || 'trackerError')),
           visibleBoards.length + trackerTiles.length > 0 ? h('div', { className: 'dsh-board-tiles' }, visibleBoards.map((board) => {
             const owner = workspaces.items.find((item) => item.workspaceId === board.workspaceId);
             return h('button', { className: 'dsh-board-tile', key: JSON.stringify([board.workspaceId, board.id]), type: 'button', disabled: busy || uncertain, onClick: () => openBoard(board), 'aria-label': board.name + ' — ' + (owner?.title || board.workspaceId) },
@@ -2620,7 +2674,7 @@ function createSessionSender({ sessions, validateSession }) {
             const owner = workspaces.items.find((item) => item.workspaceId === board.workspaceId);
             return h('button', { className: 'dsh-board-tile', key: JSON.stringify(['tracker', board.workspaceId, board.id]), type: 'button', disabled: busy || uncertain || tracker.busy, onClick: () => openTrackerBoard(board), 'aria-label': board.name + ' — ' + (owner?.title || board.workspaceId) + ' — ' + t('tracker') },
               h('span', { className: 'dsh-board-tile-icon' }, h(Icon, { name: 'columns' })), h('span', { className: 'dsh-board-tile-content' }, h('strong', null, board.name), h('span', null, owner?.title || board.workspaceId), h('small', null, t('tracker'), ' · ', t('trackerPartialBadge'))), h('span', { className: 'dsh-board-tile-arrow', 'aria-hidden': true }, '↗'));
-          })) : (showContext || (tracker.settings && !tracker.settings.needsReselect.some((id) => (!workspaceId || workspaceId === id) && workspaces.items.some((item) => item.workspaceId === id)))) && h('div', { className: 'dsh-board-welcome' }, h('div', { className: 'dsh-board-welcome-icon' }, h(Icon, { name: 'columns', size: 22 })), h('h2', null, t('noBoardsAnywhere')), h('p', null, showContext ? t('sessionHelp') : t('noBoardsHelp')))),
+          })) : (showContext || (tracker.settings && ![...tracker.settings.needsReselect, ...tracker.settings.verificationUnavailable].some((id) => (!workspaceId || workspaceId === id) && workspaces.items.some((item) => item.workspaceId === id)))) && h('div', { className: 'dsh-board-welcome' }, h('div', { className: 'dsh-board-welcome-icon' }, h(Icon, { name: 'columns', size: 22 })), h('h2', null, t('noBoardsAnywhere')), h('p', null, showContext ? t('sessionHelp') : t('noBoardsHelp')))),
         h('div', { className: 'dsh-board-content' },
           trackerView(),
           selected && h(React.Fragment, null,

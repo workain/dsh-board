@@ -241,9 +241,81 @@ test('unattended opt-ins are strict, bounded and corrupt persisted data fails cl
   assert.throws(() => openTrackerSettings(options(directory)), isCode('corrupt'));
 });
 
-test('the mapping counts toward the configured byte limit', t => {
+test('board authorizations round-trip alongside legacy keys without migration or schema changes', t => {
+  const { directory, filename } = fixture(t);
+  let store = openTrackerSettings(options(directory));
+  const legacy = { ...data(), unattendedIssueCreation: { ws: { accountScope: 'a'.repeat(64), incarnation: 'created' } } };
+  assert.deepEqual(store.compareAndSet(0, legacy), { ok: true, revision: 1 });
+  store.close();
+  let raw = new DatabaseSync(filename('profile-1'));
+  const identity = () => ({ app: raw.prepare('PRAGMA application_id').get(), version: raw.prepare('PRAGMA user_version').get(), schema: raw.prepare('SELECT * FROM sqlite_schema ORDER BY name').all() });
+  const beforeIdentity = identity();
+  const beforeRow = raw.prepare('SELECT * FROM settings').get();
+  raw.close();
+  store = openTrackerSettings(options(directory));
+  assert.deepEqual(store.read(), { revision: 1, settings: legacy });
+  assert.equal(Object.hasOwn(store.read().settings, 'boardAuthorizations'), false);
+  store.close();
+  raw = new DatabaseSync(filename('profile-1'));
+  assert.deepEqual(raw.prepare('SELECT * FROM settings').get(), beforeRow);
+  raw.close();
+  store = openTrackerSettings(options(directory));
+  const boardAuthorizations = { workspace1: { accountScope: '0123456789abcdef'.repeat(4), incarnation: 'created', boardIds: ['9', '1', '999999999999999'] } };
+  const combined = { ...legacy, boardAuthorizations };
+  assert.deepEqual(store.compareAndSet(1, combined), { ok: true, revision: 2 });
+  assert.deepEqual(store.compareAndSet(1, legacy), { ok: false, revision: 2 });
+  assert.deepEqual(store.read(), { revision: 2, settings: combined });
+  store.close();
+  store = openTrackerSettings(options(directory));
+  assert.deepEqual(store.read(), { revision: 2, settings: combined });
+  const onlyAuthorization = { ...data(), boardAuthorizations };
+  assert.deepEqual(store.compareAndSet(2, onlyAuthorization), { ok: true, revision: 3 });
+  assert.deepEqual(store.read().settings.boardAuthorizations.workspace1.boardIds, ['9', '1', '999999999999999']);
+  store.close();
+  raw = new DatabaseSync(filename('profile-1'));
+  assert.deepEqual(identity(), beforeIdentity);
+  raw.close();
+});
+
+test('board authorizations reject malformed values and fail closed on persisted tampering', t => {
+  const { directory, filename } = fixture(t);
+  const store = openTrackerSettings(options(directory));
+  const entry = { accountScope: 'a'.repeat(64), incarnation: 'created', boardIds: ['2', '1'] };
+  const getter = () => { throw new Error('getter invoked'); };
+  const invalidMaps = [
+    null, [], 'map', Object.create(null), Object.create({ ws: entry }),
+    { '../bad': entry }, { ['x'.repeat(129)]: entry }, { [Symbol('ws')]: entry },
+    Object.defineProperty({}, 'ws', { value: entry }),
+    Object.defineProperty({}, 'ws', { get: getter, enumerable: true }),
+    { ws: null }, { ws: Object.create(null) }, { ws: Object.create(entry) },
+    { ws: { ...entry, extra: true } }, { ws: { accountScope: entry.accountScope, incarnation: entry.incarnation } },
+    { ws: { ...entry, accountScope: 'A'.repeat(64) } }, { ws: { ...entry, accountScope: 'g'.repeat(64) } },
+    { ws: { ...entry, accountScope: 'a'.repeat(63) } }, { ws: { ...entry, accountScope: null } },
+    ...['', 'x'.repeat(257), '\ud800', '\u0000', '\u009f', '\u202a', '\u2069'].map(incarnation => ({ ws: { ...entry, incarnation } })),
+    { ws: { ...entry, incarnation: null } },
+    { ws: Object.defineProperty({ incarnation: 'created', boardIds: ['1'] }, 'accountScope', { get: getter, enumerable: true }) },
+    { ws: { ...entry, [Symbol('extra')]: true } },
+    ...[null, '1', [], [1], ['0'], ['01'], ['-1'], ['1.0'], [' 1'], ['1000000000000000'], ['1', '1'], Array(1), Object.assign(['1'], { extra: true }), Array.from({ length: 501 }, (_, i) => String(i + 1))].map(boardIds => ({ ws: { ...entry, boardIds } })),
+    { ws: { ...entry, boardIds: Object.setPrototypeOf(['1'], {}) } },
+    { ws: { ...entry, boardIds: Object.defineProperty(['1'], '0', { get: getter, enumerable: true }) } },
+  ];
+  for (const boardAuthorizations of invalidMaps) assert.throws(() => store.compareAndSet(0, { ...data(), boardAuthorizations }), isCode('invalid'));
+  assert.throws(() => store.compareAndSet(0, Object.defineProperty(data(), 'boardAuthorizations', { get: getter, enumerable: true })), isCode('invalid'));
+  assert.deepEqual(store.read(), { revision: 0, settings: { connection: null, workspaces: {} } });
+  assert.deepEqual(store.compareAndSet(0, { ...data(), boardAuthorizations: {} }), { ok: true, revision: 1 });
+  const raw = new DatabaseSync(filename('profile-1'));
+  for (const boardAuthorizations of [{ ws: { ...entry, boardIds: [] } }, { ws: { ...entry, boardIds: ['01'] } }, { ws: { ...entry, extra: true } }, { ws: { ...entry, incarnation: '\u202e' } }]) {
+    raw.prepare('UPDATE settings SET json = ?').run(JSON.stringify({ ...data(), boardAuthorizations }));
+    assert.throws(() => store.read(), isCode('corrupt'));
+    assert.throws(() => openTrackerSettings(options(directory)), isCode('corrupt'));
+  }
+  raw.close();
+  store.close();
+});
+
+test('the mappings count toward the configured byte limit', t => {
   const { directory } = fixture(t);
-  const value = { connection: null, workspaces: {}, unattendedIssueCreation: { ws: { accountScope: 'a'.repeat(64), incarnation: 'x'.repeat(128) } } };
+  const value = { connection: null, workspaces: {}, unattendedIssueCreation: { ws: { accountScope: 'a'.repeat(64), incarnation: 'x'.repeat(128) } }, boardAuthorizations: { ws: { accountScope: 'b'.repeat(64), incarnation: 'created', boardIds: ['42', '1'] } } };
   const size = Buffer.byteLength(JSON.stringify(value));
   const small = openTrackerSettings({ ...options(directory), maxBytes: size - 1 });
   assert.throws(() => small.compareAndSet(0, value), isCode('too_large'));

@@ -206,8 +206,33 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
       !workspaceRegistry || typeof workspaceRegistry.get !== 'function' ||
       ((links !== undefined || resolveAccountScope !== undefined) &&
        (!links || typeof links.read !== 'function' || typeof links.mutate !== 'function' || typeof resolveAccountScope !== 'function'))) throw new TypeError('Invalid tracker service dependencies');
-  let listing = null, pending = 0, generation = 0, closed = false, closing;
-  const bindings = new Map(), active = new Set();
+  let listing = null, pending = 0, facadePending = 0, generation = 0, closed = false, closing;
+  const bindings = new Map(), active = new Set(), restorations = new Map();
+  let restoreLookups = 0;
+  const lookupWaiters = [];
+  async function exactRestoreBoard(account, id, signal) {
+    if (restoreLookups >= RESELECT_CONCURRENCY) {
+      await new Promise((resolve, reject) => {
+        let granted = false;
+        const wake = () => { granted = true; signal.removeEventListener('abort', abort); resolve(); };
+        const abort = () => {
+          if (granted) return;
+          const index = lookupWaiters.indexOf(wake);
+          if (index >= 0) lookupWaiters.splice(index, 1);
+          reject(signal.reason);
+        };
+        lookupWaiters.push(wake);
+        signal.addEventListener('abort', abort, { once: true });
+        if (signal.aborted) abort();
+      });
+      if (signal.aborted) { const next = lookupWaiters.shift(); if (next) next(); else restoreLookups--; signal.throwIfAborted(); }
+    } else { signal.throwIfAborted(); restoreLookups++; }
+    // A misbehaving adapter may ignore abort. Keep its permit until the actual
+    // operation settles, even when the caller has already stopped waiting.
+    const operation = Promise.resolve().then(() => { signal.throwIfAborted(); return account.getBoardIdentity(id, { signal }); });
+    operation.finally(() => { const next = lookupWaiters.shift(); if (next) next(); else restoreLookups--; }).catch(() => {});
+    return raceAbort(() => operation, signal);
+  }
   const lifecycle = new AbortController();
   async function session(signal) {
     const value = await raceAbort(() => tracker.openSession({ signal }), signal);
@@ -257,7 +282,40 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
       else bindings.delete(id);
     }
   }
-  function revokeAccount() { bindings.clear(); invalidate(); fail('needs_reselect', 409); }
+  // Remove only evidence observed to belong to the old account/incarnation.
+  // This is a local CAS, never a Tracker write. A conflicting newer owner change
+  // is not overwritten. Retrying against a new snapshot prevents ABA revival.
+  function invalidateProvenance(wid, expected, expectedRevision) {
+    const state = current(), auth = state.settings.boardAuthorizations?.[wid];
+    if (expectedRevision !== undefined && state.revision !== expectedRevision) fail('conflict', 409);
+    if (expected && (!auth || auth.accountScope !== expected.accountScope || auth.incarnation !== expected.incarnation || !sameIds(auth.boardIds, expected.boardIds))) fail('conflict', 409);
+    bindings.delete(wid); invalidate();
+    const grant = state.settings.unattendedIssueCreation?.[wid];
+    if (!auth && !grant) return;
+    const next = { ...state.settings };
+    for (const key of ['boardAuthorizations', 'unattendedIssueCreation']) {
+      const map = { ...next[key] }; delete map[wid];
+      if (Object.keys(map).length) next[key] = map; else delete next[key];
+    }
+    cas(state.revision, next); bindings.clear();
+  }
+  function revokeAccount(observedScope, expectedRevision) {
+    const state = current();
+    if (expectedRevision !== undefined && expectedRevision !== state.revision) { bindings.clear(); invalidate(); fail('needs_reselect', 409); }
+    // A changed credential fingerprint alone is not a changed principal. Existing
+    // operations are revoked, but a future exact-board verification may restore.
+    if (typeof observedScope === 'string') {
+      const mismatched = Object.entries(state.settings.boardAuthorizations ?? {}).filter(([, proof]) => proof?.accountScope !== observedScope);
+      if (mismatched.length) {
+        const next = { ...state.settings }, proofs = { ...next.boardAuthorizations }, grants = { ...next.unattendedIssueCreation };
+        for (const [wid] of mismatched) { delete proofs[wid]; delete grants[wid]; }
+        if (Object.keys(proofs).length) next.boardAuthorizations = proofs; else delete next.boardAuthorizations;
+        if (Object.keys(grants).length) next.unattendedIssueCreation = grants; else delete next.unattendedIssueCreation;
+        cas(state.revision, next);
+      }
+    }
+    bindings.clear(); invalidate(); fail('needs_reselect', 409);
+  }
   async function accountScope(account, signal) {
     if (!resolveAccountScope) return undefined;
     const value = await raceAbort(() => resolveAccountScope({ account, signal }), signal);
@@ -265,34 +323,153 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
     if (typeof value !== 'string' || !/^[0-9a-f]{64}$/.test(value)) fail('invalid_tracker_response', 502);
     return value;
   }
+  const sameIds = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((id, i) => id === b[i]);
+  function authorization(state, wid) {
+    const entry = state.settings.boardAuthorizations?.[wid], ids = state.settings.workspaces[wid];
+    if (!entry || typeof entry !== 'object' || typeof entry.accountScope !== 'string' || !/^[0-9a-f]{64}$/.test(entry.accountScope) ||
+        typeof entry.incarnation !== 'string' || !entry.incarnation || !sameIds(entry.boardIds, ids)) return null;
+    try { boardIds(entry.boardIds); } catch { return null; }
+    return entry;
+  }
+  async function restore(wid, signal) {
+    signal.throwIfAborted();
+    let flight = restorations.get(wid);
+    if (flight?.controller.signal.aborted) { restorations.delete(wid); flight = null; }
+    if (flight) return waitRestore(flight, signal);
+    const controller = new AbortController();
+    const sharedSignal = AbortSignal.any([lifecycle.signal, controller.signal, AbortSignal.timeout(TIMEOUT_MS)]);
+    const operation = (async () => {
+      const state = current(), proof = authorization(state, wid), version = generation;
+      if (!proof || !resolveAccountScope) fail('needs_reselect', 409);
+      const snapshot = structuredClone(proof), ids = [...proof.boardIds], incarnation = workspace(wid);
+      if (incarnation !== proof.incarnation) { invalidateProvenance(wid, snapshot, state.revision); fail('needs_reselect', 409); }
+      function check() {
+        sharedSignal.throwIfAborted();
+        const now = current(), item = workspaceRegistry.get(wid), entry = authorization(now, wid);
+        if (generation !== version || now.revision !== state.revision || !now.settings.connection ||
+            !entry || entry.accountScope !== snapshot.accountScope || entry.incarnation !== incarnation || !sameIds(entry.boardIds, ids)) fail('needs_reselect', 409);
+        if (item && item.createdAt !== incarnation) { invalidateProvenance(wid, snapshot, state.revision); fail('needs_reselect', 409); }
+        if (!item) fail('needs_reselect', 409);
+      }
+      check();
+      const account = await session(sharedSignal); check();
+      const scope = await accountScope(account, sharedSignal); check();
+      if (scope !== snapshot.accountScope) { invalidateProvenance(wid, snapshot, state.revision); fail('needs_reselect', 409); }
+      if (typeof account.getBoardIdentity !== 'function') fail('invalid_tracker_response', 502);
+      let next = 0, failure;
+      async function worker() {
+        while (!failure && next < ids.length) {
+          const id = ids[next++];
+          try {
+            check();
+            const board = await exactRestoreBoard(account, id, sharedSignal);
+            check();
+            if (!board || typeof board !== 'object' || board.id !== id || typeof board.name !== 'string' || !board.name.length || board.name.length > 256) fail('invalid_tracker_response', 502);
+          } catch (error) { failure ??= error; }
+        }
+      }
+      await Promise.all(Array.from({ length: Math.min(RESELECT_CONCURRENCY, ids.length) }, () => worker()));
+      check();
+      const after = await session(sharedSignal); check();
+      const afterScope = await accountScope(after, sharedSignal); check();
+      if (afterScope !== scope) { invalidateProvenance(wid, snapshot, state.revision); fail('needs_reselect', 409); }
+      if (after.identity !== account.identity) { bindings.clear(); invalidate(); fail('needs_reselect', 409); }
+      if (failure) throw failure;
+      check();
+      bindings.set(wid, { identity: account.identity, accountScope: scope, incarnation, revision: state.revision });
+    })();
+    flight = { operation, controller, waiters: 0 };
+    restorations.set(wid, flight);
+    operation.finally(() => { if (restorations.get(wid) === flight) restorations.delete(wid); }).catch(() => {});
+    return waitRestore(flight, signal);
+  }
+  async function waitRestore(flight, signal) {
+    flight.waiters++;
+    try { return await raceAbort(() => flight.operation, signal); }
+    finally {
+      if (--flight.waiters === 0) flight.controller.abort();
+    }
+  }
+  async function ensureBinding(wid, signal) {
+    const state = current(), incarnation = workspace(wid);
+    let binding = bindings.get(wid);
+    if (binding && binding.revision === state.revision && binding.incarnation === incarnation && authorization(state, wid)) {
+      const version = generation;
+      const account = await session(signal), scope = await accountScope(account, signal);
+      signal.throwIfAborted();
+      if (current().revision !== state.revision || generation !== version || bindings.get(wid) !== binding) fail('needs_reselect', 409);
+      if (scope !== binding.accountScope) revokeAccount(scope, state.revision);
+      if (account.identity !== binding.identity) { bindings.clear(); invalidate(); binding = undefined; }
+    }
+    if (!binding || binding.revision !== state.revision || binding.incarnation !== incarnation) {
+      const proof = authorization(state, wid);
+      if (proof && proof.incarnation !== incarnation) { invalidateProvenance(wid, proof, state.revision); fail('needs_reselect', 409); }
+      if (binding && binding.incarnation !== incarnation) { bindings.delete(wid); fail('needs_reselect', 409); }
+      bindings.delete(wid);
+      try { await restore(wid, signal); }
+      catch (error) {
+        signal.throwIfAborted();
+        if (error?.code === 'needs_reselect' || error?.code === 'workspace_not_found') throw error;
+        fail('unavailable', 503);
+      }
+    }
+  }
   async function readImpl(signal) {
     signal.throwIfAborted();
-    const state = current();
-    let identity, scope;
-    if (state.settings.connection && bindings.size) {
-      try {
-        const account = await session(signal);
-        identity = account.identity;
-        scope = await accountScope(account, signal);
-      } catch (error) { if (signal.aborted) throw error; bindings.clear(); invalidate(); }
-      signal.throwIfAborted();
-      if (current().revision !== state.revision) fail('conflict', 409);
+    let state = current();
+    const initialRevision = state.revision;
+    const unavailable = new Set();
+    if (state.settings.connection) {
+      const ids = Object.keys(state.settings.workspaces).filter(id => authorization(state, id));
+      let index = 0;
+      async function worker() {
+        while (index < ids.length) {
+          const id = ids[index++];
+          try {
+            await ensureBinding(id, signal);
+            const binding = bindings.get(id), observed = current(), observedGeneration = generation;
+            const account = await session(signal), scope = await accountScope(account, signal);
+            if (current().revision !== observed.revision || generation !== observedGeneration || bindings.get(id) !== binding) fail('conflict', 409);
+            if (binding && binding.accountScope !== scope) { invalidateProvenance(id, authorization(observed, id), observed.revision); continue; }
+            if (binding && binding.identity !== account.identity) { bindings.clear(); invalidate(); await ensureBinding(id, signal); }
+          } catch (error) {
+            signal.throwIfAborted();
+            if (current().revision !== initialRevision) {
+              if (error?.code === 'needs_reselect' && !authorization(current(), id)) continue;
+              fail('conflict', 409);
+            }
+            if (error?.code === 'conflict') throw error;
+            bindings.delete(id);
+            if (error?.code !== 'needs_reselect' && error?.code !== 'workspace_not_found') unavailable.add(id);
+            else if (authorization(current(), id)) unavailable.add(id);
+          }
+        }
+      }
+      await worker();
+      // Legacy bindings cannot be restored, but still require live credential
+      // verification before presenting them as active.
+      for (const [id, binding] of bindings) if (!authorization(state, id)) {
+        try {
+          const account = await session(signal), scope = await accountScope(account, signal);
+          if (account.identity !== binding.identity || scope !== binding.accountScope) { bindings.delete(id); invalidate(); }
+        } catch (error) { signal.throwIfAborted(); bindings.delete(id); }
+      }
+      state = current();
     }
-    // Persisted selections are never sufficient after restart or credential rotation.
     const needsReselect = Object.keys(state.settings.workspaces).filter(id => {
       const binding = bindings.get(id), item = workspaceRegistry.get(id);
-      const needed = !binding || binding.identity !== identity || binding.accountScope !== scope || !item || item.createdAt !== binding.incarnation || binding.revision !== state.revision;
-      if (needed) bindings.delete(id);
-      return needed;
+      const active = binding && item?.createdAt === binding.incarnation && binding.revision === state.revision;
+      if (!active && authorization(state, id)) unavailable.add(id);
+      return !active && !authorization(state, id) && !unavailable.has(id);
     });
     const unattendedIssueCreation = {}, unattendedIssueCreationStored = storedGrants(state);
     for (const id of Object.keys(state.settings.workspaces)) {
       const binding = bindings.get(id);
       Object.defineProperty(unattendedIssueCreation, id, { enumerable: true, configurable: true, writable: true,
-        value: !!binding && optedIn(state, id, scope, binding.incarnation) });
+        value: !!binding && binding.revision === state.revision && workspaceRegistry.get(id)?.createdAt === binding.incarnation && optedIn(state, id, binding.accountScope, binding.incarnation) });
     }
     return { revision: state.revision, configured: !!state.settings.connection,
-      orgType: state.settings.connection?.orgType ?? null, workspaces: structuredClone(state.settings.workspaces), needsReselect, unattendedIssueCreation, unattendedIssueCreationStored };
+      orgType: state.settings.connection?.orgType ?? null, workspaces: structuredClone(state.settings.workspaces), needsReselect, verificationUnavailable: [...unavailable], unattendedIssueCreation, unattendedIssueCreationStored };
   }
   async function commandImpl(c, signal) {
     checkCommand(c); signal.throwIfAborted();
@@ -305,11 +482,13 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
       // Reconfiguration invalidates every board authorization, even for the same type.
       const next = { connection: { tokenRef: 'TOKEN', orgIdRef: 'ORG_ID', orgType: c.orgType }, workspaces: {} };
       const nextRevision = cas(c.expectedRevision, next); invalidate(); bindings.clear();
-      return { revision: nextRevision, configured: true, orgType: c.orgType, workspaces: {}, needsReselect: [], unattendedIssueCreation: {}, unattendedIssueCreationStored: {} };
+      return { revision: nextRevision, configured: true, orgType: c.orgType, workspaces: {}, needsReselect: [], verificationUnavailable: [], unattendedIssueCreation: {}, unattendedIssueCreationStored: {} };
     }
     configured(state);
     if (c.op === 'configuration.setUnattendedIssueCreation') {
       if (state.revision !== c.expectedRevision) fail('conflict', 409);
+      if (c.enabled && (!Array.isArray(state.settings.workspaces[c.workspaceId]) || !state.settings.workspaces[c.workspaceId].length)) fail('board_not_selected', 403);
+      if (c.enabled && resolveAccountScope) await ensureBinding(c.workspaceId, signal);
       // Revocation is a local, owner-authorized CAS and must work even when the
       // Tracker account or previous in-memory binding is unavailable. Existing
       // bindings retain their original provenance and must still verify the live
@@ -361,8 +540,12 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
       invalidate(); retagBindings(state.revision, nextRevision, identity, scope);
       return { revision: nextRevision, workspaceId: wid, enabled: c.enabled };
     }
-    if (c.op === 'links.read' || c.op === 'links.issue.read' || c.op === 'links.session.read' || c.op === 'links.set') return linksCommand(c, signal, state);
+    if (c.op === 'links.read' || c.op === 'links.issue.read' || c.op === 'links.session.read' || c.op === 'links.set') {
+      await ensureBinding(c.workspaceId, signal);
+      return linksCommand(c, signal, current());
+    }
     if (c.op.startsWith('issue.')) {
+      await ensureBinding(c.workspaceId, signal);
       const scope = makeWorkspaceScope({ workspaceId: c.workspaceId, boardId: c.boardId, signal }, false);
       const issueKey = c.issueKey;
       switch (c.op) {
@@ -457,11 +640,22 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
       // grant permanently so switching back cannot silently revive it.
       let boundRevision = startRevision;
       const saved = snapshot.unattendedIssueCreation;
+      const nextSettings = { ...snapshot };
+      let changed = false;
       if (saved && Object.hasOwn(saved, wid) && !optedIn(state, wid, scope, incarnation)) {
         const map = { ...saved }; delete map[wid];
-        const nextSettings = { ...snapshot };
         if (Object.keys(map).length) nextSettings.unattendedIssueCreation = map;
         else delete nextSettings.unattendedIssueCreation;
+        changed = true;
+      }
+      if (scope !== undefined) {
+        const old = authorization(state, wid);
+        if (!old || old.accountScope !== scope || old.incarnation !== incarnation || !sameIds(old.boardIds, c.boardIds)) {
+          nextSettings.boardAuthorizations = { ...snapshot.boardAuthorizations, [wid]: { accountScope: scope, incarnation, boardIds: [...c.boardIds] } };
+          changed = true;
+        }
+      }
+      if (changed) {
         check(); boundRevision = cas(startRevision, nextSettings);
         invalidate(); retagBindings(startRevision, boundRevision, account.identity, scope);
       }
@@ -483,6 +677,11 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
       if (c.boardIds.length && (evidence !== listing || evidence.expires <= Date.now())) fail('conflict', 409);
       const workspaces = { ...state.settings.workspaces, [c.workspaceId]: [...c.boardIds] };
       const next = { ...state.settings, workspaces };
+      const proofs = { ...state.settings.boardAuthorizations };
+      if (scope !== undefined && c.boardIds.length) proofs[c.workspaceId] = { accountScope: scope, incarnation, boardIds: [...c.boardIds] };
+      else delete proofs[c.workspaceId];
+      if (Object.keys(proofs).length) next.boardAuthorizations = proofs;
+      else delete next.boardAuthorizations;
       if (state.settings.unattendedIssueCreation) {
         const map = { ...state.settings.unattendedIssueCreation };
         delete map[c.workspaceId];
@@ -498,11 +697,12 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
       return { revision: nextRevision, workspaceId: c.workspaceId, boardIds: [...c.boardIds] };
     }
     if (!Object.hasOwn(state.settings.workspaces, c.workspaceId) || !state.settings.workspaces[c.workspaceId].includes(c.boardId)) fail('board_not_selected', 403);
+    await ensureBinding(c.workspaceId, signal);
     const binding = bindings.get(c.workspaceId);
     if (!binding || binding.incarnation !== incarnation || binding.revision !== state.revision) { bindings.delete(c.workspaceId); fail('needs_reselect', 409); }
     const account = await session(signal);
     const scope = await accountScope(account, signal);
-    if (account.identity !== binding.identity || scope !== binding.accountScope) revokeAccount();
+    if (account.identity !== binding.identity || scope !== binding.accountScope) revokeAccount(scope, state.revision);
     workspace(c.workspaceId, incarnation); signal.throwIfAborted();
     if (current().revision !== state.revision || bindings.get(c.workspaceId) !== binding) fail('conflict', 409);
     const value = await raceAbort(() => account.getBoardOverview(c.boardId, { issueKeys: [...c.issueKeys], searchByBoard: c.issueKeys.length === 0, signal }), signal);
@@ -511,7 +711,7 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
     signal.throwIfAborted();
     workspace(c.workspaceId, incarnation);
     const after = current();
-    if (afterAccount.identity !== binding.identity || afterScope !== binding.accountScope) revokeAccount();
+    if (afterAccount.identity !== binding.identity || afterScope !== binding.accountScope) revokeAccount(afterScope, state.revision);
     if (after.revision !== state.revision || !after.settings.connection || !Object.hasOwn(after.settings.workspaces, c.workspaceId) || !after.settings.workspaces[c.workspaceId].includes(c.boardId)) fail('conflict', 409);
     if (bindings.get(c.workspaceId) !== binding || binding.revision !== state.revision) fail('needs_reselect', 409);
     // Even a well-formed search is never a claim of complete board membership.
@@ -551,10 +751,9 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
       check();
       const account = await session(signal);
       check();
-      if (account.identity !== identity) revokeAccount();
       const scope = await accountScope(account, signal);
       check();
-      if (scope !== binding.accountScope) revokeAccount();
+      if (account.identity !== identity || scope !== binding.accountScope) revokeAccount(scope, initial.revision);
       return account;
     }
     if (sessionRead) member(check(), c.sessionId, true);
@@ -825,7 +1024,64 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
     catch (error) { const safe = safeError(error, lifecycle.signal); throw new ServiceError(safe.code, safe.status); }
   }
   function makeToolScope(options) {
-    return makeWorkspaceScope(options, true);
+    fields(options, ['workspaceId', 'sessionId', 'signal'], ['assertCaller']);
+    const { workspaceId: wid, sessionId: sid, signal, assertCaller } = options;
+    workspaceId(wid); sessionId(sid);
+    if (signal !== undefined && !(signal instanceof AbortSignal)) invalid();
+    if (assertCaller !== undefined && typeof assertCaller !== 'function') invalid();
+    const state = current(), incarnation = workspace(wid), item = workspaceRegistry.get(wid);
+    configured(state);
+    const ids = state.settings.workspaces[wid];
+    if (!Array.isArray(ids) || !ids.length) fail('board_not_selected', 403);
+    boardIds(ids);
+    if (!Array.isArray(item.sessionIds) || !item.sessionIds.includes(sid) ||
+        (workspaceRegistry.archivedSessionIds != null && !Array.isArray(workspaceRegistry.archivedSessionIds)) || workspaceRegistry.archivedSessionIds?.includes(sid) ||
+        (item.archivedSessionIds != null && (!Array.isArray(item.archivedSessionIds) || item.archivedSessionIds.includes(sid)))) fail('session_not_in_workspace', 403);
+    if (!bindings.has(wid) && !authorization(state, wid)) fail('needs_reselect', 409);
+    const expires = Date.now() + TOOL_SCOPE_TTL_MS, scopeGeneration = generation;
+    let pinnedBinding = bindings.get(wid);
+    const methods = ['allowUnattendedIssueCreation', 'previewCreate', 'createIssue', 'previewOwnLink', 'setOwnLink', 'selectedBoards', 'boardRead', 'getIssue', 'getComments', 'updateIssue', 'listTransitions', 'addComment', 'executeTransition'];
+    const facade = {};
+    for (const method of methods) facade[method] = (...args) => {
+      let captured;
+      try {
+        const validate = value => {
+          if (!value || typeof value !== 'object') return;
+          if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== Array.prototype) invalid();
+          const array = Array.isArray(value), keys = Reflect.ownKeys(value);
+          if (array && (keys.length !== value.length + 1 || value.length > 500)) invalid();
+          for (const key of keys) {
+            if (typeof key !== 'string') invalid();
+            const descriptor = Object.getOwnPropertyDescriptor(value, key);
+            if (!descriptor || !('value' in descriptor) || (!descriptor.enumerable && !(array && key === 'length'))) invalid();
+            if (array && key !== 'length' && (!/^(?:0|[1-9][0-9]*)$/.test(key) || Number(key) >= value.length)) invalid();
+            validate(descriptor.value);
+          }
+        };
+        for (const arg of args) validate(arg);
+        captured = structuredClone(args);
+      } catch { return Promise.reject(new ServiceError('invalid', 400)); }
+      if (closed || facadePending >= MAX_PENDING) return Promise.reject(new ServiceError('unavailable', 503));
+      facadePending++;
+      const callSignal = AbortSignal.any([lifecycle.signal, AbortSignal.timeout(TIMEOUT_MS), ...(signal ? [signal] : [])]);
+      return Promise.resolve().then(async () => {
+        callSignal.throwIfAborted();
+        if (closed) fail('unavailable', 503);
+        if (Date.now() >= expires) fail('scope_expired', 409);
+        const now = current(), live = workspaceRegistry.get(wid);
+        if (!live || live.createdAt !== incarnation || now.revision !== state.revision || generation !== scopeGeneration || !sameIds(now.settings.workspaces[wid], ids)) fail('needs_reselect', 409);
+        if (pinnedBinding && bindings.get(wid) !== pinnedBinding) fail('needs_reselect', 409);
+        if (!pinnedBinding) await ensureBinding(wid, callSignal);
+        pinnedBinding ??= bindings.get(wid);
+        if (Date.now() >= expires) fail('scope_expired', 409);
+        const scope = makeWorkspaceScope({ workspaceId: wid, sessionId: sid, signal: callSignal, ...(assertCaller ? { assertCaller } : {}) }, true, expires);
+        return scope[method](...captured);
+      }).catch(error => {
+        const safe = safeError(error, callSignal);
+        throw new ServiceError(safe.code, safe.status);
+      }).finally(() => { facadePending--; });
+    };
+    return Object.freeze(facade);
   }
   // Resolve from the host registry only. Never infer ownership from a path or
   // select among ambiguous owners. Recheck the same incarnation after the
@@ -877,7 +1133,7 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
   }
   // Only the owner's authenticated HTTP command dispatcher may omit a session.
   // Session tools always use the wrapper above and retain all session checks.
-  function makeWorkspaceScope(options, requireSession) {
+  function makeWorkspaceScope(options, requireSession, deadline) {
     if (requireSession) fields(options, ['workspaceId', 'sessionId', 'signal'], ['assertCaller']);
     else shape(options, ['workspaceId', 'boardId', 'signal']);
     const { workspaceId: wid, sessionId: sid, boardId: requestedBoard, signal: callerSignal, assertCaller } = options;
@@ -893,7 +1149,7 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
     if (!binding || binding.incarnation !== incarnation || binding.revision !== initial.revision) fail('needs_reselect', 409);
     const selected = Object.freeze([...ids]);
     const selectedIdentity = binding.identity, selectedAccountScope = binding.accountScope;
-    const expires = Date.now() + TOOL_SCOPE_TTL_MS;
+    const expires = deadline ?? Date.now() + TOOL_SCOPE_TTL_MS;
 
     function check(signal) {
       signal.throwIfAborted();
@@ -950,7 +1206,7 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
       try { result = await session(signal); verify(); scope = await accountScope(result, signal); }
       catch (error) { verify(); throw error; }
       verify();
-      if (result.identity !== selectedIdentity || scope !== selectedAccountScope) revokeAccount();
+      if (result.identity !== selectedIdentity || scope !== selectedAccountScope) revokeAccount(scope, initial.revision);
       return result;
     }
     async function checkedAwait(work, signal) {

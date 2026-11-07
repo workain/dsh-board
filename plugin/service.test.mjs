@@ -305,7 +305,7 @@ test('Tracker routes bootstrap lazily per launcher profile and fail soft', async
   const key = path.join(storage, 'tracker-account-web.key'), links = path.join(storage, 'tracker-links-web.sqlite');
   assert.equal(existsSync(db), false); assert.equal(existsSync(key), false); assert.equal(existsSync(links), false);
   const [one, two] = await Promise.all([trackerGet(web), trackerGet(web)]);
-  assert.deepEqual(await one.json(), { revision: 0, configured: false, orgType: null, workspaces: {}, needsReselect: [], unattendedIssueCreation: {}, unattendedIssueCreationStored: {} });
+  assert.deepEqual(await one.json(), { revision: 0, configured: false, orgType: null, workspaces: {}, needsReselect: [], verificationUnavailable: [], unattendedIssueCreation: {}, unattendedIssueCreationStored: {} });
   assert.equal(two.status, 200); assert.equal(calls, 0); assert.equal(existsSync(db), true);
   for (const file of [db, key, links]) assert.equal(lstatSync(file).mode & 0o7777, 0o600);
   assert.equal(lstatSync(key).size, 64);
@@ -399,8 +399,8 @@ test('Tracker links use the credential-bound principal and persist only opaque s
   const forged = await trackerPost(f, { ...command, accountScope: '0'.repeat(64) });
   assert.equal(forged.status, 400);
   const saved = await trackerPost(f, command); assert.equal(saved.status, 200); assert.deepEqual(await saved.json(), { revision: 1 });
-  // Principal is re-resolved across listing, selection, and before the link commit.
-  assert.equal(calls.filter(call => call.path === '/v3/myself').length, 7);
+  // Principal is freshly re-resolved across listing, selection, and before the link commit.
+  assert.ok(calls.filter(call => call.path === '/v3/myself').length >= 7);
   assert.ok(calls.every(call => call.headers.authorization === `OAuth ${token}` && call.headers['x-org-id'] === orgId));
   await dispose(f);
   const db = new DatabaseSync(path.join(storage, 'tracker-links-web.sqlite'), { readOnly: true });

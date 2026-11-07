@@ -407,7 +407,7 @@ test('owner writes reject stale transitions and never retry unknown outcomes', a
 
 test('configuration and selected board lifecycle uses fixed references and CAS', async () => {
   const f = fixture();
-  assert.deepEqual(await f.service.read(), { revision: 0, configured: false, orgType: null, workspaces: {}, needsReselect: [], unattendedIssueCreation: {}, unattendedIssueCreationStored: {} });
+  assert.deepEqual(await f.service.read(), { revision: 0, configured: false, orgType: null, workspaces: {}, needsReselect: [], verificationUnavailable: [], unattendedIssueCreation: {}, unattendedIssueCreationStored: {} });
   await rejected(f.service.command({ op: 'boards.list' }), 'not_configured');
   assert.equal((await config(f.service)).revision, 1);
   assert.deepEqual(f.settings.read().settings.connection, { tokenRef: 'TOKEN', orgIdRef: 'ORG_ID', orgType: 'org' });
@@ -615,7 +615,14 @@ test('reselect rejects abort, concurrent settings, workspace, listing and princi
     release();
     await assert.rejects(pending, e => ['aborted', 'timeout', 'conflict', 'needs_reselect', 'workspace_not_found', 20, 'AbortError', 'TimeoutError'].includes(e.code) || ['AbortError', 'TimeoutError'].includes(e.name), change);
     if (change === 'abort' || change === 'timeout') assert.equal(observed.aborted, true);
-    if (change !== 'reselect' && change !== 'removed') await rejected(boardRead(f.service), 'needs_reselect');
+    if (change !== 'reselect' && change !== 'removed') {
+      // Subsequent access may perform a fresh automatic verification; never let
+      // this assertion wait on the deliberately gated prior lookup.
+      f.tracker.getBoardIdentity = async id => ({ id, name: 'x' });
+      const next = boardRead(f.service);
+      if (['workspace', 'scope'].includes(change)) await rejected(next, 'needs_reselect');
+      else await next;
+    }
   }
 });
 
@@ -794,9 +801,9 @@ test('offline revoke preserves valid other bindings but cannot retag a changed a
   f.control.scope = 'b'.repeat(64);
   await setUnattended(f, false, 5, 'ws');
   await rejected(boardRead(f.service, 'ws2', '2'), 'needs_reselect');
-  assert.deepEqual(f.settings.read().settings.unattendedIssueCreation, { ws2: { accountScope: 'a'.repeat(64), incarnation: 'two' } });
+  assert.equal(f.settings.read().settings.unattendedIssueCreation, undefined);
   assert.deepEqual((await f.service.read()).unattendedIssueCreation, { ws: false, ws2: false });
-  assert.deepEqual((await f.service.read()).unattendedIssueCreationStored, { ws: false, ws2: true });
+  assert.deepEqual((await f.service.read()).unattendedIssueCreationStored, { ws: false, ws2: false });
 });
 
 test('owner opt-in refuses stale bindings and races without committing', async () => {
@@ -822,7 +829,7 @@ test('owner opt-in refuses stale bindings and races without committing', async (
   const f = await prepareLinks();
   await rejected(setUnattended(f, true, 2, 'ws2'), 'board_not_selected');
   const restarted = createTrackerService({ settings: f.settings, tracker: f.tracker, workspaceRegistry: f.registry, links: f.links, resolveAccountScope: async () => f.control.scope });
-  await rejected(restarted.command({ op: 'configuration.setUnattendedIssueCreation', workspaceId: 'ws', expectedRevision: 2, enabled: true }), 'needs_reselect');
+  assert.equal((await restarted.command({ op: 'configuration.setUnattendedIssueCreation', workspaceId: 'ws', expectedRevision: 2, enabled: true })).enabled, true);
 });
 
 test('unattended scope requires opt-in and trusted synchronous root assertion', async () => {
@@ -902,19 +909,193 @@ test('reselect purges obsolete grant so account and workspace ABA cannot resurre
     if (change === 'account') f.control.scope = 'a'.repeat(64);
     else f.registry.get('ws').createdAt = 'one';
     const again = await f.service.command({ op: 'workspace.reselect', workspaceId: 'ws', expectedRevision: 4, boardIds: ['1'] });
-    assert.equal(again.revision, 4);
+    assert.equal(again.revision, 5);
     assert.equal((await scopeFor(f).allowUnattendedIssueCreation()).enabled, false);
+  }
+});
+
+test('durable restore verifies exact boards once for concurrent tool callers and permits same-account rotation', async () => {
+  const f = await prepareLinks();
+  assert.deepEqual(f.settings.read().settings.boardAuthorizations, { ws: { accountScope: 'a'.repeat(64), incarnation: 'one', boardIds: ['1'] } });
+  const before = f.settings.read();
+  f.tracker.identity = 'rotated-token';
+  let release, started, count = 0;
+  const ready = new Promise(resolve => { started = resolve; });
+  f.tracker.getBoardIdentity = id => new Promise(resolve => { count++; release = () => resolve({ id, name: 'Board' }); started(); });
+  const restarted = createTrackerService({ settings: f.settings, tracker: f.tracker, workspaceRegistry: f.registry, links: f.links, resolveAccountScope: async () => f.control.scope });
+  const scope = restarted.toolScope({ workspaceId: 'ws', sessionId: 'session-1', signal: undefined });
+  const first = scope.selectedBoards(), second = restarted.currentWorkspace({ sessionId: 'session-1', signal: undefined });
+  await ready; assert.equal(count, 1); release();
+  assert.deepEqual(await first, ['1']);
+  assert.deepEqual(await second, { workspaceId: 'ws', boardIds: ['1'] });
+  assert.deepEqual(f.settings.read(), before);
+  assert.deepEqual(await scope.selectedBoards(), ['1']);
+  await restarted.close();
+});
+
+test('concurrent workspace restorations globally bound exact-board lookups', async () => {
+  const f = await prepareLinks();
+  const ids = Array.from({ length: 12 }, (_, i) => String(i + 1));
+  f.tracker.listBoards = async () => ({ boards: ids.map(id => ({ id, name: 'Board' })), complete: true, reason: null });
+  await f.service.command({ op: 'boards.list' }); await select(f.service, 2, ids.slice(0, 6));
+  await f.service.command({ op: 'boards.list' }); await select(f.service, 3, ids.slice(6), 'ws2');
+  let active = 0, max = 0;
+  f.tracker.getBoardIdentity = async id => { active++; max = Math.max(active, max); await new Promise(resolve => setImmediate(resolve)); active--; return { id, name: 'Board' }; };
+  const restarted = createTrackerService({ settings: f.settings, tracker: f.tracker, workspaceRegistry: f.registry, links: f.links, resolveAccountScope: async () => f.control.scope });
+  const a = restarted.toolScope({ workspaceId: 'ws', sessionId: 'session-1', signal: undefined });
+  const b = restarted.toolScope({ workspaceId: 'ws2', sessionId: 'session-2', signal: undefined });
+  assert.deepEqual(await Promise.all([a.selectedBoards(), b.selectedBoards()]), [ids.slice(0, 6), ids.slice(6)]);
+  assert.equal(max, 5); assert.equal(active, 0);
+  await restarted.close();
+});
+
+test('aborted queued restore releases concurrency permits for later work', async () => {
+  const f = await prepareLinks();
+  const ids = Array.from({ length: 6 }, (_, i) => String(i + 1));
+  f.tracker.listBoards = async () => ({ boards: ids.map(id => ({ id, name: 'Board' })), complete: true, reason: null });
+  await f.service.command({ op: 'boards.list' }); await select(f.service, 2, ids.slice(0, 5));
+  await f.service.command({ op: 'boards.list' }); await select(f.service, 3, ['6'], 'ws2');
+  let started, release; const ready = new Promise(resolve => { started = resolve; });
+  const held = []; let calls = 0;
+  f.tracker.getBoardIdentity = id => new Promise(resolve => { held.push(() => resolve({ id, name: 'Board' })); if (++calls === 5) started(); });
+  const restarted = createTrackerService({ settings: f.settings, tracker: f.tracker, workspaceRegistry: f.registry, links: f.links, resolveAccountScope: async () => f.control.scope });
+  const first = restarted.toolScope({ workspaceId: 'ws', sessionId: 'session-1', signal: undefined }).selectedBoards();
+  await ready;
+  const controller = new AbortController();
+  const cancelled = restarted.toolScope({ workspaceId: 'ws2', sessionId: 'session-2', signal: controller.signal }).selectedBoards();
+  await new Promise(resolve => setImmediate(resolve)); controller.abort();
+  await assert.rejects(cancelled); held.shift()();
+  release = held.splice(0); for (const resolve of release) resolve();
+  assert.deepEqual(await first, ids.slice(0, 5));
+  f.tracker.getBoardIdentity = async id => ({ id, name: 'Board' });
+  assert.deepEqual(await restarted.toolScope({ workspaceId: 'ws2', sessionId: 'session-2', signal: undefined }).selectedBoards(), ['6']);
+  await restarted.close();
+});
+
+test('aborted lookups retain permits until an abort-ignoring adapter settles', async () => {
+  const f = await prepareLinks();
+  const ids = Array.from({ length: 6 }, (_, i) => String(i + 1));
+  f.tracker.listBoards = async () => ({ boards: ids.map(id => ({ id, name: 'Board' })), complete: true, reason: null });
+  await f.service.command({ op: 'boards.list' }); await select(f.service, 2, ids.slice(0, 5));
+  await f.service.command({ op: 'boards.list' }); await select(f.service, 3, ['6'], 'ws2');
+  const pending = []; let started; const ready = new Promise(resolve => { started = resolve; });
+  f.tracker.getBoardIdentity = id => new Promise(resolve => { pending.push(() => resolve({ id, name: 'Board' })); if (pending.length === 5) started(); });
+  const restarted = createTrackerService({ settings: f.settings, tracker: f.tracker, workspaceRegistry: f.registry, links: f.links, resolveAccountScope: async () => f.control.scope });
+  const controller = new AbortController();
+  const first = restarted.toolScope({ workspaceId: 'ws', sessionId: 'session-1', signal: controller.signal }).selectedBoards();
+  await ready; controller.abort(); await assert.rejects(first);
+  const second = restarted.toolScope({ workspaceId: 'ws2', sessionId: 'session-2', signal: undefined }).selectedBoards();
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(pending.length, 5);
+  pending[0]();
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(pending.length, 6);
+  for (const resolve of pending.slice(1)) resolve();
+  assert.deepEqual(await second, ['6']);
+  await restarted.close();
+});
+
+test('lazy tool input is captured and strictly validated before restoration', async () => {
+  const f = await prepareLinks();
+  f.tracker.getIssue = async key => ({ key, id: 'id-1', summary: 'Example', description: 'Description', status: { id: '1', key: 'open', display: 'Open' }, assigneeKnown: true, assignee: null, boards: [{ id: '1' }], version: 1 });
+  let release, started; const ready = new Promise(resolve => { started = resolve; });
+  f.tracker.getBoardIdentity = id => new Promise(resolve => { release = () => resolve({ id, name: 'Board' }); started(); });
+  const restarted = createTrackerService({ settings: f.settings, tracker: f.tracker, workspaceRegistry: f.registry, links: f.links, resolveAccountScope: async () => f.control.scope });
+  const scope = restarted.toolScope({ workspaceId: 'ws', sessionId: 'session-1', signal: undefined });
+  const invalid = Object.defineProperty({}, 'issueKey', { enumerable: true, get() { throw Error('must not run'); } });
+  await rejected(scope.getIssue(invalid), 'invalid');
+  await rejected(scope.getIssue(Object.defineProperty({ issueKey: 'ABC-1' }, 'extra', { value: true })), 'invalid');
+  await rejected(scope.boardRead({ boardId: '1', issueKeys: Array(1) }), 'invalid');
+  const arg = { issueKey: 'ABC-1' }, result = scope.getIssue(arg); await ready; arg.issueKey = 'EVIL-2'; release();
+  assert.equal((await result).key, 'ABC-1');
+  await restarted.close();
+});
+
+test('lazy tool scope retains creation-time expiry throughout a pending call', async () => {
+  const f = await prepareLinks();
+  const restarted = createTrackerService({ settings: f.settings, tracker: f.tracker, workspaceRegistry: f.registry, links: f.links, resolveAccountScope: async () => f.control.scope });
+  let release, started; const ready = new Promise(resolve => { started = resolve; });
+  f.tracker.getBoardIdentity = id => new Promise(resolve => { release = () => resolve({ id, name: 'Board' }); started(); });
+  const original = Date.now; let now = original(); Date.now = () => now;
+  try {
+    const scope = restarted.toolScope({ workspaceId: 'ws', sessionId: 'session-1', signal: undefined });
+    const pending = scope.selectedBoards(); await ready; now += 60_001; release();
+    await rejected(pending, 'scope_expired');
+  } finally { Date.now = original; await restarted.close(); }
+});
+
+test('64 lazy callers share one restoration without nested admission exhaustion', async () => {
+  const f = await prepareLinks();
+  const restarted = createTrackerService({ settings: f.settings, tracker: f.tracker, workspaceRegistry: f.registry, links: f.links, resolveAccountScope: async () => f.control.scope });
+  let release, started; const ready = new Promise(resolve => { started = resolve; });
+  f.tracker.getBoardIdentity = id => new Promise(resolve => { release = () => resolve({ id, name: 'Board' }); started(); });
+  const scopes = Array.from({ length: 64 }, () => restarted.toolScope({ workspaceId: 'ws', sessionId: 'session-1', signal: undefined }));
+  const calls = scopes.map(scope => scope.selectedBoards()); await ready;
+  await rejected(restarted.toolScope({ workspaceId: 'ws', sessionId: 'session-1', signal: undefined }).selectedBoards(), 'unavailable');
+  release(); assert.equal((await Promise.all(calls)).length, 64);
+  await restarted.close();
+});
+
+test('a never-activated tool scope cannot survive failed owner reselect', async () => {
+  const f = await prepareLinks();
+  const restarted = createTrackerService({ settings: f.settings, tracker: f.tracker, workspaceRegistry: f.registry, links: f.links, resolveAccountScope: async () => f.control.scope });
+  const scope = restarted.toolScope({ workspaceId: 'ws', sessionId: 'session-1', signal: undefined });
+  await rejected(restarted.command({ op: 'workspace.reselect', workspaceId: 'ws', expectedRevision: 1, boardIds: ['1'] }), 'conflict');
+  await rejected(scope.selectedBoards(), 'needs_reselect');
+  assert.deepEqual(await restarted.toolScope({ workspaceId: 'ws', sessionId: 'session-1', signal: undefined }).selectedBoards(), ['1']);
+  await restarted.close();
+});
+
+test('legacy proof is never inferred from unattended grant and explicit reselect persists it', async () => {
+  const f = await prepareLinks(); await setUnattended(f, true);
+  const old = f.settings.read(); delete old.settings.boardAuthorizations;
+  f.settings.compareAndSet(old.revision, old.settings);
+  const restarted = createTrackerService({ settings: f.settings, tracker: f.tracker, workspaceRegistry: f.registry, links: f.links, resolveAccountScope: async () => f.control.scope });
+  const view = await restarted.read();
+  assert.deepEqual(view.needsReselect, ['ws']); assert.deepEqual(view.unattendedIssueCreation, { ws: false });
+  assert.throws(() => restarted.toolScope({ workspaceId: 'ws', sessionId: 'session-1', signal: undefined }), e => e.code === 'needs_reselect');
+  assert.equal((await restarted.command({ op: 'workspace.reselect', workspaceId: 'ws', expectedRevision: 4, boardIds: ['1'] })).revision, 5);
+  assert.equal(f.settings.read().settings.boardAuthorizations.ws.accountScope, 'a'.repeat(64));
+  assert.equal(f.settings.read().settings.unattendedIssueCreation.ws.accountScope, 'a'.repeat(64));
+  await restarted.close();
+});
+
+test('restore failure preserves evidence and never exposes data; retries on recovery', async () => {
+  for (const code of ['forbidden', 'network_error']) {
+    const f = await prepareLinks(), before = f.settings.read();
+    const restarted = createTrackerService({ settings: f.settings, tracker: f.tracker, workspaceRegistry: f.registry, links: f.links, resolveAccountScope: async () => f.control.scope });
+    f.tracker.getBoardIdentity = async () => { throw Object.assign(new Error('SECRET'), { name: 'TrackerError', code }); };
+    const view = await restarted.read();
+    assert.deepEqual(view.needsReselect, []); assert.deepEqual(view.verificationUnavailable, ['ws']);
+    const scope = restarted.toolScope({ workspaceId: 'ws', sessionId: 'session-1', signal: undefined });
+    await rejected(scope.getIssue({ issueKey: 'ABC-1' }), 'unavailable');
+    assert.deepEqual(f.settings.read(), before);
+    f.tracker.getBoardIdentity = async id => ({ id, name: 'Board' });
+    assert.deepEqual(await scope.selectedBoards(), ['1']);
+    await restarted.close();
+  }
+});
+
+test('restore permanently invalidates principal and incarnation mismatch, preventing ABA', async () => {
+  for (const kind of ['principal', 'incarnation']) {
+    const f = await prepareLinks(); await setUnattended(f, true);
+    if (kind === 'principal') f.control.scope = 'b'.repeat(64); else f.registry.get('ws').createdAt = 'replacement';
+    const restarted = createTrackerService({ settings: f.settings, tracker: f.tracker, workspaceRegistry: f.registry, links: f.links, resolveAccountScope: async () => f.control.scope });
+    await rejected(boardRead(restarted), 'needs_reselect');
+    assert.equal(f.settings.read().settings.boardAuthorizations, undefined);
+    assert.equal(f.settings.read().settings.unattendedIssueCreation, undefined);
+    f.control.scope = 'a'.repeat(64); f.registry.get('ws').createdAt = 'one';
+    await rejected(boardRead(restarted), 'needs_reselect');
+    await restarted.close();
   }
 });
 
 test('persisted opt-in requires live exact account and workspace incarnation after restart', async () => {
   const f = await prepareLinks(); await setUnattended(f, true);
   const restarted = createTrackerService({ settings: f.settings, tracker: f.tracker, workspaceRegistry: f.registry, links: f.links, resolveAccountScope: async () => f.control.scope });
-  assert.deepEqual((await restarted.read()).unattendedIssueCreation, { ws: false });
+  assert.deepEqual((await restarted.read()).unattendedIssueCreation, { ws: true });
   await restarted.command({ op: 'workspace.reselect', workspaceId: 'ws', expectedRevision: 3, boardIds: ['1'] });
   assert.deepEqual((await restarted.read()).unattendedIssueCreation, { ws: true });
   f.tracker.identity = 'rotated';
-  assert.deepEqual((await restarted.read()).unattendedIssueCreation, { ws: false });
+  assert.deepEqual((await restarted.read()).unattendedIssueCreation, { ws: true });
   f.registry.get('ws').createdAt = 'replacement';
   await restarted.command({ op: 'workspace.reselect', workspaceId: 'ws', expectedRevision: 3, boardIds: ['1'] });
   assert.deepEqual((await restarted.read()).unattendedIssueCreation, { ws: false });
@@ -1185,16 +1366,16 @@ test('links isolate namespaces across accounts and workspace incarnations', asyn
   f.control.scope = 'b'.repeat(64);
   await rejected(linkRead(f), 'needs_reselect');
   await rejected(linkSet(f, { expectedRevision: 1 }), 'needs_reselect');
-  await f.service.command({ op: 'boards.list' }); await select(f.service, 2);
+  await f.service.command({ op: 'boards.list' }); await select(f.service, f.settings.read().revision);
   assert.deepEqual(await linkRead(f), { revision: 1, links: [], incomplete: true });
   assert.deepEqual(await linkSet(f, { expectedRevision: 1 }), { revision: 2 });
   f.control.scope = 'a'.repeat(64);
   await rejected(linkRead(f), 'needs_reselect');
-  await f.service.command({ op: 'boards.list' }); await select(f.service, 3);
+  await f.service.command({ op: 'boards.list' }); await select(f.service, f.settings.read().revision);
   assert.equal((await linkRead(f)).links.length, 1);
   f.registry.get('ws').createdAt = 'replacement';
   await rejected(linkRead(f), 'needs_reselect');
-  await f.service.command({ op: 'boards.list' }); await select(f.service, 4);
+  await f.service.command({ op: 'boards.list' }); await select(f.service, f.settings.read().revision);
   assert.deepEqual(await linkRead(f), { revision: 2, links: [], incomplete: true });
 });
 

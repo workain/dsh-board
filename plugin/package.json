@@ -47,7 +47,9 @@
     "client.test.mjs",
     "shared-editor-integration.test.mjs",
     "unattended-integration.test.mjs",
+    "verification-cross-surface.test.mjs",
     "full-access-integration.test.mjs",
+    "restore-integration.test.mjs",
     "filters.test.mjs",
     "refresh-race.test.mjs",
     "slash-guard.test.mjs",
@@ -59,8 +61,8 @@
   "scripts": {
     "build": "node ./scripts/build.mjs",
     "check": "node ./scripts/build.mjs --check",
-    "test:browser": "node --test shared-editor-integration.test.mjs unattended-integration.test.mjs",
-    "test:host": "node --test full-access-integration.test.mjs",
+    "test:browser": "node --test shared-editor-integration.test.mjs unattended-integration.test.mjs verification-cross-surface.test.mjs",
+    "test:host": "node --test full-access-integration.test.mjs restore-integration.test.mjs",
     "test": "node --test core.test.mjs service.test.mjs sqlite-store.test.mjs client.test.mjs filters.test.mjs refresh-race.test.mjs slash-guard.test.mjs tracker-api.test.mjs tracker-fetch.test.mjs tracker-service.test.mjs tracker-tools.test.mjs tracker-account.test.mjs tracker-links.test.mjs tracker-settings.test.mjs tracker-markup.test.mjs tracker-statuses.test.mjs session-card.test.mjs session-send.test.mjs"
   },
   "dsh": {

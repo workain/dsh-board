@@ -194,15 +194,25 @@ with sync_playwright() as p:
             assert page.get_by_text('trackerReselect', exact=True).count() >= 1
             assert page.get_by_text('trackerUnattendedInactive', exact=True).count() == 1
             toggle.click()
+            page.get_by_role('status').filter(has_text='trackerLocalPermissionOff First workspace (w-one)').wait_for()
             page.get_by_text('trackerUnattendedSaved', exact=True).wait_for()
-            assert not toggle.is_checked()
+            assert toggle.count() == 0, 'full settings must be invalidated after local revoke'
             assert page.evaluate('window.testWarnings') == [], 'disabling must not ask for approval'
-            writes = page.evaluate("window.testRequests.filter(r => r.cmd?.op === 'configuration.setUnattendedIssueCreation').map(r => r.cmd)")
-            assert writes == [{'op': 'configuration.setUnattendedIssueCreation', 'workspaceId': 'w-one', 'expectedRevision': 7, 'enabled': False}], writes
+            requests = page.evaluate('window.testRequests')
+            commands = [r['cmd'] for r in requests if r['cmd']]
+            assert commands == [
+              {'op': 'configuration.setUnattendedIssueCreation', 'workspaceId': 'w-one', 'expectedRevision': 7, 'enabled': False},
+              {'op': 'configuration.unattendedRead'},
+            ], commands
             readback = page.evaluate('window.testReadbacks.at(-1)')
-            assert readback['revision'] == 8 and readback['needsReselect'] == ['w-one']
-            assert readback['unattendedIssueCreationStored']['w-one'] is False
-            assert readback['unattendedIssueCreation']['w-one'] is False
+            assert readback == {'revision': 8, 'unattendedIssueCreationStored': {'w-one': False, 'w-two': False}}, readback
+            page.get_by_role('button', name='trackerReload', exact=True).click()
+            toggle.wait_for()
+            assert not toggle.is_checked()
+            fresh = page.evaluate('window.testReadbacks.at(-1)')
+            assert fresh['revision'] == 8 and fresh['needsReselect'] == ['w-one']
+            assert fresh['unattendedIssueCreationStored']['w-one'] is False and fresh['unattendedIssueCreation']['w-one'] is False
+            assert page.evaluate("window.testRequests.filter(r => r.cmd).map(r => r.cmd)") == commands, 'reload must not write'
             assert not errors, errors
             sys.exit(0)
         assert not toggle.is_checked(), 'absent per-workspace setting must default off'
@@ -214,7 +224,7 @@ with sync_playwright() as p:
         toggle.click()
         page.wait_for_function("window.testRequests.some(r => r.cmd?.op === 'configuration.setUnattendedIssueCreation' && r.cmd.enabled === true)")
         if payload['scenario'] in ('stale-readback', 'wrong-value'):
-            page.get_by_text('trackerUncertain', exact=True).wait_for()
+            page.get_by_role('alert').get_by_text('trackerUncertain', exact=True).wait_for()
             assert page.get_by_text('trackerUnattendedSaved', exact=True).count() == 0
             assert toggle.count() == 0, 'mismatching readback must not display a confirmed toggle'
             writes = page.evaluate("window.testRequests.filter(r => r.cmd?.op === 'configuration.setUnattendedIssueCreation').map(r => r.cmd)")
@@ -226,12 +236,14 @@ with sync_playwright() as p:
         assert page.evaluate('window.testWarnings') == ['trackerUnattendedWarning\nworkspace: First workspace (w-one)'] * 2
         toggle.click()
         page.wait_for_function("window.testRequests.some(r => r.cmd?.op === 'configuration.setUnattendedIssueCreation' && r.cmd.enabled === false)")
-        page.wait_for_function("() => !document.querySelector('input[aria-label=trackerUnattended]').checked")
+        page.get_by_role('status').filter(has_text='trackerLocalPermissionOff First workspace (w-one)').wait_for()
         page.get_by_text('trackerUnattendedSaved', exact=True).wait_for()
+        assert toggle.count() == 0, 'full settings must be invalidated after local revoke'
+        assert page.get_by_role('button', name='trackerReload', exact=True).is_enabled()
         assert page.evaluate('window.testWarnings.length') == 2, 'disabling should not ask for approval'
         readbacks = page.evaluate('window.testReadbacks')
-        assert [(r['revision'], r.get('unattendedIssueCreation', {}).get('w-one')) for r in readbacks[-2:]] == [(8, True), (9, False)], readbacks
-        assert readbacks[-1]['needsReselect'] == (['w-one', 'w-two'] if payload['scenario'] == 'disable-binding-loss' else []), readbacks
+        assert readbacks[-2]['revision'] == 8 and readbacks[-2]['unattendedIssueCreation']['w-one'] is True and readbacks[-2]['unattendedIssueCreationStored']['w-one'] is True, readbacks
+        assert readbacks[-1] == {'revision': 9, 'unattendedIssueCreationStored': {'w-one': False, 'w-two': False}}, readbacks
         requests = page.evaluate('window.testRequests')
         writes = [r['cmd'] for r in requests if r['cmd'] and r['cmd'].get('op') == 'configuration.setUnattendedIssueCreation']
         assert writes == [
@@ -240,7 +252,19 @@ with sync_playwright() as p:
         ], writes
         for i, request in enumerate(requests):
             if request['cmd'] and request['cmd'].get('op') == 'configuration.setUnattendedIssueCreation':
-                assert requests[i + 1]['url'] == 'api/dsh-board.tracker' and requests[i + 1]['method'] == 'GET', requests
+                next_request = requests[i + 1]
+                if request['cmd']['enabled']:
+                    assert next_request['url'] == 'api/dsh-board.tracker' and next_request['method'] == 'GET', requests
+                else:
+                    assert next_request['cmd'] == {'op': 'configuration.unattendedRead'}, requests
+        assert [r['cmd'] for r in requests if r['cmd']] == [writes[0], writes[1], {'op': 'configuration.unattendedRead'}], requests
+        page.get_by_role('button', name='trackerReload', exact=True).click()
+        toggle.wait_for()
+        assert not toggle.is_checked(), 'explicitly reloaded settings must keep permission disabled'
+        fresh = page.evaluate('window.testReadbacks.at(-1)')
+        assert fresh['revision'] == 9 and fresh['unattendedIssueCreation']['w-one'] is False and fresh['unattendedIssueCreationStored']['w-one'] is False, fresh
+        assert fresh['needsReselect'] == (['w-one', 'w-two'] if payload['scenario'] == 'disable-binding-loss' else []), fresh
+        assert page.evaluate("window.testRequests.filter(r => r.cmd?.op === 'configuration.setUnattendedIssueCreation').map(r => r.cmd)") == writes, 'reload must not write'
         assert not errors, errors
     except Exception:
         print('PAGE:', page.locator('body').inner_text(), file=sys.stderr)

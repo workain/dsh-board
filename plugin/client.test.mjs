@@ -894,6 +894,59 @@ for (const refresh of ['trackerRefreshBoard', 'trackerConnect']) test(`issue rea
   h.unmount();
 });
 
+test('temporary verification failure hides board and preserves draft until retry', async () => {
+  const h = await trackerIssueReady();
+  try {
+    h.change(h.nodes('input').find(n => n.props.value === issueFixture.summary), 'saved private draft');
+    h.events.get('focus')();
+    await h.resolve(9, { ...trackerSettings(1, true, { w: ['1'] }), verificationUnavailable: ['w'] });
+    assert.ok(!h.nodes('input').some(n => n.props.value === 'saved private draft'));
+    assert.equal(h.nodes('article').length, 0);
+    assert.ok(h.nodes('div').some(n => n.props.role === 'alert' && h.text(n) === 'trackerVerificationUnavailable'));
+    assert.ok(!h.nodes('div').some(n => n.props.role === 'alert' && h.text(n) === 'trackerReselect'));
+    h.click('trackerConnect');
+    await h.resolve(10, trackerSettings(1, true, { w: ['1'] })); await h.resolve(11, trackerBoard);
+    h.nodes('main');
+    await h.resolve(12, issueFixture); await h.resolve(13, issueComments); await h.resolve(14, issueTransitions); await h.resolve(15, issueLinks); await h.resolve(16, issueFixture);
+    assert.ok(h.nodes('input').some(n => n.props.value === 'saved private draft'));
+  } finally { h.unmount(); }
+});
+
+test('silent settings poll fences a pending write and preserves unknown outcome', async () => {
+  const h = await trackerIssueReady();
+  try {
+    h.change(h.nodes('input').find(n => n.props.value === issueFixture.summary), 'pending draft');
+    h.events.get('focus')();
+    h.click('issueSaveFields');
+    assert.equal(JSON.parse(h.requests[10].options.body).op, 'issue.update');
+    await h.resolve(9, { ...trackerSettings(1, true, { w: ['1'] }), verificationUnavailable: ['w'] });
+    assert.equal(h.nodes('article').length, 0);
+    assert.ok(!h.nodes('input').some(n => n.props.value === 'pending draft'));
+    await h.resolve(10, { version: 6 });
+    h.click('trackerConnect');
+    await h.resolve(11, trackerSettings(1, true, { w: ['1'] })); await h.resolve(12, trackerBoard);
+    h.nodes('main');
+    await h.resolve(13, issueFixture); await h.resolve(14, issueComments); await h.resolve(15, issueTransitions); await h.resolve(16, issueLinks); await h.resolve(17, issueFixture);
+    assert.ok(h.nodes('p').some(n => h.text(n) === 'issueUnknown'));
+    assert.equal(h.button('issueSaveFields').props.disabled, true);
+  } finally { h.unmount(); }
+});
+
+test('silent settings poll marks other workspace unavailable without hiding current board', async () => {
+  const h = harness({ manualTracker: true, workspaces: [{ workspaceId: 'w', title: 'Workspace', sessionIds: [] }, { workspaceId: 'w2', title: 'Other', sessionIds: [] }] });
+  try {
+    const saved = trackerSettings(1, true, { w: ['1'], w2: ['2'] });
+    h.mount(); await h.resolve(0, base()); await h.resolve(1, saved);
+    h.tile('tracker #1 — Workspace — tracker').props.onClick(); await h.resolve(2, saved); await h.resolve(3, trackerBoard);
+    h.events.get('focus')(); await h.resolve(4, { ...saved, verificationUnavailable: ['w2'] });
+    assert.equal(JSON.parse(h.requests[5].options.body).op, 'board.read'); await h.resolve(5, trackerBoard);
+    assert.equal(h.nodes('article').length, 3);
+    h.click('← returnToBoards');
+    assert.ok(h.tile('tracker #1 — Workspace — tracker'));
+    assert.ok(!h.nodes('button').some(n => n.props['aria-label']?.includes('tracker #2')));
+  } finally { h.unmount(); }
+});
+
 test('Tracker settings revision change discards draft even without needsReselect', async () => {
   const h = await trackerIssueReady(); h.change(h.nodes('input').find(n => n.props.value === issueFixture.summary), 'cross-tab secret');
   h.events.get('focus')(); await h.resolve(9, trackerSettings(2, true, { w: ['1'] })); assert.equal(h.requests.length, 10);
@@ -1249,6 +1302,47 @@ test('Tracker linked filter stays clearable when board links become unavailable'
   } finally { h.unmount(); }
 });
 
+test('verification unavailable hides only affected saved boards and allows retry without confirmation', async () => {
+  const h = harness({ manualTracker: true, workspaces: [{ workspaceId: 'w', title: 'Workspace', sessionIds: [] }, { workspaceId: 'w2', title: 'Other', sessionIds: [] }] });
+  try {
+    h.mount(); await h.resolve(0, base());
+    const saved = trackerSettings(4, true, { w: ['1'], w2: ['2'] });
+    await h.resolve(1, { ...saved, verificationUnavailable: ['w'] });
+    assert.ok(h.tile('tracker #2 — Other — tracker'));
+    assert.ok(!h.nodes('button').some(n => n.props['aria-label']?.includes('tracker #1')));
+    assert.ok(h.nodes('p').some(n => h.text(n).includes('trackerVerificationUnavailable')));
+    assert.ok(!h.nodes('p').some(n => h.text(n) === 'trackerReselect'));
+    h.button('retry').props.onClick({ type: 'click', currentTarget: {} }); await h.resolve(2, saved);
+    assert.ok(h.tile('tracker #1 — Workspace — tracker'));
+    assert.equal(h.confirms.length, 0);
+    assert.ok(!h.requests.some(r => r.options.method === 'POST'));
+  } finally { h.unmount(); }
+});
+
+test('both Tracker settings reload buttons ignore the React click event', async () => {
+  const h = harness({ manualTracker: true });
+  try {
+    const saved = trackerSettings(4, true, { w: ['1'] });
+    h.mount(); await h.resolve(0, base()); await h.resolve(1, saved);
+    h.click('trackerConnect'); await h.resolve(2, saved);
+    h.button('trackerReload').props.onClick({ type: 'click', currentTarget: {} });
+    await h.resolve(3, { error: { code: 'unavailable' } }, 503);
+    h.button('trackerReload').props.onClick({ type: 'click', currentTarget: {} });
+    await h.resolve(4, saved);
+    assert.ok(h.tile('tracker #1 — Workspace — tracker'));
+  } finally { h.unmount(); }
+});
+
+test('malformed unavailable projection is rejected and absent evidence still fails closed', async () => {
+  for (const value of [{ verificationUnavailable: 'w' }, { verificationUnavailable: [1] }, { needsReselect: undefined }]) {
+    const h = harness({ manualTracker: true });
+    try {
+      h.mount(); await h.resolve(0, base()); await h.resolve(1, { ...trackerSettings(4, true, { w: ['1'] }), ...value });
+      assert.ok(!h.nodes('button').some(n => n.props['aria-label']?.includes('tracker #1')));
+    } finally { h.unmount(); }
+  }
+});
+
 test('restart requires fresh list and explicit reselection; stale listing never authorizes view', async () => {
   const h = harness({ manualTracker: true }); h.mount(); await h.resolve(0, base()); h.click('trackerConnect');
   await h.resolve(1, trackerSettings(4, true, { w: ['1'] }, ['w']));
@@ -1292,8 +1386,23 @@ test('unattended permission defaults off, confirms exact workspace, and reads ba
     unattendedCheck(h).props.onChange({ target: { checked: false } });
     assert.equal(h.confirms.length, 2, 'disable requires no confirmation');
     assert.deepEqual(JSON.parse(h.requests[5].options.body), { op: 'configuration.setUnattendedIssueCreation', workspaceId: 'w', expectedRevision: 5, enabled: false });
-    await h.resolve(5, { revision: 6, workspaceId: 'w', enabled: false }); await h.resolve(6, withUnattended(6, false));
-    assert.equal(unattendedCheck(h).props.checked, false); assert.equal(h.requests.length, 7);
+    await h.resolve(5, { revision: 6, workspaceId: 'w', enabled: false });
+    assert.deepEqual(JSON.parse(h.requests[6].options.body), { op: 'configuration.unattendedRead' });
+    await h.resolve(6, { revision: 6, unattendedIssueCreationStored: { w: false } });
+    assert.equal(unattendedCheck(h), undefined); assert.equal(h.requests.length, 7);
+    assert.ok(h.nodes('p').some(n => h.text(n).includes('trackerLocalPermissionOff')));
+  } finally { h.unmount(); }
+});
+
+test('unavailable workspace disables enablement without reselect or changing saved boards', async () => {
+  const h = await unattendedReady({ ...trackerSettings(4, true, { w: ['101'] }), verificationUnavailable: ['w'] });
+  try {
+    const checkbox = unattendedCheck(h);
+    assert.equal(checkbox.props.disabled, true);
+    checkbox.props.onChange({ target: { checked: true } });
+    assert.ok(!h.requests.some(r => r.options.method === 'POST'));
+    assert.ok(!h.nodes('button').some(n => h.text(n) === 'trackerConfirmPrevious'));
+    assert.ok(h.nodes('p').some(n => h.text(n) === 'trackerVerificationUnavailable'));
   } finally { h.unmount(); }
 });
 
@@ -1451,10 +1560,10 @@ test('unbound stale grant is visible and can be revoked without binding or confi
       assert.equal(h.confirms.length, 0);
       assert.deepEqual(JSON.parse(h.requests[3].options.body), { op: 'configuration.setUnattendedIssueCreation', workspaceId: 'w', expectedRevision: 4, enabled: false });
       await h.resolve(3, { revision: 5, workspaceId: 'w', enabled: false });
-      await h.resolve(4, withUnattended(5, false, boards, ['w']));
-      assert.equal(unattendedCheck(h).props.checked, false); assert.equal(unattendedCheck(h).props.disabled, true);
+      await h.resolve(4, { revision: 5, unattendedIssueCreationStored: { w: false } });
+      assert.equal(unattendedCheck(h), undefined);
+      assert.ok(h.nodes('p').some(n => h.text(n).includes('trackerLocalPermissionOff')));
       assert.equal(h.requests.length, 5);
-      unattendedCheck(h).props.onChange({ target: { checked: true } }); assert.equal(h.requests.length, 5);
     } finally { h.unmount(); }
   }
 });
