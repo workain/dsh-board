@@ -1,0 +1,92 @@
+{
+  "name": "dsh-board",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local board for DeepSeek Harness workspaces and sessions",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "core.mjs",
+    "core.test.mjs",
+    "service.mjs",
+    "service.test.mjs",
+    "sqlite-store.mjs",
+    "sqlite-store.test.mjs",
+    "tracker-api.mjs",
+    "tracker-api.test.mjs",
+    "tracker-fetch.mjs",
+    "tracker-fetch.test.mjs",
+    "tracker-service.mjs",
+    "tracker-service.test.mjs",
+    "tracker-tools.mjs",
+    "tracker-tools.test.mjs",
+    "tracker-account.mjs",
+    "tracker-account.test.mjs",
+    "tracker-links.mjs",
+    "tracker-links.test.mjs",
+    "tracker-settings.mjs",
+    "tracker-settings.test.mjs",
+    "tracker-markup.mjs",
+    "tracker-markup.test.mjs",
+    "tracker-statuses.mjs",
+    "tracker-statuses.test.mjs",
+    "session-card.mjs",
+    "session-card.test.mjs",
+    "session-send.mjs",
+    "session-send.test.mjs",
+    "client.js",
+    "client.test.mjs",
+    "shared-editor-integration.test.mjs",
+    "unattended-integration.test.mjs",
+    "verification-cross-surface.test.mjs",
+    "full-access-integration.test.mjs",
+    "restore-integration.test.mjs",
+    "filters.test.mjs",
+    "refresh-race.test.mjs",
+    "slash-guard.test.mjs",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "scripts/build.mjs"
+  ],
+  "scripts": {
+    "build": "node ./scripts/build.mjs",
+    "check": "node ./scripts/build.mjs --check",
+    "test:browser": "node --test shared-editor-integration.test.mjs unattended-integration.test.mjs verification-cross-surface.test.mjs",
+    "test:host": "node --test full-access-integration.test.mjs restore-integration.test.mjs",
+    "test": "node --test core.test.mjs service.test.mjs sqlite-store.test.mjs client.test.mjs filters.test.mjs refresh-race.test.mjs slash-guard.test.mjs tracker-api.test.mjs tracker-fetch.test.mjs tracker-service.test.mjs tracker-tools.test.mjs tracker-account.test.mjs tracker-links.test.mjs tracker-settings.test.mjs tracker-markup.test.mjs tracker-statuses.test.mjs session-card.test.mjs session-send.test.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-input-trigger",
+        "@deepseek-ai/dsh-client-ui-commands",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-sidebar",
+        "@deepseek-ai/dsh-client-ui-sidebar-right",
+        "@deepseek-ai/dsh-client-ui-workspace",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-session",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-api-workspace-controller"
+      ]
+    }
+  },
+  "dependencies": {}
+}
