@@ -6,6 +6,7 @@ window.__ModuleLoader__.load({
     const { useEffect, useMemo, useRef, useState, useSyncExternalStore } = React;
     const PANEL = 'dsh-board';
     const NS = 'dshBoard';
+    let workspaceBoardViews = null;
     const en = {
       issueMissingId: 'Issue details are unavailable because its immutable ID is missing.', issueDetails: 'Issue details', issueSaveFields: 'Save fields', issueChangeStatus: 'Change status', issueAddComment: 'Add comment', issueComments: 'Comments & activity', issueCommentsLoaded: 'Loaded comments:', issueCommentsComplete: 'Traversal complete; comments may have changed during loading.', issueCommentsPartial: 'More comments may be available.', issueCommentsTerminalPartial: 'Traversal stopped without a continuation cursor; more comments may exist.', issueCommentsLoading: 'Loading comments…', issueCommentsError: 'Comments could not be loaded. Previously loaded comments are retained.', issueCommentsInvalid: 'Comment pagination was invalid; reload the issue to start again.', issueCommentsLimit: 'Loading stopped at the comment or size limit.', issueCommentsMore: 'Load more', issueNewComment: 'New comment', issueAssigneeId: 'Assignee ID (empty to unassign)', issueTransitions: 'Available transitions', issueNoTransition: 'Choose a transition', issueTransitionsUnavailable: 'No status transitions are available or permitted.', issueConfirmTransition: 'Apply this status transition? The status check is best-effort; the remote API has no atomic precondition.', issueSessionsPending: 'Tracker session linking is not available yet.', issueUnknown: 'The operation outcome is unknown. Do not retry until you independently check Tracker; it may still commit.', issueConflict: 'The issue changed or this transition is no longer available. Reload and review your draft.', issueRejected: 'The operation was rejected. Review the values.', issueSaved: 'Operation saved.', issueReload: 'Reload issue', issueDiscardConflict: 'Discard field draft and reload', issueReview: 'I checked Tracker and accept the uncertainty', issueUnavailable: 'Issue details are hidden until access is revalidated.', issueInvalid: 'Enter valid, nonempty values within the limits.', issueVersionUnavailable: 'Editing fields is unavailable because the issue version is unknown.', issueSessionPartial: 'Session links are incomplete; unavailable links may be omitted.', issueLinkSave: 'Save session link', issueChooseSession: 'Choose a workspace session', issueLinkAction: 'Link session', issueUnlinkAction: 'Unlink session', issueLinkUnavailable: 'Session links could not be loaded.',
       issueSeparateOperations: 'Fields, status, comments and session links are saved separately; changes are not atomic.', issueKeepDraft: 'Cancel editing (draft retained)',
@@ -372,7 +373,7 @@ window.__ModuleLoader__.load({
       return stop;
     }
     /* BEGIN GENERATED TRACKER HELPERS */
-const { parseTrackerMarkup, safeTrackerHref, groupTrackerStatuses, createSessionCard, createSessionSender } = {
+const { parseTrackerMarkup, safeTrackerHref, groupTrackerStatuses, createSessionCard, createSessionSender, createWorkspaceBoardSource, createWorkspaceBoardViews } = {
   // tracker-markup.mjs sha256:57c60106a9c2fd8380725309c06fd09b018114bff7b7b884d5f7ae4468d76ea4
   ...(() => {
 // A deliberately small, pure, non-DOM parser for untrusted Tracker content.
@@ -1086,6 +1087,131 @@ function createSessionSender({ sessions, validateSession }) {
 
     return { createSessionSender };
   })(),
+  // workspace-client.mjs sha256:bb9deee370bbeb2f5e77e519f5631c9b439e29ff372619878067f97e4c69c70c
+  ...(() => {
+// Standalone helpers are embedded by scripts/build.mjs, never imported by the browser.
+function createWorkspaceBoardSource({ valid, canNavigate, selectPanel }) {
+  let value = null;
+  const listeners = new Set();
+  const request = (workspaceId, configure) => {
+    const incarnation = valid(workspaceId);
+    if (!incarnation || !canNavigate()) return false;
+    value = { workspaceId, incarnation, configure, token: {} };
+    for (const fn of listeners) fn();
+    selectPanel(); return true;
+  };
+  return { service: Object.freeze({ open: id => request(id, false), configure: id => request(id, true) }),
+    getSnapshot: () => value, ack(token) { if (value?.token === token) { value = null; for (const fn of listeners) fn(); } }, subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn); },
+    close() { value = null; listeners.clear(); } };
+}
+function createWorkspaceBoardViews(React) {
+  const h = React.createElement;
+  let running = 0;
+  const waiting = [];
+  async function read(command, signal) {
+    if (waiting.length >= 128) throw Error('busy');
+    while (running >= 4) await new Promise((resolve, reject) => {
+      const entry = { resolve: () => { signal.removeEventListener('abort', abort); resolve(); } };
+      const abort = () => { const i = waiting.indexOf(entry); if (i >= 0) waiting.splice(i, 1); reject(Error('aborted')); };
+      waiting.push(entry); signal.addEventListener('abort', abort, { once: true }); if (signal.aborted) abort();
+    });
+    running++;
+    try {
+      signal.throwIfAborted();
+      const response = await fetch(new URL('api/dsh-board.context', document.baseURI), { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify(command), signal, cache: 'no-store' });
+      if (!response.ok) throw Error('unavailable');
+      const result = await response.json(); if (!result || result.error) throw Error('unavailable'); return result;
+    } finally { running--; const next = waiting.shift(); if (next) next.resolve(); }
+  }
+  function Context({ scope, sources, full = false, t }) {
+    const ws = React.useSyncExternalStore(listener => sources.workspaces.subscribe(listener), () => sources.workspaces.getSnapshot());
+    const connection = React.useSyncExternalStore(listener => sources.connection.subscribe(listener), () => sources.connection.getSnapshot());
+    const [state, setState] = React.useState(null);
+    const [refresh, setRefresh] = React.useState(0);
+    const element = React.useRef(null);
+    const [visible, setVisible] = React.useState(typeof IntersectionObserver === 'undefined');
+    React.useEffect(() => {
+      if (typeof IntersectionObserver === 'undefined' || !element.current) return;
+      const observer = new IntersectionObserver(entries => setVisible(entries.some(entry => entry.isIntersecting)));
+      observer.observe(element.current); return () => observer.disconnect();
+    }, [scope.workspaceId, scope.incarnation, ws?.phase, ws?.state]);
+    React.useEffect(() => { const timer = setInterval(() => { if (visible && document.visibilityState !== 'hidden') setRefresh(x => x + 1); }, 60000); return () => clearInterval(timer); }, [visible]);
+    const w = ws?.phase === 'ready' && ws.state !== 'error' && ws.items?.find(x => x.workspaceId === scope.workspaceId);
+    const stamp = JSON.stringify([scope, connection?.id, w?.createdAt, w?.sessionIds, refresh, visible]);
+    React.useEffect(() => {
+      if (!visible || !w || w.createdAt !== scope.incarnation || connection?.id === undefined) return;
+      const abort = new AbortController(); let alive = true;
+      const visibility = () => { if (document.visibilityState === 'hidden') { abort.abort(); setState(null); } else setRefresh(x => x + 1); };
+      document.addEventListener('visibilitychange', visibility);
+      if (document.visibilityState !== 'hidden') read({ op: 'task.context', workspaceId: scope.workspaceId, incarnation: scope.incarnation, provider: scope.provider, boardId: scope.boardId, taskId: scope.taskId, issueId: scope.issueId }, abort.signal)
+        .then(result => { if (alive && !abort.signal.aborted && Array.isArray(result.rows)) setState({ stamp, result }); }, () => { if (alive && !abort.signal.aborted) setState({ stamp, error: true }); });
+      return () => { alive = false; abort.abort(); document.removeEventListener('visibilitychange', visibility); };
+    }, [stamp]);
+    if (!w || w.createdAt !== scope.incarnation || connection?.id === undefined) return null;
+    const data = state?.stamp === stamp ? state : null;
+    const status = name => t ? t(name) : name;
+    const value = (kind, field) => {
+      if (!field || field.state === 'unavailable') return h('span', null, status('contextUnavailable'));
+      if (field.state === 'empty') return h('span', null, status(kind === 'goal' ? 'contextNoGoal' : 'contextNoTodoWrite'));
+      if (field.state !== 'ready') return h('span', null, status('contextUnavailable'));
+      if (kind === 'goal') return h('div', null, h('strong', null, field.value.objective), ' — ', field.value.phase,
+        full && h('div', null, field.value.roundsStarted, '/', field.value.maxGoalRounds, field.value.blockedReason ? ' · ' + field.value.blockedReason.code + ': ' + field.value.blockedReason.message : ''));
+      if (!field.value.length) return h('span', null, status('contextEmptyTodos'));
+      return h('ul', null, field.value.slice(0, full ? field.value.length : 3).map((todo, i) => h('li', { key: i }, todo.status === 'completed' ? '● ' : todo.status === 'in_progress' ? '◐ ' : '○ ', todo.content)),
+        !full && field.value.length > 3 && h('li', null, '+', field.value.length - 3));
+    };
+    return h('section', { ref: element, className: 'dsh-board-task-context', 'aria-label': status('contextTitle') },
+      h('h4', null, status('contextTitle')),
+      !data ? h('p', { role: 'status' }, status('contextLoading')) : data.error ? h('p', { role: 'status' }, status('contextUnavailable')) : data.result.rows.length === 0 ? h('p', null, status('contextNoSessions')) : data.result.rows.map(row => {
+        if (!w.sessionIds.includes(row.sessionId)) return null;
+        return h('div', { key: row.sessionId, className: 'dsh-board-context-source' }, h('strong', null, row.sessionId), row.state !== 'ready' ? h('p', null, status('contextUnavailable')) : h(React.Fragment, null,
+          h('div', null, status('contextGoal'), ': ', value('goal', row.goal)), h('div', null, status('contextTodos'), ': ', value('todos', row.todos))));
+      }),
+      full && h('button', { type: 'button', onClick: () => setRefresh(x => x + 1) }, status('refresh')));
+  }
+  function Chooser({ workspace, boards, trackerBoards, close, t, sources }) {
+    const connection = React.useSyncExternalStore(listener => sources.connection.subscribe(listener), () => sources.connection.getSnapshot());
+    const workspaces = React.useSyncExternalStore(listener => sources.workspaces.subscribe(listener), () => sources.workspaces.getSnapshot());
+    const mounted = React.useRef(true);
+    const originalConnection = React.useRef(connection?.id);
+    React.useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+    const [state, setState] = React.useState({ loading: true });
+    const [selection, select] = React.useState('');
+    const current = () => mounted.current && sources.connection.getSnapshot()?.id === originalConnection.current && sources.workspaces.getSnapshot().phase === 'ready' && sources.workspaces.getSnapshot().state !== 'error' && sources.workspaces.getSnapshot().items?.find(x => x.workspaceId === workspace.workspaceId)?.createdAt === workspace.createdAt;
+    React.useEffect(() => {
+      const abort = new AbortController(); let alive = true;
+      read({ op: 'default.read', workspaceId: workspace.workspaceId }, abort.signal).then(r => {
+        if (alive && current()) { setState({ ...r, loading: false }); select(r.available === false ? '__unavailable__' : r.pointer ? JSON.stringify([r.pointer.provider, r.pointer.boardId]) : ''); }
+      }, () => { if (alive) setState({ error: true }); });
+      return () => { alive = false; abort.abort(); };
+    }, [workspace.workspaceId, workspace.createdAt]);
+    const choices = [...boards.map(b => ({ ...b, provider: 'local' })), ...trackerBoards.map(b => ({ ...b, provider: 'tracker' }))];
+    async function save() {
+      if (selection === '__unavailable__' || state.pending || state.unknown || state.error || !Number.isSafeInteger(state.revision) || !current()) return;
+      const original = state;
+      const entry = choices.find(b => JSON.stringify([b.provider, b.id]) === selection);
+      if (selection && !entry) return;
+      setState({ ...state, pending: true });
+      const abort = new AbortController(), timer = setTimeout(() => abort.abort(), 15000);
+      try {
+        const r = await read({ op: 'default.set', workspaceId: workspace.workspaceId, incarnation: workspace.createdAt, expectedRevision: original.revision, pointer: entry ? { provider: entry.provider, boardId: entry.id } : null }, abort.signal);
+        if (!current() || r.revision !== original.revision + 1) throw Error('unknown');
+        setState({ ...r, loading: false }); close();
+      } catch { if (current()) setState({ ...original, unknown: true }); }
+      finally { clearTimeout(timer); }
+    }
+    if (!current() || connection?.id === undefined || workspaces.phase !== 'ready') return null;
+    return h('section', { role: 'dialog', 'aria-label': t('defaultBoard'), className: 'dsh-board-default-dialog' }, h('h2', null, t('defaultBoard'), ' — ', workspace.title),
+      h('p', null, t('defaultWorkspaceOnly')),
+      state.loading ? h('p', null, t('contextLoading')) : state.error || state.unknown ? h('p', { role: 'alert' }, t(state.unknown ? 'defaultUnknown' : 'contextUnavailable')) : h('label', null, t('board'), h('select', { value: selection, disabled: state.pending, onChange: e => select(e.target.value) }, state.available === false && h('option', { value: '__unavailable__', disabled: true }, t('defaultUnavailable')), h('option', { value: '' }, t('defaultNone')), choices.map(b => h('option', { key: JSON.stringify([b.provider, b.id]), value: JSON.stringify([b.provider, b.id]) }, b.name + ' (' + b.provider + ')')))),
+      h('button', { type: 'button', disabled: selection === '__unavailable__' || state.loading || state.pending || state.unknown || state.error, onClick: save }, t('save')),
+      h('button', { type: 'button', disabled: state.pending, onClick: close }, t('close')));
+  }
+  return { Context, Chooser, read };
+}
+
+    return { createWorkspaceBoardSource, createWorkspaceBoardViews };
+  })(),
 };
 /* END GENERATED TRACKER HELPERS */
     // Tracker content is untrusted. Render only a fixed AST vocabulary as React
@@ -1639,6 +1765,7 @@ function createSessionSender({ sessions, validateSession }) {
                   !issue.issue.assigneeKnown && h('p', null, t('assigneeUnknown')), issue.issue.version === null && h('p', null, t('issueVersionUnavailable')),
                   h('div', { className: 'dsh-board-row' }, h('button', { className: 'dsh-board-primary', type: 'button', disabled: issue.pending || issue.unknown || issue.conflict || issue.issue.version === null, onClick: () => saveIssue('fields') }, t('issueSaveFields')), h('button', { type: 'button', disabled: issue.pending, onClick: () => { issueFocusRequest.current = { token: issue.token, editing: false }; issuePatch({ editingFields: false }); } }, t('issueKeepDraft')))) :
                   renderTrackerText(issue.issue.description || t('emptyDescription'))),
+              workspaceBoardViews && workspace && h(workspaceBoardViews.Context, { key: JSON.stringify(['tracker', issue.workspaceId, issue.boardId, issue.issueId, issue.settingsRevision, adapter.privacyEpoch]), scope: { provider: 'tracker', workspaceId: issue.workspaceId, incarnation: workspace.createdAt, boardId: issue.boardId, taskId: issue.key, issueId: issue.issueId, authorization: issue.settingsRevision, epoch: adapter.privacyEpoch }, sources: { workspaces: workspacesSource, connection: connectionSource }, full: true, t }),
               h('section', { className: 'dsh-board-tracker-section' }, h('div', { className: 'dsh-board-tracker-session-heading' }, h('h3', null, t('sessions')),
                 issue.links?.links.length > 0 && h('button', { type: 'button', disabled: issue.pending, 'aria-expanded': Boolean(issue.addingSession), 'aria-label': t(issue.addingSession ? 'issueCancelAddSession' : 'issueAddSession'), onClick: () => toggleIssueAddSession(sessionStamp) }, issue.addingSession ? t('issueCancelAddSession') : '+')), issue.links ? h(React.Fragment, null,
                 h('p', { className: 'dsh-board-muted' }, t('issueSessionPartial')),
@@ -1764,9 +1891,19 @@ function createSessionSender({ sessions, validateSession }) {
       });
       return h('div', { className: 'dsh-board' }, h('style', null, css + '\n.dsh-board .dsh-board-tracker-embedded{position:static;width:100%;min-width:0;max-width:100%;height:auto;box-shadow:none;overflow:visible}'), editor.issueView());
     }
-    function Page({ t, transport, workspacesSource, sessionsSource, sessionService, openSession, sessionContext, connectionSource, panelSource }) {
+    function Page({ t, transport, workspacesSource, sessionsSource, sessionService, openSession, sessionContext, connectionSource, panelSource, workspaceIntent }) {
       const connection = useSource(connectionSource);
       const workspaces = useSource(workspacesSource);
+      const boardIntent = useSource(workspaceIntent || { getSnapshot: () => null, subscribe: () => () => {} });
+      const intentHandled = useRef(null);
+      const [defaultWorkspace, setDefaultWorkspace] = useState(null);
+      const pendingWorkspaceIntent = useRef(null);
+      const pendingDefaultTracker = useRef(null);
+      useEffect(() => {
+        const cancelIntent = () => { const pending = pendingWorkspaceIntent.current; if (pending) { pendingWorkspaceIntent.current = null; pending.abort.abort(); workspaceIntent?.ack(pending.token); } };
+        for (const event of ['pointerdown', 'keydown', 'change']) document.addEventListener(event, cancelIntent, true);
+        return () => { const pending = pendingWorkspaceIntent.current; pendingWorkspaceIntent.current = null; pending?.abort.abort(); for (const event of ['pointerdown', 'keydown', 'change']) document.removeEventListener(event, cancelIntent, true); };
+      }, [workspaceIntent]);
       const sessions = useSource(sessionsSource);
       const context = useSource(sessionContext);
       const [, render] = useState(0);
@@ -2030,6 +2167,43 @@ function createSessionSender({ sessions, validateSession }) {
       function validPrivateRequest(generation, connectionId, epoch) {
         return validTrackerRequest(generation, connectionId) && privacyEpoch === epoch && trackerActive();
       }
+      useEffect(() => {
+        if (!boardIntent || intentHandled.current === boardIntent.token || !workspaceBoardViews || workspaces.phase !== 'ready') return;
+        if (memory.pending || memory.uncertain || trackerMutationPending || issueMutationPending || memory.issue?.pending || memory.issue?.unknown) return;
+        const target = workspaces.items.find(w => w.workspaceId === boardIntent.workspaceId && w.createdAt === boardIntent.incarnation);
+        if (!target || !setForm(null)) { intentHandled.current = boardIntent.token; return; }
+        const abort = new AbortController(), connectionId = connectionSource.getSnapshot()?.id, epoch = privacyEpoch;
+        pendingWorkspaceIntent.current = { abort, token: boardIntent.token };
+        const accepts = () => !abort.signal.aborted && privacyEpoch === epoch && memory.workspaceId === target.workspaceId && memory.boardId === '' && memory.provider === 'local' && memory.overview && !memory.form && !memory.issue && !memory.dirty && !memory.pending && !memory.uncertain && workspaceIntent?.getSnapshot() === boardIntent && connectionSource.getSnapshot()?.id === connectionId && workspacesSource.getSnapshot().items?.some(w => w.workspaceId === target.workspaceId && w.createdAt === target.createdAt);
+        updateMemory({ workspaceId: target.workspaceId, boardId: '', provider: 'local', overview: true, showContext: false, sessionFilter: 'linked', statusFilter: '', query: '', assigneeFilter: '["all"]' });
+        // The Page's first GET may belong to the previous target.
+        void load();
+        if (boardIntent.configure) { pendingWorkspaceIntent.current = null; intentHandled.current = boardIntent.token; setDefaultWorkspace(target); workspaceIntent?.ack(boardIntent.token); return () => abort.abort(); }
+        workspaceBoardViews.read({ op: 'default.read', workspaceId: target.workspaceId }, abort.signal).then(result => {
+          if (!accepts()) return;
+          pendingWorkspaceIntent.current = null; intentHandled.current = boardIntent.token;
+          if (!result.available || !result.pointer) { setDefaultWorkspace(target); workspaceIntent?.ack(boardIntent.token); return; }
+          const pointer = result.pointer;
+          if (pointer.incarnation !== target.createdAt) { setDefaultWorkspace(target); workspaceIntent?.ack(boardIntent.token); return; }
+          updateMemory({ workspaceId: target.workspaceId, boardId: pointer.boardId, provider: pointer.provider, overview: false, showContext: false, sessionFilter: 'linked' });
+          void load();
+          if (pointer.provider === 'tracker') pendingDefaultTracker.current = { workspaceId: target.workspaceId, boardId: pointer.boardId, incarnation: target.createdAt, connectionId, epoch };
+          updateMemory({});
+          workspaceIntent?.ack(boardIntent.token);
+        }, () => { if (accepts()) { pendingWorkspaceIntent.current = null; intentHandled.current = boardIntent.token; setDefaultWorkspace(target); workspaceIntent?.ack(boardIntent.token); } });
+        return () => abort.abort();
+      }, [boardIntent]);
+
+      useEffect(() => {
+        const pending = pendingDefaultTracker.current;
+        if (!pending) return;
+        if (privacyEpoch !== pending.epoch || connectionSource.getSnapshot()?.id !== pending.connectionId || memory.provider !== 'tracker' || memory.workspaceId !== pending.workspaceId || memory.boardId !== pending.boardId || memory.overview || workspaceIncarnation(pending.workspaceId) !== pending.incarnation) { pendingDefaultTracker.current = null; return; }
+        if (memory.tracker.busy || memory.tracker.localPermissionBusy || trackerReadInFlight || trackerMutationPending || issueMutationPending) return;
+        pendingDefaultTracker.current = null;
+        if (memory.tracker.settings?.configured && !memory.tracker.settings.needsReselect.includes(pending.workspaceId) && !memory.tracker.settings.verificationUnavailable.includes(pending.workspaceId) && memory.tracker.settings.workspaces[pending.workspaceId]?.includes(pending.boardId) && memory.tracker.incarnations[pending.workspaceId] === pending.incarnation) readTrackerBoard(pending.workspaceId, pending.boardId);
+        else void loadTracker();
+      }, [memory.provider, memory.workspaceId, memory.boardId, memory.overview, memory.tracker.busy, memory.tracker.settings, connection, workspaces]);
+
       function workspaceIncarnation(id) {
         const current = workspacesSource.getSnapshot();
         if (current.phase !== 'ready' || current.state === 'error') return undefined;
@@ -2463,6 +2637,7 @@ function createSessionSender({ sessions, validateSession }) {
             h('button', { className: 'dsh-board-card-action dsh-board-card-action-links dsh-board-count', type: 'button', disabled: busy || uncertain, onClick: () => setForm({ kind: 'links', id: task.id, title: task.title }), 'aria-label': t('sessions') + ': ' + task.title, title: t('sessions'), style: { flex: 'none' } }, h(Icon, { name: 'sessions' }), String(taskLinks.length))),
           menuOpen && memberLinks.length > 1 && h('div', { className: 'dsh-board-session-menu', id: menuId, role: 'menu', 'aria-label': t('sessionMenu') + ': ' + task.title, onKeyDown: (event) => { if (event.key === 'Escape') { event.preventDefault(); setSessionMenu(null); event.currentTarget.parentElement?.querySelector('[aria-haspopup="menu"]')?.focus(); } else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) { event.preventDefault(); const items = [...event.currentTarget.querySelectorAll('[role="menuitem"]')]; const current = items.indexOf(document.activeElement); const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (current + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length; items[next]?.focus(); } } }, memberLinks.map(({ sessionId }) => { const state = sessionState(sessionId, sessions, workspaces); return h('button', { key: sessionId, type: 'button', role: 'menuitem', 'aria-disabled': state !== 'available', onClick: event => open(sessionId, task.id, event), onAuxClick: event => { if (event.button === 1) { event.preventDefault(); open(sessionId, task.id, event); } } }, label(sessionId), state === 'available' ? '' : ' — ' + t(state)); })),
           task.assignee && h('span', { className: 'dsh-board-muted' }, t('assignee'), ': ', task.assignee),
+          workspaceBoardViews && workspace && taskLinks.length > 0 && h(workspaceBoardViews.Context, { key: JSON.stringify(['local', workspaceId, boardId, task.id, privacyEpoch]), scope: { provider: 'local', workspaceId, incarnation: workspace.createdAt, boardId, taskId: task.id, issueId: null, epoch: privacyEpoch }, sources: { workspaces: workspacesSource, connection: connectionSource }, t }),
           showContext && contextSessionId && (membership || isLinked) && h('button', { className: 'dsh-board-card-current' + (isLinked ? ' is-linked' : ''), type: 'button', disabled: busy || loading || uncertain || !snapshot || !selected || (!isLinked && unavailable), 'aria-label': t(isLinked ? 'unlinkCurrent' : 'linkCurrent') + ': ' + task.title, onClick: () => link(contextSessionId, !isLinked, task.id) }, t(isLinked ? 'unlinkCurrent' : 'linkCurrent')));
       }
       function formView() {
@@ -2489,6 +2664,7 @@ function createSessionSender({ sessions, validateSession }) {
           form.kind !== 'board' && !selected && h('p', { role: 'alert' }, t('loadError')),
           form.kind === 'board' || form.kind === 'status' ? h('label', null, t(form.kind === 'board' ? 'boardName' : 'statusName'), h('input', { required: true, readOnly: busy || uncertain, maxLength: 200, value: form.name, onChange: (event) => setField('name', event.target.value) })) : null,
           form.kind === 'task' && h(React.Fragment, null,
+            form.id && workspaceBoardViews && workspace && h(workspaceBoardViews.Context, { key: JSON.stringify(['local', workspaceId, boardId, form.id, privacyEpoch]), scope: { provider: 'local', workspaceId, incarnation: workspace.createdAt, boardId, taskId: form.id, issueId: null, epoch: privacyEpoch }, sources: { workspaces: workspacesSource, connection: connectionSource }, full: true, t }),
             h('label', null, t('title'), h('input', { required: true, readOnly: busy || uncertain, maxLength: 200, value: form.title, onChange: (event) => setField('title', event.target.value) })),
             h('label', null, t('description'), h('textarea', { readOnly: busy || uncertain, maxLength: 48 * 1024, value: form.description, onChange: (event) => setField('description', event.target.value) })),
             h('label', null, t('assignee'), h('input', { readOnly: busy || uncertain, maxLength: 256, value: form.assignee || '', onChange: (event) => { if (!memory.form || memory.pending || memory.uncertain) return; updateMemory({ form: { ...memory.form, assignee: event.target.value, assigneeEdited: true }, dirty: true }); } })),
@@ -2604,7 +2780,7 @@ function createSessionSender({ sessions, validateSession }) {
           value && value.issues.length > 0 && !issues.length && !(sessionFilter === 'linked' && !boardLinks) && h('p', { className: 'dsh-board-muted' }, t('noResults')),
           value && grouped.length > 0 && scrollView(grouped.map((column) => h('section', { className: 'dsh-board-column', key: column.id || '__unmapped', 'aria-label': column.name },
             h('div', { className: 'dsh-board-column-head' }, h('div', { className: 'dsh-board-column-label' }, h('h2', null, column.name), h('span', { className: 'dsh-board-count' }, column.issues.length)), boardLinks && h('button', { className: 'dsh-board-whale-button', type: 'button', 'aria-label': t('columnSessions') + ': ' + column.name + ' — ' + new Set(column.allIssues.flatMap(issue => issueLinks(issue).map(link => link.sessionId))).size, title: t('issueSessionPartial'), 'aria-pressed': sessionFilter === 'linked', onClick: () => updateMemory({ sessionFilter: sessionFilter === 'linked' ? 'all' : 'linked' }) }, h('img', { className: 'dsh-board-whale', src: './favicon.svg', alt: '' }), String(new Set(column.allIssues.flatMap(issue => issueLinks(issue).map(link => link.sessionId))).size))),
-            column.issues.map((issue) => h('article', { className: 'dsh-board-card', key: issue.key }, /^[A-Z][A-Z0-9_]{0,31}-[1-9][0-9]{0,14}$/.test(issue.key) ? h('a', { className: 'dsh-board-card-id', href: 'https://tracker.yandex.ru/' + encodeURIComponent(issue.key), target: '_blank', rel: 'noopener noreferrer' }, issue.key) : h('span', { className: 'dsh-board-card-id' }, issue.key), h('button', { className: 'dsh-board-card-title', type: 'button', disabled: !issue.id, title: !issue.id ? t('issueMissingId') : undefined, onClick: () => openIssue(issue), 'aria-label': t('issueDetails') + ': ' + issue.summary }, issue.summary), h('span', { className: 'dsh-board-card-status' }, issue.status.display), h('span', { className: 'dsh-board-muted' }, t('assignee'), ': ', issue.assigneeKnown ? (issue.assignee?.display || t('unassigned')) : t('assigneeUnknown')), boardLinks && issueLinks(issue).length > 0 && trackerSessionShortcut(issue, issueLinks(issue))))))));
+            column.issues.map((issue) => h('article', { className: 'dsh-board-card', key: issue.key }, /^[A-Z][A-Z0-9_]{0,31}-[1-9][0-9]{0,14}$/.test(issue.key) ? h('a', { className: 'dsh-board-card-id', href: 'https://tracker.yandex.ru/' + encodeURIComponent(issue.key), target: '_blank', rel: 'noopener noreferrer' }, issue.key) : h('span', { className: 'dsh-board-card-id' }, issue.key), h('button', { className: 'dsh-board-card-title', type: 'button', disabled: !issue.id, title: !issue.id ? t('issueMissingId') : undefined, onClick: () => openIssue(issue), 'aria-label': t('issueDetails') + ': ' + issue.summary }, issue.summary), h('span', { className: 'dsh-board-card-status' }, issue.status.display), h('span', { className: 'dsh-board-muted' }, t('assignee'), ': ', issue.assigneeKnown ? (issue.assignee?.display || t('unassigned')) : t('assigneeUnknown')), boardLinks && issueLinks(issue).length > 0 && trackerSessionShortcut(issue, issueLinks(issue)), workspaceBoardViews && workspace && issue.id && issueLinks(issue).length > 0 && h(workspaceBoardViews.Context, { key: JSON.stringify(['tracker', workspaceId, boardId, issue.id, privacyEpoch, tracker.settings?.revision]), scope: { provider: 'tracker', workspaceId, incarnation: workspace.createdAt, boardId, taskId: issue.key, issueId: issue.id, epoch: privacyEpoch, authorization: tracker.settings?.revision }, sources: { workspaces: workspacesSource, connection: connectionSource }, t })))))));
       }
       const colors = ['var(--dsw-alias-state-business-primary, #4176e6)', 'var(--dsw-alias-state-warn-primary, #d89548)', 'var(--dsw-alias-state-success-primary, #45a784)', 'var(--dsw-alias-state-error-primary, #d16f72)'];
       return h('main', { className: 'dsh-board' }, h('style', null, css), h('div', { className: 'dsh-board-shell' },
@@ -2645,9 +2821,11 @@ function createSessionSender({ sessions, validateSession }) {
                 tracker.reviewRequired && h('label', null, h('input', { type: 'checkbox', checked: false, onChange: (event) => { if (event.target.checked) updateTracker({ reviewRequired: false }); } }), t('trackerReviewDraft')),
                 h('button', { type: 'button', disabled: tracker.busy || tracker.reviewRequired, onClick: selectTrackerBoards }, t('trackerSelect'))))),
           !tracker.settings && !tracker.busy && h('button', { type: 'button', onClick: () => loadTracker() }, t('trackerReload'))),
+        workspace && workspaceBoardViews && h('button', { type: 'button', disabled: busy || uncertain || Boolean(memory.issue?.pending || memory.issue?.unknown), onClick: () => { if (setForm(null)) setDefaultWorkspace(workspace); } }, t('defaultBoard')),
         tracker.error && h('div', { className: 'dsh-board-alert', role: 'alert' }, t(tracker.error)),
         tracker.notice && h('p', { className: 'dsh-board-muted', role: 'status' }, t(tracker.notice)),
         error && h('div', { className: 'dsh-board-alert', role: 'alert' }, t(error), ' ', h('button', { type: 'button', disabled: busy || loading, onClick: load }, t('retry'))),
+        defaultWorkspace && workspaceBoardViews && workspaceIncarnation(defaultWorkspace.workspaceId) === defaultWorkspace.createdAt && h(workspaceBoardViews.Chooser, { key: JSON.stringify([defaultWorkspace.workspaceId, defaultWorkspace.createdAt, connection?.id, privacyEpoch, tracker.settings?.revision]), workspace: defaultWorkspace, boards: (snapshot?.boards || []).filter(b => b.workspaceId === defaultWorkspace.workspaceId), trackerBoards: trackerTiles.filter(b => b.workspaceId === defaultWorkspace.workspaceId), sources: { workspaces: workspacesSource, connection: connectionSource }, close: () => setDefaultWorkspace(null), t }),
         uncertain && h('div', { className: 'dsh-board-alert', role: 'status' }, t('readbackFirst'), ' ', h('button', { type: 'button', disabled: busy || loading || !memory.readback, onClick: () => { if (memory.readback && !memory.loading && window.confirm(t('reviewUnknown'))) updateMemory({ uncertain: false, uncertainRevision: null, readback: false, error: '' }); } }, t('acknowledgeUnknown'))),
         (memory.dirty || busy || uncertain) && h('p', { className: 'dsh-board-muted' }, t('draftWarning')),
         loading && h('p', { className: 'dsh-board-muted', role: 'status' }, t('loading')),
@@ -2715,6 +2893,8 @@ function createSessionSender({ sessions, validateSession }) {
       inject: ['slots', 'locale', 'workspaces', 'sessions', 'uiWorkspace', 'layout', 'commandUi', 'connection', 'inputTriggers', 'sidebarRight', 'sidebarRightTabs'],
       apply(ctx) {
         ctx.effect(() => consumeSessionFragment(ctx), 'dsh-board: session handoff');
+        Object.assign(en, { defaultBoard: 'Default board for this workspace', defaultWorkspaceOnly: 'This choice affects only this workspace.', defaultNone: 'No default board', defaultUnavailable: 'Saved default is unavailable. Explicitly choose a replacement or clear it.', defaultUnknown: 'The result is unknown. Close, reopen and check before another change.', contextTitle: 'Session goals and todo', contextLoading: 'Loading session context…', contextUnavailable: 'Session context unavailable', contextNoGoal: 'No current goal', contextNoTodoWrite: 'Todo list not written yet', contextEmptyTodos: 'Explicitly empty todo list', contextNoSessions: 'No linked sessions', contextGoal: 'Goal', contextTodos: 'Todo' });
+        Object.assign(ru, { defaultBoard: 'Доска по умолчанию этого пространства', defaultWorkspaceOnly: 'Выбор относится только к этому рабочему пространству.', defaultNone: 'Без доски по умолчанию', defaultUnavailable: 'Сохранённая доска недоступна. Явно выберите замену или очистку.', defaultUnknown: 'Исход неизвестен. Закройте, откройте заново и проверьте перед новым изменением.', contextTitle: 'Цели и todo сессий', contextLoading: 'Загрузка контекста сессий…', contextUnavailable: 'Контекст сессии недоступен', contextNoGoal: 'Нет текущей цели', contextNoTodoWrite: 'Список todo ещё не записан', contextEmptyTodos: 'Явно пустой список todo', contextNoSessions: 'Нет связанных сессий', contextGoal: 'Цель', contextTodos: 'Todo' });
         ctx.effect(() => ctx.locale.register(NS, { en, ru, zh: en }), 'dsh-board: locale');
         const t = ctx.locale.bind(NS);
         ctx.effect(() => ctx.inputTriggers.registerSource({
@@ -2725,6 +2905,14 @@ function createSessionSender({ sessions, validateSession }) {
           },
         }), 'dsh-board: reject unsupported /board arguments');
         const transport = makeTransport();
+        workspaceBoardViews = createWorkspaceBoardViews(React);
+        const workspaceIntent = createWorkspaceBoardSource({
+          valid: id => { const ws = ctx.workspaces.list.getSnapshot(); return ws.phase === 'ready' && ws.state !== 'error' && ctx.connection.generation.getSnapshot() ? ws.items?.find(w => w.workspaceId === id)?.createdAt : null; },
+          canNavigate: () => !memory.loading && !memory.tracker.busy && !memory.pending && !memory.uncertain && !trackerMutationPending && !issueMutationPending && !memory.issue?.pending && !memory.issue?.unknown,
+          selectPanel: () => ctx.layout.selectPanel(PANEL),
+        });
+        if (typeof ctx.provide === 'function') ctx.effect(() => ctx.provide('workspaceBoard', workspaceIntent.service), 'dsh-board: workspace intent service');
+        ctx.effect(() => () => workspaceIntent.close());
         const connectionSource = ctx.connection.generation;
         ctx.effect(() => {
           sessionStoreSources = { connection: connectionSource, workspaces: ctx.workspaces.list, sessions: ctx.sessions.list };
@@ -2767,7 +2955,7 @@ function createSessionSender({ sessions, validateSession }) {
         }, SessionCardBody)), 'dsh-board: session issue body');
         ctx.slots.inject('main', () => ctx.slots.register({
           name: 'main', key: PANEL, locale: NS,
-          inject: () => ({ transport, sessionContext, connectionSource, panelSource: ctx.layout.panelInfo, workspacesSource: ctx.workspaces.list, sessionsSource: ctx.sessions.list, sessionService: ctx.sessions, openSession: (id) => ctx.uiWorkspace.openSession(id) }),
+          inject: () => ({ transport, sessionContext, workspaceIntent, connectionSource, panelSource: ctx.layout.panelInfo, workspacesSource: ctx.workspaces.list, sessionsSource: ctx.sessions.list, sessionService: ctx.sessions, openSession: (id) => ctx.uiWorkspace.openSession(id) }),
         }, Page));
         ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({ name: 'sidebar.panellist', id: PANEL, order: 15, locale: NS, label: () => t('panel') }, BoardIcon));
         ctx.effect(() => ctx.commandUi.register({

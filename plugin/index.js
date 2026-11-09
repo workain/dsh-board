@@ -87,6 +87,8 @@ export const trackerPlugin = {
         throw error;
       }
     }
+    // Board-owned trusted access, never serialized to a browser.
+    ctx.effect(() => ctx.provide('boardTrackerAccess', { getService: () => getService() }));
     function getService() {
       if (disposed) return Promise.reject(new Error('Tracker stopped'));
       if (!initializing) {
@@ -214,6 +216,11 @@ export async function apply(ctx) {
     // This optional child owns its own routes and resources; it never gates the
     // local board if its dependencies or initialization are unavailable.
     try { ctx.plugin(trackerPlugin); } catch { /* local board remains available */ }
+    // Optional additive context routes must not disable the original local board.
+    try { ctx.plugin({ name: 'dsh-board-workspace-context', inject: ['profileContext', 'sessionQuery'], async apply(child) {
+      const { registerWorkspaceContext } = await import('./workspace-context.mjs');
+      await registerWorkspaceContext(child, store, path.dirname(filename));
+    } }); } catch { /* original local board remains available */ }
     ctx.tools.register({
       name: 'board_link_session',
       description: 'Link or unlink the calling agent’s own session to an existing board task in its actual workspace. The workspace and task must already exist.',

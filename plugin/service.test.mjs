@@ -55,7 +55,8 @@ function context(workspaceRegistry = registry()) {
     const once = () => { if (!active) return; active = false; return dispose?.(); };
     cleanup.push(once); return once;
   }
-  const ctx = { workspaceRegistry, effect(fn) { return own(fn()); },
+  const provided = new Map();
+  const ctx = { workspaceRegistry, provide(name, value) { if (provided.has(name)) throw Error('duplicate service'); provided.set(name, value); return () => provided.delete(name); }, get: name => provided.get(name), effect(fn) { return own(fn()); },
     plugin(value) { children.push(value); },
     approval: { async request(req) { approvalRequest = req; return approvalOutcome; } },
     tools: { register(value) {
@@ -259,7 +260,9 @@ test('real SQLite: exact routes, direct approval and tool/API race across instan
   await inHome(dir, async () => {
     const a = context(), b = context(); await apply(a.ctx); await apply(b.ctx);
     assert.deepEqual(inject, ['connection', 'workspaceRegistry', 'tools', 'approval']);
-    assert.deepEqual(a.children, [trackerPlugin]);
+    assert.equal(a.children[0], trackerPlugin);
+    assert.equal(a.children[1].name, 'dsh-board-workspace-context');
+    assert.deepEqual(a.children[1].inject, ['profileContext', 'sessionQuery']);
     assert.deepEqual(trackerPlugin.inject, ['connection', 'workspaceRegistry', 'profileContext', 'credentials', 'tools', 'approval', 'agents']);
     assert.deepEqual(a.routes.map(r => [r.path, r.methods, r.requestBody]), [
       ['/api/dsh-board', ['GET'], 'buffered'], ['/api/dsh-board.mutate', ['POST'], 'streaming'],

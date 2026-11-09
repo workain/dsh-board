@@ -37,6 +37,7 @@ const sources = [
   ['tracker-statuses.mjs', ['groupTrackerStatuses']],
   ['session-card.mjs', ['createSessionCard']],
   ['session-send.mjs', ['createSessionSender']],
+  ['workspace-client.mjs', ['createWorkspaceBoardSource', 'createWorkspaceBoardViews']],
 ];
 const parts = [];
 for (const [file, expectedExports] of sources) {
@@ -56,7 +57,7 @@ for (const [file, expectedExports] of sources) {
 }
 const begin = '/* BEGIN GENERATED TRACKER HELPERS */';
 const end = '/* END GENERATED TRACKER HELPERS */';
-const generated = `${begin}\nconst { parseTrackerMarkup, safeTrackerHref, groupTrackerStatuses, createSessionCard, createSessionSender } = {\n${parts.join('\n')}\n};\n${end}`;
+const generated = `${begin}\nconst { parseTrackerMarkup, safeTrackerHref, groupTrackerStatuses, createSessionCard, createSessionSender, createWorkspaceBoardSource, createWorkspaceBoardViews } = {\n${parts.join('\n')}\n};\n${end}`;
 const clientPath = resolve(root, 'client.js');
 const client = await readFile(clientPath, 'utf8');
 if (!client.includes('__ModuleLoader__')) throw new Error('client.js must register with the DSH ModuleLoader');
