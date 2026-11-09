@@ -1,11 +1,12 @@
 {
   "name": "dsh-board",
-  "version": "0.1.0",
+  "version": "0.1.1-workain.1",
   "private": true,
   "description": "Local board for DeepSeek Harness workspaces and sessions",
   "type": "module",
   "engines": {
-    "node": ">=24"
+    "node": ">=24",
+    "dsh": ">=0.2.2-rc.1"
   },
   "exports": {
     ".": "./index.js",
@@ -56,14 +57,19 @@
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
-    "scripts/build.mjs"
+    "scripts/build.mjs",
+    "workspace-default-store.mjs",
+    "workspace-context.mjs",
+    "workspace-client.mjs",
+    "workspace-context.test.mjs",
+    "workspace-tracker.test.mjs"
   ],
   "scripts": {
     "build": "node ./scripts/build.mjs",
     "check": "node ./scripts/build.mjs --check",
     "test:browser": "node --test shared-editor-integration.test.mjs unattended-integration.test.mjs verification-cross-surface.test.mjs",
     "test:host": "node --test full-access-integration.test.mjs restore-integration.test.mjs",
-    "test": "node --test core.test.mjs service.test.mjs sqlite-store.test.mjs client.test.mjs filters.test.mjs refresh-race.test.mjs slash-guard.test.mjs tracker-api.test.mjs tracker-fetch.test.mjs tracker-service.test.mjs tracker-tools.test.mjs tracker-account.test.mjs tracker-links.test.mjs tracker-settings.test.mjs tracker-markup.test.mjs tracker-statuses.test.mjs session-card.test.mjs session-send.test.mjs"
+    "test": "node --test core.test.mjs service.test.mjs sqlite-store.test.mjs client.test.mjs filters.test.mjs refresh-race.test.mjs slash-guard.test.mjs tracker-api.test.mjs tracker-fetch.test.mjs tracker-service.test.mjs tracker-tools.test.mjs tracker-account.test.mjs tracker-links.test.mjs tracker-settings.test.mjs tracker-markup.test.mjs tracker-statuses.test.mjs session-card.test.mjs session-send.test.mjs workspace-context.test.mjs workspace-tracker.test.mjs"
   },
   "dsh": {
     "bundle": {

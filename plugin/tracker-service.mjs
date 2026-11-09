@@ -1655,5 +1655,32 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
       },
     });
   }
-  return Object.freeze({ read, command, fetch, close, toolScope, currentWorkspace });
+  // Trusted Host-only proofs; never JSON commands. Exact identity reads do not
+  // search the board's full issue listing for each visible task card.
+  const workspaceBoardScope = (wid, bid, signal) => run(async activeSignal => {
+    workspaceId(wid); boardId(bid);
+    await ensureBinding(wid, activeSignal);
+    const state = current(), binding = bindings.get(wid), incarnation = workspace(wid);
+    const check = () => {
+      activeSignal.throwIfAborted();
+      if (!binding || bindings.get(wid) !== binding || current().revision !== state.revision || binding.revision !== state.revision || workspace(wid) !== incarnation || !state.settings.workspaces[wid]?.includes(bid)) fail('needs_reselect', 409);
+    };
+    check();
+    const account = await session(activeSignal), scope = await accountScope(account, activeSignal); check();
+    if (account.identity !== binding.identity || scope !== binding.accountScope) fail('needs_reselect', 409);
+    const board = await exactRestoreBoard(account, bid, activeSignal); check();
+    if (board?.id !== bid) fail('board_not_selected', 403);
+    const after = await session(activeSignal), afterScope = await accountScope(after, activeSignal); check();
+    if (after.identity !== binding.identity || afterScope !== binding.accountScope) fail('needs_reselect', 409);
+    return { accountScope: binding.accountScope, incarnation, revision: state.revision };
+  }, signal);
+  const workspaceTaskLinks = (input, signal) => run(async activeSignal => {
+    const c = { ...structuredClone(input), op: 'links.issue.read' };
+    checkCommand(c);
+    const result = await command(c, activeSignal);
+    const state = current(), binding = bindings.get(c.workspaceId);
+    if (!binding || binding.revision !== state.revision || workspace(c.workspaceId) !== binding.incarnation || !state.settings.workspaces[c.workspaceId]?.includes(c.boardId) || !/^[0-9a-f]{64}$/.test(binding.accountScope)) fail('needs_reselect', 409);
+    return { ...result, accountScope: binding.accountScope, settingsRevision: state.revision, incarnation: binding.incarnation };
+  }, signal);
+  return Object.freeze({ read, command, fetch, close, toolScope, currentWorkspace, workspaceBoardScope, workspaceTaskLinks });
 }
