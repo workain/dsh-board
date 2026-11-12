@@ -190,9 +190,10 @@ function safeError(error, signal) {
  * GET: configuration.read (no body/query); POST: exact command JSON.
  * Calls are bounded, and all failures are sanitized. No credentials are accepted.
  * read(signal?) and command(command, signal?) expose the same trusted API.
- * For unattended creation the host alone constructs toolScope with an optional
- * synchronous assertCaller callback; it must throw (or return false) unless the
- * caller remains an eligible root. allowUnattendedIssueCreation() returns only
+ * The host alone constructs toolScope with an optional synchronous assertCaller
+ * callback, rechecked at every authorization boundary. It must throw (or return
+ * false) when standing authority is revoked: Full access for ordinary writes,
+ * eligible live root for unattended creation. allowUnattendedIssueCreation() returns only
  * {enabled, revision}; it confers no authority. A subsequent trusted call to
  * createIssue(input, {unattendedRevision}) checks callback and opt-in repeatedly.
  * Neither callback nor the separate second argument is accepted from tool JSON.
@@ -1153,6 +1154,17 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
 
     function check(signal) {
       signal.throwIfAborted();
+      // Host-only standing authority must survive every service async boundary,
+      // not just unattended creation. No callback means the approved path.
+      if (assertCaller) {
+        const result = assertCaller();
+        if (result && (typeof result === 'object' || typeof result === 'function') && typeof result.then === 'function') {
+          Promise.resolve(result).catch(() => {});
+          fail('forbidden', 403);
+        }
+        if (result === false) fail('forbidden', 403);
+        signal.throwIfAborted();
+      }
       if (Date.now() >= expires) fail('scope_expired', 409);
       const item = workspaceRegistry.get(wid);
       if (!item || item.createdAt !== incarnation) fail('needs_reselect', 409);
@@ -1171,17 +1183,7 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
     // trusted host callback. Neither capability can be supplied via tool JSON.
     function checkUnattended(signal, expectedRevision, requireCaller = true) {
       check(signal);
-      if (requireCaller) {
-        if (typeof assertCaller !== 'function') fail('forbidden', 403);
-        const result = assertCaller();
-        if (result && (typeof result === 'object' || typeof result === 'function') && typeof result.then === 'function') {
-          // A rejected accidental async assertion must not become an unhandled rejection.
-          Promise.resolve(result).catch(() => {});
-          fail('forbidden', 403);
-        }
-        if (result === false) fail('forbidden', 403);
-        check(signal);
-      }
+      if (requireCaller && typeof assertCaller !== 'function') fail('forbidden', 403);
       if (typeof workspaceRegistry.list !== 'function') fail('unavailable', 503);
       const items = workspaceRegistry.list();
       if (!Array.isArray(items)) fail('unavailable', 503);

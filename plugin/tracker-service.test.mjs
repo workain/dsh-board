@@ -2004,3 +2004,49 @@ test('service integrates actual Tracker client with fake transport only', async 
   assert.equal(result.issuesComplete, false); assert.equal(result.issuesReason, 'approximate_board_filter');
   assert.equal(calls.length, 4); assert.doesNotMatch(JSON.stringify(result), /LOCAL_FAKE_TOKEN|fake_org/);
 });
+
+for (const [label, method, input] of [
+  ['comment', 'addComment', { issueKey: 'ABC-1', issueId: 'id-1', text: 'hello' }],
+  ['transition', 'executeTransition', transitionInput],
+  ['update', 'updateIssue', { issueKey: 'ABC-1', issueId: 'id-1', changes: { expectedVersion: 1, summary: 'Changed' } }],
+  ['create', 'createIssue', unattendedInput],
+  ['link', 'setOwnLink', { boardId: '1', issueKey: 'ABC-1', issueId: 'id-1', linked: true, expectedRevision: 0 }],
+  ['unlink', 'setOwnLink', { boardId: '1', issueKey: 'ABC-1', issueId: 'id-1', linked: false, expectedRevision: 0 }],
+]) {
+  test(`${label}: standing authority is checked inside real service before and after dispatch`, async () => {
+    for (const phase of ['allowed', 'account-await', 'dispatched']) {
+      const f = await prepareLinks();
+      f.tracker.getIssue = fixture().tracker.getIssue;
+      let allowed = true, writes = 0, checks = 0;
+      const scope = scopeFor(f, { assertCaller: () => { checks++; return allowed; } });
+      const owner = method === 'setOwnLink' ? f.links : f.tracker;
+      const key = method === 'setOwnLink' ? 'mutate' : method;
+      const originalWrite = owner[key].bind(owner);
+      owner[key] = (...args) => {
+        writes++;
+        const result = originalWrite(...args);
+        if (phase === 'dispatched') allowed = false;
+        return result;
+      };
+      if (phase === 'account-await') {
+        const open = f.tracker.openSession.bind(f.tracker);
+        f.tracker.openSession = async (...args) => { const account = await open(...args); allowed = false; return account; };
+      }
+      try {
+        if (phase === 'allowed') await scope[method](input);
+        else await rejected(scope[method](input), phase === 'dispatched' ? 'outcome_unknown' : 'forbidden');
+        assert.equal(writes, phase === 'account-await' ? 0 : 1);
+        assert.ok(checks > 1, 'authority is not a one-time snapshot');
+      } finally { await f.service.close(); }
+    }
+  });
+}
+test('standing authority callbacks fail closed on asynchronous or false results for ordinary writes', async () => {
+  for (const assertCaller of [() => false, async () => true, async () => { throw Error('private'); }]) {
+    const f = await prepareScope(); let writes = 0;
+    f.tracker.addComment = async () => { writes++; return { id: '1' }; };
+    await rejected(scopeFor(f, { assertCaller }).addComment({ issueKey: 'ABC-1', issueId: 'id-1', text: 'hello' }), 'forbidden');
+    assert.equal(writes, 0);
+    await f.service.close();
+  }
+});

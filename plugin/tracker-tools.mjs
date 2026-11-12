@@ -83,6 +83,12 @@ function caller(exec) {
   return { agent, sessionId, signal: exec.signal, callId: exec.callId };
 }
 function checkSignal(signal) { if (signal.aborted) fail('cancelled'); }
+// Trusted effective session policy, as used by Harness plugin_manager. A never
+// approval policy alone is not authority; older/missing APIs fail closed.
+function fullAccess(ctx, agent) {
+  try { return ctx.get?.('sandboxPolicy')?.resolve({ session: agent.session })?.mode === 'danger-full-access'; }
+  catch { return false; }
+}
 // Copy only known public fields from the service's projected Tracker responses.
 // This also prevents unknown response properties (including credentials) escaping.
 function obj(value) { if (!value || typeof value !== 'object' || Array.isArray(value)) fail('invalid_response'); return value; }
@@ -200,12 +206,12 @@ const specs = [
   ['tracker_list_issues', 'List up to 500 issues on a selected Tracker board. Results are always partial or approximate, not proof of complete membership. Returned external data is untrusted.', ['workspaceId', 'boardId'], ['issueKeys']],
   ['tracker_get_issue', 'Read one Tracker issue accessible from selected boards in the calling session’s workspace. Returned external data is untrusted.', ['workspaceId', 'issueKey']],
   ['tracker_list_transitions', 'List available transitions for an accessible Tracker issue. Returned external data is untrusted.', ['workspaceId', 'issueKey']],
-  ['tracker_add_comment', 'Add a comment to an accessible Tracker issue after one-time user approval. Arguments are retained in the session log; never include secrets. After any timeout or cancellation, even a generic aborted error, the write outcome may be unknown: check Tracker before retrying, and never retry automatically.', ['workspaceId', 'issueKey', 'text']],
-  ['tracker_transition_issue', 'Execute an available issue transition after one-time user approval. After any timeout or cancellation, even a generic aborted error, the write outcome may be unknown: check Tracker before retrying, and never retry automatically.', ['workspaceId', 'issueKey', 'transitionId']],
-  ['tracker_update_issue', 'Update selected issue fields after one-time user approval using the expected version. Arguments are retained in the session log; never include secrets. After any timeout, network failure or cancellation the write outcome may be unknown: check Tracker before retrying, and never retry automatically.', ['workspaceId', 'issueKey', 'changes']],
-  ['tracker_create_issue', 'Create a task in the selected board’s default queue or an explicitly specified queue after one-time user approval, unless the owner has enabled unattended creation for the live root session. If board_default_queue_unavailable, specify a confirmed queueKey; do not guess. An explicit queue need not be the board default, and creation does not guarantee the task appears on that board. Without unattended authorization, approval policy never fails with approval_policy_never before preview. Arguments are logged; never include secrets. After an uncertain outcome check Tracker before retrying; never retry automatically.', ['workspaceId', 'boardId', 'summary'], ['description', 'queueKey']],
-  ['tracker_link_own_session', 'Link the calling session to an issue after one-time user approval. The link applies across selected boards, not only the specified board. After an uncertain outcome check the link before retrying; never retry automatically.', ['workspaceId', 'boardId', 'issueKey']],
-  ['tracker_unlink_own_session', 'Remove the calling session’s link to an issue after one-time user approval. The link applies across selected boards, not only the specified board. After an uncertain outcome check the link before retrying; never retry automatically.', ['workspaceId', 'boardId', 'issueKey']],
+  ['tracker_add_comment', 'Add a comment to an accessible Tracker issue with trusted Full access (danger-full-access), otherwise after one-time user approval. Arguments are retained in the session log; never include secrets. After any timeout or cancellation, even a generic aborted error, the write outcome may be unknown: check Tracker before retrying, and never retry automatically.', ['workspaceId', 'issueKey', 'text']],
+  ['tracker_transition_issue', 'Execute an available issue transition with trusted Full access (danger-full-access), otherwise after one-time user approval. After any timeout or cancellation, even a generic aborted error, the write outcome may be unknown: check Tracker before retrying, and never retry automatically.', ['workspaceId', 'issueKey', 'transitionId']],
+  ['tracker_update_issue', 'Update selected issue fields with trusted Full access (danger-full-access), otherwise after one-time user approval using the expected version. Arguments are retained in the session log; never include secrets. After any timeout, network failure or cancellation the write outcome may be unknown: check Tracker before retrying, and never retry automatically.', ['workspaceId', 'issueKey', 'changes']],
+  ['tracker_create_issue', 'Create a task in the selected board’s default queue or an explicitly specified queue with trusted Full access (danger-full-access), otherwise after one-time user approval, unless the owner has enabled unattended creation for the live root session. If board_default_queue_unavailable, specify a confirmed queueKey; do not guess. An explicit queue need not be the board default, and creation does not guarantee the task appears on that board. Without Full access or unattended authorization, approval policy never fails with approval_policy_never before preview. Arguments are logged; never include secrets. After an uncertain outcome check Tracker before retrying; never retry automatically.', ['workspaceId', 'boardId', 'summary'], ['description', 'queueKey']],
+  ['tracker_link_own_session', 'Link the calling session to an issue with trusted Full access (danger-full-access), otherwise after one-time user approval. The link applies across selected boards, not only the specified board. After an uncertain outcome check the link before retrying; never retry automatically.', ['workspaceId', 'boardId', 'issueKey']],
+  ['tracker_unlink_own_session', 'Remove the calling session’s link to an issue with trusted Full access (danger-full-access), otherwise after one-time user approval. The link applies across selected boards, not only the specified board. After an uncertain outcome check the link before retrying; never retry automatically.', ['workspaceId', 'boardId', 'issueKey']],
 ];
 /** Register session tools. ctx.tools.register owns its lifecycle effect; the returned
  * disposer is also available to the host. getService() is the host's lazy singleton.
@@ -217,7 +223,7 @@ const specs = [
  * allowUnattendedIssueCreation() => {enabled,revision},
  * createIssue({boardId,expectedQueue,summary,description?,queueKey?}, {unattendedRevision}? ),
  * previewOwnLink({boardId,issueKey}), setOwnLink({boardId,issueKey,issueId,linked,expectedRevision}).
- * Only unattended creation receives the trusted, synchronous live-root assertion. */
+ * Full-access writes receive a synchronous live-policy assertion; unattended creation receives a live-root assertion. */
 export function registerTrackerTools(ctx, { getService } = {}) {
   if (!ctx?.tools || typeof ctx.tools.register !== 'function' || typeof getService !== 'function') throw new TypeError('Invalid Tracker tool dependencies');
   const disposers = [];
@@ -238,9 +244,15 @@ export function registerTrackerTools(ctx, { getService } = {}) {
           if (result?.isError && result.error?.info?.code === 'ABORTED') return [{ type: 'text', text: 'Tracker write outcome may be unknown after cancellation. Check Tracker or the session link before any retry; do not retry automatically.' }];
         } } : {}),
         async execute(args, exec) {
-          let writeStarted = false;
+          let writeStarted = false, assertFullAccess;
           try {
             const a = validateArgs(args, name), c = caller(exec);
+            if (isWrite && fullAccess(ctx, c.agent)) {
+              assertFullAccess = () => {
+                checkSignal(c.signal);
+                if (!fullAccess(ctx, c.agent)) fail('forbidden');
+              };
+            }
             const service = await getService(); checkSignal(c.signal);
             if (name === 'tracker_current_workspace') {
               if (!service || typeof service.currentWorkspace !== 'function') fail('unavailable');
@@ -249,7 +261,7 @@ export function registerTrackerTools(ctx, { getService } = {}) {
               return result(value);
             }
             if (!service || typeof service.toolScope !== 'function') fail('unavailable');
-            const scope = assertCaller => service.toolScope({ workspaceId: a.workspaceId, sessionId: c.sessionId, signal: c.signal, ...(assertCaller ? { assertCaller } : {}) });
+            const scope = (assertCaller = assertFullAccess) => service.toolScope({ workspaceId: a.workspaceId, sessionId: c.sessionId, signal: c.signal, ...(assertCaller ? { assertCaller } : {}) });
             let s = scope(), value;
             if (name === 'tracker_list_boards') value = selectedBoards(await s.selectedBoards());
             else if (name === 'tracker_list_issues') value = boardRead(await s.boardRead({ boardId: a.boardId, issueKeys: a.issueKeys }), a.boardId);
@@ -260,7 +272,7 @@ export function registerTrackerTools(ctx, { getService } = {}) {
             else if (name === 'tracker_create_issue' || name === 'tracker_link_own_session' || name === 'tracker_unlink_own_session') {
               const create = name === 'tracker_create_issue';
               let unattendedRevision, assertCaller;
-              if (create && typeof s.allowUnattendedIssueCreation === 'function') {
+              if (create && !assertFullAccess && typeof s.allowUnattendedIssueCreation === 'function') {
                 // A failed optional capability probe never grants unattended access
                 // and must not impose new restrictions on the approval-only path.
                 let optIn;
@@ -292,7 +304,7 @@ export function registerTrackerTools(ctx, { getService } = {}) {
                   }
                 }
               }
-              if (create && unattendedRevision === undefined) {
+              if (create && !assertFullAccess && unattendedRevision === undefined) {
                 // Only the public policy API can make this deterministic; an unknown
                 // policy never grants permission or bypasses the normal request.
                 let policy;
@@ -312,19 +324,23 @@ export function registerTrackerTools(ctx, { getService } = {}) {
               if (assertCaller) assertCaller();
               const proposed = create ? Object.freeze({ summary: a.summary, ...(Object.hasOwn(a, 'description') ? { description: a.description } : {}) }) : undefined;
               if (unattendedRevision === undefined) {
-                if (!ctx.approval || typeof ctx.approval.request !== 'function') fail('approval_unavailable');
+                if (!assertFullAccess && (!ctx.approval || typeof ctx.approval.request !== 'function')) fail('approval_unavailable');
                 const reason = create
                   ? `Create Tracker task: workspace ${a.workspaceId}; selected board ${a.boardId}; exact ${Object.hasOwn(a, 'queueKey') ? 'explicit' : 'default'} queue (untrusted JSON): ${JSON.stringify(preview)}; exact fields (JSON): ${JSON.stringify(proposed)}. Creation in this queue does not guarantee the task will appear on this board.`
                   : `${name === 'tracker_link_own_session' ? 'Add' : 'Remove'} own session link: workspace ${a.workspaceId}; selected board ${a.boardId}; issue ${a.issueKey}; immutable issue ID ${preview.issueId}; session ${c.sessionId}; current link ${preview.linked}; link revision ${preview.revision}. The link is global across selected boards, not restricted to this board.`;
-                const answer = await ctx.approval.request({ agent: c.agent, toolName: name, callId: c.callId, reason, signal: c.signal });
-                checkSignal(c.signal);
-                if (answer !== 'allowed-once') fail('approval_denied');
+                if (assertFullAccess) assertFullAccess();
+                else {
+                  const answer = await ctx.approval.request({ agent: c.agent, toolName: name, callId: c.callId, reason, signal: c.signal });
+                  checkSignal(c.signal);
+                  if (answer !== 'allowed-once') fail('approval_denied');
+                }
                 s = scope();
                 const after = create ? createPreview(await s.previewCreate(queueArgs)) :
                   ownLinkPreview(await s.previewOwnLink({ boardId: a.boardId, issueKey: a.issueKey }));
                 if (create ? !sameQueue(preview, after) : preview.issueId !== after.issueId || preview.linked !== after.linked || preview.revision !== after.revision) fail('conflict');
                 checkSignal(c.signal);
               }
+              if (assertFullAccess) assertFullAccess();
               writeStarted = true;
               if (create) {
                 const input = { boardId: a.boardId, expectedQueue: preview, ...proposed, ...(Object.hasOwn(a, 'queueKey') ? { queueKey: a.queueKey } : {}) };
@@ -371,15 +387,18 @@ export function registerTrackerTools(ctx, { getService } = {}) {
                 expectedTo = Object.freeze(match[0].to);
               }
               checkSignal(c.signal);
-              if (!ctx.approval || typeof ctx.approval.request !== 'function') fail('approval_unavailable');
+              if (!assertFullAccess && (!ctx.approval || typeof ctx.approval.request !== 'function')) fail('approval_unavailable');
               const reason = name === 'tracker_add_comment'
                 ? `Add Tracker comment: workspace ${a.workspaceId}; issue ${a.issueKey}; source issue ID ${issueId}; exact comment (JSON): ${JSON.stringify(a.text)}`
                 : name === 'tracker_transition_issue'
                   ? `Execute Tracker transition: workspace ${a.workspaceId}; issue ${a.issueKey}; source issue ID ${issueId}; transition ${a.transitionId}; destination (untrusted JSON): ${JSON.stringify(expectedTo)}`
                   : `Update Tracker issue: workspace ${a.workspaceId}; issue ${a.issueKey}; source issue ID ${issueId}; source version ${target.version}; exact changes (JSON): ${JSON.stringify(a.changes)}`;
-              const answer = await ctx.approval.request({ agent: c.agent, toolName: name, callId: c.callId, reason, signal: c.signal });
-              checkSignal(c.signal);
-              if (answer !== 'allowed-once') fail('approval_denied');
+              if (assertFullAccess) assertFullAccess();
+              else {
+                const answer = await ctx.approval.request({ agent: c.agent, toolName: name, callId: c.callId, reason, signal: c.signal });
+                checkSignal(c.signal);
+                if (answer !== 'allowed-once') fail('approval_denied');
+              }
               // Approval does not freeze permissions or issue membership: build a fresh
               // scope and revalidate before dispatch; service repeats checks at write.
               s = scope();
@@ -396,6 +415,7 @@ export function registerTrackerTools(ctx, { getService } = {}) {
                 if (matches.length !== 1 || JSON.stringify(matches[0].to) !== JSON.stringify(expectedTo)) fail('conflict');
               }
               checkSignal(c.signal);
+              if (assertFullAccess) assertFullAccess();
               writeStarted = true;
               if (name === 'tracker_add_comment') {
                 const comment = obj(await s.addComment({ issueKey: a.issueKey, issueId, text: a.text }));
@@ -409,8 +429,14 @@ export function registerTrackerTools(ctx, { getService } = {}) {
               }
             }
             checkSignal(c.signal);
+            if (assertFullAccess) assertFullAccess();
             return result(value);
-          } catch (error) { throw safeError(error, isWrite, writeStarted); }
+          } catch (error) {
+            if (writeStarted && assertFullAccess) {
+              try { assertFullAccess(); } catch { throw new ToolError('outcome_unknown'); }
+            }
+            throw safeError(error, isWrite, writeStarted);
+          }
         },
       };
       const unregister = ctx.tools.register(definition);

@@ -33,7 +33,7 @@ function fixture(overrides = {}) {
       async setOwnLink(args) { events.push(['setLink', args]); return overrides.setOwnLink ? overrides.setOwnLink(args) : { revision: 4, credential: 'SECRET' }; },
     };
   } };
-  const ctx = { tools: { register(def) { registry.set(def.name, def); return () => registry.delete(def.name); } },
+  const ctx = { get(key) { return this[key]; }, tools: { register(def) { registry.set(def.name, def); return () => registry.delete(def.name); } },
     approval: { async request(request) { events.push(['approval', request]); return overrides.approval ? overrides.approval(request) : 'allowed-once'; } } };
   const dispose = registerTrackerTools(ctx, { getService: async () => service });
   const call = (name, args, context = exec()) => registry.get(name).execute(args, context);
@@ -567,5 +567,80 @@ test('unknown outcomes, malformed write results, and cancellation never retry mu
     const f = fixture({ [method]: () => { controller.abort(); return {}; } });
     await assert.rejects(f.call(name, args, exec(controller)), code('outcome_unknown'));
     assert.equal(f.events.filter(e => Array.isArray(e) && e[0] === event).length, 1);
+  }
+});
+
+const fullAccessWrites = [
+  ['tracker_add_comment', { workspaceId: 'w', issueKey: 'ABC-1', text: 'hello' }, 'addComment', 'comment', 'getIssue', task, { id: '99' }],
+  ['tracker_transition_issue', { workspaceId: 'w', issueKey: 'ABC-1', transitionId: 'finish' }, 'executeTransition', 'writeTransition', 'getIssue', task, {}],
+  ['tracker_update_issue', updateArgs(), 'updateIssue', 'update', 'getIssue', task, { version: 2 }],
+  ['tracker_create_issue', createArgs, 'createIssue', 'create', 'previewCreate', { queue: { id: '7', key: 'ABC' } }, { id: 'issue-2', key: 'ABC-2', version: 1 }],
+  ['tracker_link_own_session', linkArgs, 'setOwnLink', 'setLink', 'previewOwnLink', { issueId: 'issue-1', linked: false, revision: 3 }, { revision: 4 }],
+  ['tracker_unlink_own_session', linkArgs, 'setOwnLink', 'setLink', 'previewOwnLink', { issueId: 'issue-1', linked: false, revision: 3 }, { revision: 4 }],
+];
+for (const [name, args, method, event, previewMethod, previewResult, writeResult] of fullAccessWrites) {
+  test(`${name}: trusted Full access skips approval for any session, preserves scope checks`, async () => {
+    for (const policy of ['ask', 'never']) {
+      const f = fixture({ approval: () => { throw Error('must not prompt'); } }), context = exec();
+      f.ctx.approval.config = { policy }; f.ctx.approval.overrideOf = () => undefined;
+      f.ctx.sandboxPolicy = { resolve: options => { assert.equal(options.session, context.agent.session); return { mode: 'danger-full-access' }; } };
+      await f.call(name, args, context);
+      assert.equal(f.events.filter(e => Array.isArray(e) && e[0] === event).length, 1);
+      assert.equal(f.events.some(e => Array.isArray(e) && e[0] === 'approval'), false);
+      assert.ok(f.scopes.every(s => typeof s.assertCaller === 'function'));
+      assert.match(f.registry.get(name).description, /Full access/);
+    }
+  });
+  test(`${name}: restricted, missing, unknown and broken mode require allowed-once; never alone grants nothing`, async () => {
+    for (const mode of ['workspace-write', 'read-only', undefined, 'future-mode', 'throws']) {
+      for (const policy of ['ask', 'never']) {
+        const f = fixture({ approval: () => 'rejected' });
+        f.ctx.approval.config = { policy }; f.ctx.approval.overrideOf = () => undefined;
+        if (mode !== undefined) f.ctx.sandboxPolicy = { resolve: () => { if (mode === 'throws') throw Error('unavailable'); return { mode }; } };
+        await assert.rejects(f.call(name, args), code(name === 'tracker_create_issue' && policy === 'never' ? 'approval_policy_never' : 'approval_denied'));
+        assert.equal(f.events.some(e => Array.isArray(e) && e[0] === event), false);
+        assert.ok(f.scopes.every(s => s.assertCaller === undefined));
+      }
+      const approved = fixture();
+      if (mode !== undefined) approved.ctx.sandboxPolicy = { resolve: () => { if (mode === 'throws') throw Error('unavailable'); return { mode }; } };
+      await approved.call(name, args);
+      assert.equal(approved.events.filter(e => Array.isArray(e) && e[0] === 'approval').length, 1);
+    }
+  });
+  test(`${name}: Full access revocation before dispatch denies; after dispatch is unknown without retries`, async () => {
+    let mode = 'danger-full-access';
+    const before = fixture({ [previewMethod]: () => { mode = 'workspace-write'; return previewResult; } });
+    before.ctx.sandboxPolicy = { resolve: () => ({ mode }) };
+    await assert.rejects(before.call(name, args), code('forbidden'));
+    assert.equal(before.events.some(e => Array.isArray(e) && e[0] === event), false);
+    for (const throws of [false, true]) {
+      mode = 'danger-full-access';
+      const after = fixture({ [method]: () => { mode = 'workspace-write'; if (throws) throw Object.assign(Error('revoked'), { code: 'forbidden' }); return writeResult; } });
+      after.ctx.sandboxPolicy = { resolve: () => ({ mode }) };
+      await assert.rejects(after.call(name, args), code('outcome_unknown'));
+      assert.equal(after.events.filter(e => Array.isArray(e) && e[0] === event).length, 1);
+    }
+  });
+  test(`${name}: Full access preserves membership failures and unknown transport outcomes`, async () => {
+    const denied = fixture({ [previewMethod]: () => { throw Object.assign(Error('private'), { code: 'issue_not_in_selected_boards' }); } });
+    denied.ctx.sandboxPolicy = { resolve: () => ({ mode: 'danger-full-access' }) };
+    await assert.rejects(denied.call(name, args), code('issue_not_in_selected_boards'));
+    assert.equal(denied.events.some(e => Array.isArray(e) && e[0] === event), false);
+    const unknown = fixture({ [method]: () => { throw Object.assign(Error('private'), { code: 'network_error' }); } });
+    unknown.ctx.sandboxPolicy = { resolve: () => ({ mode: 'danger-full-access' }) };
+    await assert.rejects(unknown.call(name, args), code('outcome_unknown'));
+    assert.equal(unknown.events.filter(e => Array.isArray(e) && e[0] === event).length, 1);
+  });
+}
+test('Full access preserves expected issue version and link revision revalidation', async () => {
+  const stale = fixture(); stale.ctx.sandboxPolicy = { resolve: () => ({ mode: 'danger-full-access' }) };
+  await assert.rejects(update(stale, { expectedVersion: 2, summary: 'stale' }), code('conflict'));
+  assert.equal(stale.events.some(e => Array.isArray(e) && e[0] === 'update'), false);
+  for (const name of ['tracker_link_own_session', 'tracker_unlink_own_session']) {
+    let revision = 3;
+    const f = fixture({ previewOwnLink: () => ({ issueId: 'issue-1', linked: false, revision: revision++ }) });
+    f.ctx.sandboxPolicy = { resolve: () => ({ mode: 'danger-full-access' }) };
+    await assert.rejects(f.call(name, linkArgs), code('conflict'));
+    assert.equal(f.events.some(e => Array.isArray(e) && e[0] === 'setLink'), false);
   }
 });
