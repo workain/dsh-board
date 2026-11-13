@@ -17,13 +17,14 @@ const MAX_COMMENTS = 100;
 const MAX_WRITE_BYTES = 64 * 1024;
 
 export class TrackerError extends Error {
-  constructor(code) {
-    super(`Tracker: ${code}`);
+  constructor(code, detail) {
+    super(`Tracker: ${code}${detail ? `: ${detail}` : ''}`);
     this.name = 'TrackerError';
     this.code = code;
+    if (detail !== undefined) this.detail = detail;
   }
 }
-const fail = code => { throw new TrackerError(code); };
+const fail = (code, detail) => { throw new TrackerError(code, detail); };
 const REQUEST_ERROR_CODES = new Set(['invalid_input', 'invalid_credentials', 'invalid_response', 'response_too_large',
   'cancelled', 'timeout', 'network_error', 'unauthorized', 'forbidden', 'not_found', 'rate_limited', 'redirect', 'http_error',
   'board_default_queue_unavailable']);
@@ -179,6 +180,30 @@ function issue(value, wantedKeys, targetId) {
   const id = typeof value.id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value.id) ? value.id : undefined;
   return { member: true, issue: { ...(id ? { id } : {}), key: value.key, summary: text(value.summary, 4096), status: status(value.status), ...assignee(value.assignee) } };
 }
+async function readErrorDetail(response, signal) {
+  const MAX_ERROR_BYTES = 8192;
+  if (!response.body || typeof response.body.getReader !== 'function') return undefined;
+  const reader = response.body.getReader(); const chunks = []; let size = 0; let onAbort;
+  const cancel = () => { try { Promise.resolve(reader.cancel()).catch(() => {}); } catch {} };
+  try {
+    const stopped = new Promise((_, reject) => { onAbort = () => { cancel(); reject(new TrackerError('cancelled')); }; signal.addEventListener('abort', onAbort, { once: true }); });
+    while (true) {
+      const { done, value } = await Promise.race([reader.read(), stopped]); if (done) break;
+      if (!(value instanceof Uint8Array) || (size += value.byteLength) > MAX_ERROR_BYTES) return undefined;
+      chunks.push(value);
+    }
+    const raw = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks));
+    let parsed; try { parsed = JSON.parse(raw); } catch { parsed = raw; }
+    const values = [];
+    const add = value => { if (typeof value === 'string' && value.trim() && !/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(value)) values.push(value.trim().slice(0, 512)); };
+    if (typeof parsed === 'string') return undefined;
+    else if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) for (const key of ['message', 'reason', 'error', 'errors']) {
+      const value = parsed[key]; if (Array.isArray(value)) value.slice(0, 8).forEach(add); else add(value);
+    }
+    const detail = values.join('; ').slice(0, 1024); return detail || undefined;
+  } catch (error) { if (error?.name === 'TrackerError' && error.code === 'cancelled') throw error; return undefined; }
+  finally { signal.removeEventListener('abort', onAbort); cancel(); try { reader.releaseLock(); } catch {} }
+}
 function abortCode(signal, timedOut) {
   return timedOut() ? 'timeout' : signal?.aborted ? 'cancelled' : 'network_error';
 }
@@ -302,11 +327,11 @@ export function createTrackerClient({ getCredentials, fetch: fetchFn = globalThi
         }
         if (!response || !Number.isInteger(response.status)) fail('invalid_response');
         if (response.status !== expectedStatus) {
-          try { Promise.resolve(response.body?.cancel?.()).catch(() => {}); } catch {}
+          if (response.status !== 422) { try { Promise.resolve(response.body?.cancel?.()).catch(() => {}); } catch {} }
           const codes = { 401: 'unauthorized', 403: 'forbidden', 404: 'not_found', 429: 'rate_limited',
             ...(write ? { 409: 'conflict', 412: 'precondition_failed', 422: 'unprocessable' } : {}) };
           const code = Object.hasOwn(codes, response.status) ? codes[response.status] : null;
-          if (code) { rejected = true; fail(code); }
+          if (code) { rejected = true; fail(code, response.status === 422 ? await readErrorDetail(response, controller.signal) : undefined); }
           if (response.status >= 300 && response.status < 400) fail('redirect');
           fail('http_error');
         }
@@ -320,7 +345,7 @@ export function createTrackerClient({ getCredentials, fetch: fetchFn = globalThi
         if (error instanceof TrackerError && (REQUEST_ERROR_CODES.has(error.code) ||
             (write && rejected && ['conflict', 'precondition_failed', 'unprocessable'].includes(error.code)))) safeCode = error.code;
       } catch {}
-      fail(safeCode || 'invalid_response');
+      fail(safeCode || 'invalid_response', safeCode === 'unprocessable' && typeof error?.detail === 'string' ? error.detail : undefined);
     } finally {
       clearTimeout(timer); removeAbort?.(); callerSignal?.removeEventListener('abort', onAbort);
       controller.abort();
@@ -614,10 +639,12 @@ export function createTrackerClient({ getCredentials, fetch: fetchFn = globalThi
     });
   }
 
-  async function executeTransition(credentials, key, transitionId, { signal } = {}) {
+  async function executeTransition(credentials, key, transitionId, { signal, resolution } = {}) {
     issueKey(key);
     if (!validTransitionId(transitionId)) fail('invalid_input');
-    return request(`${ORIGIN}/v3/issues/${key}/transitions/${transitionId}/_execute`, 'POST', {}, signal, credentials, {
+    if (resolution !== undefined) bodyText(resolution, 128, 'invalid_input');
+    const body = resolution === undefined ? {} : { resolution };
+    return request(`${ORIGIN}/v3/issues/${key}/transitions/${transitionId}/_execute`, 'POST', body, signal, credentials, {
       write: true,
       project(value) {
         if (!object(value) && !(Array.isArray(value) && value.length <= 500)) fail('invalid_response');
