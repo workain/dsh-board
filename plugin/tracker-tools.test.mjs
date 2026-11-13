@@ -170,11 +170,11 @@ test('denied, unknown outcome or revocation cannot cause unauthorized write', as
 
 test('transition authorizes exact target, revalidates and passes approved destination', async () => {
   const f = fixture();
-  assert.deepEqual(parsed(await f.call('tracker_transition_issue', { workspaceId: 'w', issueKey: 'ABC-1', transitionId: 'finish' })), { executed: true });
+  assert.deepEqual(parsed(await f.call('tracker_transition_issue', { workspaceId: 'w', issueKey: 'ABC-1', transitionId: 'finish', resolution: 'fixed' })), { executed: true });
   const approval = f.events.find(e => Array.isArray(e) && e[0] === 'approval')[1];
-  assert.ok(approval.reason.includes(JSON.stringify(to)));
+  assert.ok(approval.reason.includes(JSON.stringify(to))); assert.ok(approval.reason.includes(JSON.stringify('fixed')));
   assert.match(approval.reason, /issue ABC-1; source issue ID issue-1/);
-  assert.deepEqual(f.events.at(-1)[1], { issueKey: 'ABC-1', issueId: 'issue-1', transitionId: 'finish', expectedTo: to });
+  assert.deepEqual(f.events.at(-1)[1], { issueKey: 'ABC-1', issueId: 'issue-1', transitionId: 'finish', expectedTo: to, resolution: 'fixed' });
   assert.equal(Object.isFrozen(f.events.at(-1)[1].expectedTo), true);
   let n = 0;
   const changed = fixture({ listTransitions: () => ++n === 1 ? [transition] : [{ ...transition, to: { ...to, display: 'Changed' } }] });

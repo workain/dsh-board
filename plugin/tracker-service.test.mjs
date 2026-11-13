@@ -5,6 +5,7 @@ import { createTrackerClient } from './tracker-api.mjs';
 
 function fixture(options = {}) {
   let state = { revision: 0, settings: { connection: null, workspaces: {} } };
+  let transitioned = false;
   const settings = {
     read: () => structuredClone(state),
     compareAndSet(revision, value) {
@@ -21,7 +22,7 @@ function fixture(options = {}) {
     async listBoards() { return { boards: [{ id: '1', name: 'First' }, { id: '2', name: 'Second' }], complete: true, reason: null }; },
     async getBoardOverview(id, options) { return { board: { id, name: 'First' }, columns: [], issues: [], issuesComplete: false, issuesReason: 'explicit_keys_only', keys: options.issueKeys, searchByBoard: options.searchByBoard }; },
     async getBoardIdentity(id) { return { id, name: 'Board' }; },
-    async getIssue(key) { return { key, id: 'id-1', summary: 'Example', description: 'Description', status: { id: '1', key: 'open', display: 'Open' }, assigneeKnown: true, assignee: null, boards: [{ id: '1' }, { id: '99' }], version: 1 }; },
+    async getIssue(key) { return { key, id: 'id-1', summary: 'Example', description: 'Description', status: transitioned ? { id: '2', key: 'progress', display: 'In progress' } : { id: '1', key: 'open', display: 'Open' }, assigneeKnown: true, assignee: null, boards: [{ id: '1' }, { id: '99' }], version: 1 }; },
     async getIssueById(id) { return { id, key: 'ABC-1', boards: [{ id: '1' }] }; },
     async listTransitions() { return [{ id: 'start', display: 'Start', to: { id: '2', key: 'progress', display: 'In progress' } }]; },
     async addComment() { return { id: '123' }; },
@@ -29,7 +30,7 @@ function fixture(options = {}) {
     async getComment(_key, id) { return { id, version: 1 }; },
     async editComment(_key, value) { return { id: value.id, version: 2 }; },
     async updateIssue(_key, changes) { return { version: changes.expectedVersion + 1 }; },
-    async executeTransition() { return {}; },
+    async executeTransition() { transitioned = true; return {}; },
     async getBoardCreationQueue() { return Object.freeze({ id: '3', key: 'DOC', display: 'Documents' }); },
     async getExplicitCreationQueue(_board, key) { return Object.freeze({ id: '8', key, display: 'Other queue' }); },
     async createIssue() { return { id: 'issue-1', key: 'DOC-1', version: 1 }; },
@@ -123,7 +124,7 @@ test('tool scope revokes on revision, binding, identity and session changes', as
 test('writes revalidate membership and transition destination after approval', async () => {
   const f = await prepareScope(), scope = scopeFor(f); let writes = 0;
   f.tracker.addComment = async () => { writes++; return { id: '123' }; };
-  f.tracker.executeTransition = async () => { writes++; return {}; };
+  f.tracker.executeTransition = async () => { writes++; f.tracker.getIssue = async key => ({ key, id: 'id-1', summary: 'Example', description: null, status: target, assigneeKnown: true, assignee: null, boards: [{ id: '1' }], version: 1 }); return {}; };
   assert.deepEqual(await scope.listTransitions({ issueKey: 'ABC-1' }), [{ id: 'start', display: 'Start', to: target }]);
   f.tracker.getIssue = async key => ({ key, boards: [{ id: '99' }] });
   await rejected(scope.addComment({ issueKey: 'ABC-1', issueId: 'id-1', text: 'hello' }), 'issue_not_in_selected_boards');
@@ -201,7 +202,7 @@ test('session writes preserve independent Tracker profile settings', async () =>
 test('session write arguments are captured before asynchronous checks', async () => {
   for (const kind of ['addComment', 'executeTransition']) {
     const f = await prepareScope(), scope = scopeFor(f); let captured;
-    f.tracker[kind] = async (key, value) => { captured = { key, value }; return { id: 'comment-1' }; };
+    f.tracker[kind] = async (key, value) => { captured = { key, value }; if (kind === 'executeTransition') f.tracker.getIssue = async issueKey => ({ issueKey, key: issueKey, id: 'id-1', summary: 'Example', description: null, status: target, assigneeKnown: true, assignee: null, boards: [{ id: '1' }], version: 1 }); return { id: 'comment-1' }; };
     const input = kind === 'addComment'
       ? { issueKey: 'ABC-1', issueId: 'id-1', text: 'original' }
       : { ...transitionInput, expectedTo: { ...target } };
@@ -393,7 +394,7 @@ test('HTTP abort after a write dispatch reports outcome unknown', async () => {
 
 test('owner writes reject stale transitions and never retry unknown outcomes', async () => {
   const f = await prepareScope(); let writes = 0;
-  f.tracker.executeTransition = async () => { writes++; return {}; };
+  f.tracker.executeTransition = async () => { writes++; f.tracker.getIssue = async key => ({ key, id: 'id-1', summary: 'Example', description: null, status: target, assigneeKnown: true, assignee: null, boards: [{ id: '1' }], version: 1 }); return {}; };
   await rejected(f.service.command({ op: 'issue.transition', workspaceId: 'ws', boardId: '1', issueKey: 'ABC-1', issueId: 'id-1', transitionId: 'start', expectedTo: { ...target, display: 'stale' } }), 'transition_not_available');
   assert.equal(writes, 0);
   f.tracker.updateIssue = async () => { writes++; throw Object.assign(new Error('SECRET'), { name: 'TrackerError', code: 'network_error' }); };
@@ -2026,6 +2027,7 @@ for (const [label, method, input] of [
         writes++;
         const result = originalWrite(...args);
         if (phase === 'dispatched') allowed = false;
+        if (method === 'executeTransition') f.tracker.getIssue = async key => ({ key, id: 'id-1', summary: 'Example', description: null, status: target, assigneeKnown: true, assignee: null, boards: [{ id: '1' }], version: 1 });
         return result;
       };
       if (phase === 'account-await') {

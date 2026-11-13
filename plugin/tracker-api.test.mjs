@@ -482,10 +482,10 @@ test('writes use fixed endpoints, exact bodies, statuses and sanitized receipts'
   const { client, calls } = harness([json({ id: 'comment-1', text: 'private', self: 'https://evil.invalid' }, 201), json({ key: 'TEST-1', secret: 'private' })]);
   const session = await client.openSession();
   assert.deepEqual(await session.addComment('TEST-1', 'hello\nworld'), { id: 'comment-1' });
-  assert.deepEqual(await session.executeTransition('TEST-1', 'approve_1'), {});
+  assert.deepEqual(await session.executeTransition('TEST-1', 'approve_1', { resolution: 'fixed' }), {});
   assert.equal(calls[0].url, 'https://api.tracker.yandex.net/v3/issues/TEST-1/comments?isAddToFollowers=false');
   assert.equal(calls[1].url, 'https://api.tracker.yandex.net/v3/issues/TEST-1/transitions/approve_1/_execute');
-  assert.deepEqual(calls.map(c => JSON.parse(c.init.body)), [{ text: 'hello\nworld' }, {}]);
+  assert.deepEqual(calls.map(c => JSON.parse(c.init.body)), [{ text: 'hello\nworld' }, { resolution: 'fixed' }]);
   for (const { init } of calls) { assert.equal(init.method, 'POST'); assert.equal(init.redirect, 'error'); assert.equal(init.headers['Content-Type'], 'application/json'); }
 });
 
@@ -509,6 +509,8 @@ test('write HTTP errors distinguish explicit rejections and uncertain outcomes',
       assert.equal(calls.length, 1);
     }
   }
+  let detail; try { await (await harness([new Response(JSON.stringify({ message: 'resolution is required', token: 'secret' }), { status: 422 })]).client.openSession()).executeTransition('TEST-1', 'ok'); } catch (error) { detail = error; }
+  assert.equal(detail?.code, 'unprocessable'); assert.match(detail?.message ?? '', /resolution is required/); assert.doesNotMatch(detail?.message ?? '', /secret/);
   for (const response of [json({ id: 'ok' }, 200), json({ secret: 'bad' }, 201), json({ id: '../secret' }, 201), new Response('not json', { status: 201 }), json([], 201)]) {
     const { client, calls } = harness([response]);
     await rejects((await client.openSession()).addComment('TEST-1', 'text'), 'outcome_unknown'); assert.equal(calls.length, 1);

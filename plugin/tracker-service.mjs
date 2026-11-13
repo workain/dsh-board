@@ -18,16 +18,20 @@ const SESSION_LINK_CONCURRENCY = 5;
 const RESELECT_CONCURRENCY = 5;
 
 class ServiceError extends Error {
-  constructor(code, status) { super(code); this.code = code; this.status = status; }
+  constructor(code, status, detail) { super(code); this.code = code; this.status = status; if (detail !== undefined) this.detail = detail; }
 }
-const fail = (code, status) => { throw new ServiceError(code, status); };
+const fail = (code, status, detail) => { throw new ServiceError(code, status, detail); };
 const invalid = () => fail('invalid', 400);
-function shape(v, fields) {
+function shape(v, fields, optional = []) {
   if (!v || typeof v !== 'object' || Array.isArray(v) || Object.getPrototypeOf(v) !== Object.prototype ||
-      Reflect.ownKeys(v).length !== fields.length || fields.some(k => {
+      Reflect.ownKeys(v).some(k => typeof k !== 'string' || (!fields.includes(k) && !optional.includes(k))) ||
+      Reflect.ownKeys(v).length < fields.length || Reflect.ownKeys(v).length > fields.length + optional.length || fields.some(k => {
         const d = Object.getOwnPropertyDescriptor(v, k);
         return !d || !d.enumerable || !('value' in d);
-      })) invalid();
+      }) || optional.some(k => Object.hasOwn(v, k) && (() => {
+        const d = Object.getOwnPropertyDescriptor(v, k);
+        return !d || !d.enumerable || !('value' in d);
+      })())) invalid();
 }
 function workspaceId(v) { if (typeof v !== 'string' || !ID.test(v)) invalid(); }
 function boardId(v) { if (typeof v !== 'string' || !BOARD.test(v) || !Number.isSafeInteger(Number(v))) invalid(); }
@@ -109,11 +113,11 @@ function checkCommand(c) {
       if (typeof c.issueId !== 'string' || !TRANSITION.test(c.issueId) || typeof c.commentId !== 'string' || !TRANSITION.test(c.commentId)) invalid();
       inputText(c.text, MAX_COMMENT, { multiline: true }); break;
     case 'issue.transition':
-      shape(c, ['op', 'workspaceId', 'boardId', 'issueKey', 'issueId', 'transitionId', 'expectedTo']); workspaceId(c.workspaceId); boardId(c.boardId); issueKey(c.issueKey);
+      shape(c, ['op', 'workspaceId', 'boardId', 'issueKey', 'issueId', 'transitionId', 'expectedTo'], ['resolution']); workspaceId(c.workspaceId); boardId(c.boardId); issueKey(c.issueKey);
       if (typeof c.issueId !== 'string' || !TRANSITION.test(c.issueId)) invalid();
       if (typeof c.transitionId !== 'string' || !TRANSITION.test(c.transitionId)) invalid();
       shape(c.expectedTo, ['id', 'key', 'display']);
-      inputText(c.expectedTo.id, 128); inputText(c.expectedTo.key, 128); inputText(c.expectedTo.display, 256); break;
+      inputText(c.expectedTo.id, 128); inputText(c.expectedTo.key, 128); inputText(c.expectedTo.display, 256); if (Object.hasOwn(c, 'resolution')) inputText(c.resolution, 128); break;
     case 'issue.update':
       shape(c, ['op', 'workspaceId', 'boardId', 'issueKey', 'issueId', 'changes']); workspaceId(c.workspaceId); boardId(c.boardId); issueKey(c.issueKey);
       if (typeof c.issueId !== 'string' || !TRANSITION.test(c.issueId)) invalid();
@@ -176,7 +180,7 @@ function safeError(error, signal) {
       forbidden: 403, not_found: 404, rate_limited: 429, client_rate_limited: 429, timeout: 504,
       cancelled: 499, network_error: 502, invalid_response: 502, response_too_large: 502, redirect: 502, http_error: 502,
       board_default_queue_unavailable: 409 };
-    if (Object.hasOwn(statuses, error.code)) return { code: error.code, status: statuses[error.code] };
+    if (Object.hasOwn(statuses, error.code)) return { code: error.code, status: statuses[error.code], ...(error.code === 'unprocessable' && typeof error.detail === 'string' ? { detail: error.detail } : {}) };
   }
   if (error?.name === 'TrackerSettingsError' && error.code === 'too_large') return { code: 'settings_too_large', status: 413 };
   return { code: 'internal', status: 500 };
@@ -556,7 +560,7 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
         case 'issue.update': return scope.updateIssue({ issueKey, changes: c.changes, issueId: c.issueId });
         case 'issue.comment': return scope.addComment({ issueKey, text: c.text, issueId: c.issueId });
         case 'issue.editComment': return scope.editComment({ issueKey, issueId: c.issueId, commentId: c.commentId, expectedVersion: c.expectedVersion, text: c.text });
-        case 'issue.transition': return scope.executeTransition({ issueKey, transitionId: c.transitionId, expectedTo: c.expectedTo, issueId: c.issueId });
+        case 'issue.transition': return scope.executeTransition({ issueKey, transitionId: c.transitionId, expectedTo: c.expectedTo, issueId: c.issueId, ...(Object.hasOwn(c, 'resolution') ? { resolution: c.resolution } : {}) });
         default: invalid();
       }
     }
@@ -1022,7 +1026,7 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
   // The scope is tied to a single binding/revision/incarnation and expires quickly.
   function toolScope(options) {
     try { return makeToolScope(options); }
-    catch (error) { const safe = safeError(error, lifecycle.signal); throw new ServiceError(safe.code, safe.status); }
+    catch (error) { const safe = safeError(error, lifecycle.signal); throw new ServiceError(safe.code, safe.status, safe.detail); }
   }
   function makeToolScope(options) {
     fields(options, ['workspaceId', 'sessionId', 'signal'], ['assertCaller']);
@@ -1079,7 +1083,7 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
         return scope[method](...captured);
       }).catch(error => {
         const safe = safeError(error, callSignal);
-        throw new ServiceError(safe.code, safe.status);
+        throw new ServiceError(safe.code, safe.status, safe.detail);
       }).finally(() => { facadePending--; });
     };
     return Object.freeze(facade);
@@ -1125,11 +1129,11 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
         return { workspaceId: before.id, boardIds: ids };
       }, callerSignal).catch(error => {
         const safe = safeError(error, callerSignal ?? lifecycle.signal);
-        throw new ServiceError(safe.code, safe.status);
+        throw new ServiceError(safe.code, safe.status, safe.detail);
       });
     } catch (error) {
       const safe = safeError(error, lifecycle.signal);
-      return Promise.reject(new ServiceError(safe.code, safe.status));
+      return Promise.reject(new ServiceError(safe.code, safe.status, safe.detail));
     }
   }
   // Only the owner's authenticated HTTP command dispatcher may omit a session.
@@ -1293,12 +1297,12 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
         try { return await work(signal); }
         catch (error) {
           if (error instanceof ServiceError && error.code === 'outcome_unknown') throw error;
-          const safe = safeError(error, signal); throw new ServiceError(safe.code, safe.status);
+          const safe = safeError(error, signal); throw new ServiceError(safe.code, safe.status, safe.detail);
         }
       }, callerSignal).catch(error => {
         if (error instanceof ServiceError && error.code === 'outcome_unknown') throw error;
         const safe = safeError(error, callerSignal ?? lifecycle.signal);
-        throw new ServiceError(safe.code, safe.status);
+        throw new ServiceError(safe.code, safe.status, safe.detail);
       });
     }
     // Own-link operations never accept a workspace, session or account namespace
@@ -1361,7 +1365,7 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
       if (!Object.isFrozen(capability)) fail('invalid_tracker_response', 502);
       return { capability, queue };
     }
-    async function write(signal, key, kind, value, expectedTo, issueId) {
+    async function write(signal, key, kind, value, expectedTo, issueId, resolution) {
       const initialIssue = await issue(key, signal);
       if (issueId !== undefined && initialIssue.id !== issueId) fail('conflict', 409);
       if (kind === 'editComment') {
@@ -1386,11 +1390,15 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
       let result, dispatched = false, returned = false;
       const operation = a[kind];
       try {
-        result = await raceAbort(() => { check(signal); dispatched = true; return operation(key, value, { signal }); }, signal);
+        result = await raceAbort(() => { check(signal); dispatched = true; return operation(key, value, { signal, ...(kind === 'executeTransition' && resolution !== undefined ? { resolution } : {}) }); }, signal);
         returned = true;
         check(signal);
         await account(signal);
         check(signal);
+        if (kind === 'executeTransition') {
+          const after = await issue(key, signal, issueId);
+          if (after.status.id !== expectedTo.id || after.status.key !== expectedTo.key || after.status.display !== expectedTo.display) fail('outcome_unknown', 502);
+        }
       } catch (error) {
         if (dispatched) {
           if (!returned && !signal.aborted && error?.name === 'TrackerError' && ['unauthorized', 'forbidden', 'not_found', 'conflict', 'precondition_failed', 'unprocessable', 'rate_limited', 'invalid_input'].includes(error.code)) {
@@ -1494,7 +1502,7 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
                 try { creationCheck(); await account(signal, creationCheck); creationCheck(); }
                 catch { fail('outcome_unknown', 502); }
                 const statuses = { unauthorized: 401, forbidden: 403, not_found: 404, conflict: 409, precondition_failed: 412, unprocessable: 422, rate_limited: 429, invalid_input: 400 };
-                fail(error.code, statuses[error.code]);
+                fail(error.code, statuses[error.code], error.code === 'unprocessable' && typeof error.detail === 'string' ? error.detail : undefined);
               }
               fail('outcome_unknown', 502);
             }
@@ -1645,15 +1653,16 @@ export function createTrackerService({ settings, tracker, workspaceRegistry, lin
       }) } : {}),
       executeTransition: input => {
         try {
-          shape(input, ['issueKey', 'issueId', 'transitionId', 'expectedTo']); keyArg(input.issueKey);
+          shape(input, ['issueKey', 'issueId', 'transitionId', 'expectedTo'], ['resolution']); keyArg(input.issueKey);
           if (typeof input.issueId !== 'string' || !TRANSITION.test(input.issueId) ||
               typeof input.transitionId !== 'string' || !TRANSITION.test(input.transitionId)) invalid();
           shape(input.expectedTo, ['id', 'key', 'display']);
           inputText(input.expectedTo.id, 128); inputText(input.expectedTo.key, 128); inputText(input.expectedTo.display, 256);
+           if (Object.hasOwn(input, 'resolution')) inputText(input.resolution, 128);
           input = Object.freeze({ issueKey: input.issueKey, issueId: input.issueId, transitionId: input.transitionId,
-            expectedTo: Object.freeze({ ...input.expectedTo }) });
+            expectedTo: Object.freeze({ ...input.expectedTo }), ...(Object.hasOwn(input, 'resolution') ? { resolution: input.resolution } : {}) });
         } catch (error) { return Promise.reject(error); }
-        return execute(signal => write(signal, input.issueKey, 'executeTransition', input.transitionId, input.expectedTo, input.issueId));
+        return execute(signal => write(signal, input.issueKey, 'executeTransition', input.transitionId, input.expectedTo, input.issueId, input.resolution));
       },
     });
   }
